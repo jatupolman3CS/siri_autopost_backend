@@ -30,6 +30,7 @@ public static class ServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
         services.AddSingleton<IRequestTimings, RequestTimings>();
+        services.AddMemoryCache();
         services.AddScoped<ICurrentDevice, CurrentDevice>();
         services.AddJwtAuth(config);
 

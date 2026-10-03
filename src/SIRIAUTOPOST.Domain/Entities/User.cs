@@ -18,6 +18,8 @@ public class User : Entity
     /// <summary>Platform admin's note about the customer.</summary>
     public string? Note { get; private set; }
     public LimitOverrides Limits { get; private set; } = new();
+    /// <summary>Billing notification preferences and the card on file (metadata only).</summary>
+    public BillingProfile Billing { get; private set; } = new();
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? LastSeenAt { get; private set; }
 
@@ -85,6 +87,14 @@ public class User : Entity
             throw new DomainException("ขีดจำกัดต้องไม่ติดลบ");
         Limits = limits;
     }
+
+    public void SetBillingNotifications(bool failed, bool expiring, bool renewal) =>
+        Billing = BillingProfile.WithNotifications(Billing, failed, expiring, renewal);
+
+    public void SetPaymentMethod(string? brand, string last4, int expMonth, int expYear, DateTimeOffset now) =>
+        Billing = BillingProfile.WithCard(Billing, brand, last4, expMonth, expYear, now);
+
+    public void RemovePaymentMethod() => Billing = BillingProfile.WithoutCard(Billing);
 
     /// <summary>Advanced anti-ban needs Pro or above.</summary>
     public bool HasAdvancedAntiBan => Plan is PlanKey.Pro or PlanKey.Agency;

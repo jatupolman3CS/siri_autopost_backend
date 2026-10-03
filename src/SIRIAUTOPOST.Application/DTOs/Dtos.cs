@@ -23,6 +23,25 @@ public sealed record TransactionDto(
     public static TransactionDto From(Transaction t) => new(t.Id, t.UserId, t.Type, t.Amount, t.Plan, t.Cycle, t.PromoCode, t.CreatedAt);
 }
 
+/// <summary>The card on file as the payment provider describes it; Expired and ExpiresSoon are worked out now.</summary>
+public sealed record PaymentMethodDto(string Brand, string Last4, int ExpMonth, int ExpYear, bool Expired, bool ExpiresSoon);
+
+/// <param name="PaymentsConnected">False until a payment provider is connected: charges are recorded, not collected.</param>
+public sealed record BillingProfileDto(
+    bool NotifyFailed, bool NotifyExpiring, bool NotifyRenewal, PaymentMethodDto? Card, bool PaymentsConnected);
+
+/// <summary>What a statement of one recorded charge or refund shows.</summary>
+public sealed record StatementDto(
+    Guid Id, DateTimeOffset CreatedAt, TransactionType Type, int Amount, PlanKey Plan, BillingCycle Cycle, string? PromoCode,
+    string CustomerName, string CustomerEmail);
+
+/// <summary>One day of the landing page's chart (Thai calendar day, "yyyy-MM-dd").</summary>
+public sealed record PublicDayDto(string Date, int Sent, int Failed);
+
+/// <summary>Platform-wide figures for the landing page; no customer's data, only counts.</summary>
+public sealed record PublicStatsDto(
+    int PostsSent7d, int PostsFailed7d, double? SuccessRate7d, int DevicesActive24h, IReadOnlyList<PublicDayDto> Days);
+
 public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserDto User);
 
 /// <param name="Role">The signed-in user's role here (owner for their own workspaces).</param>

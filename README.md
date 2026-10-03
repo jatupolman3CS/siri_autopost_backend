@@ -60,7 +60,7 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 - Connection string ตอนพัฒนาอยู่ที่ `src/SIRIAUTOPOST.Api/appsettings.Development.json` (`localhost:5432` ฐาน `siriautopost`) ระบบรัน migration ให้เองตอนเริ่มใน Development
 - **บัญชีผู้ดูแล:** ตอนเริ่มระบบจะสร้างผู้ดูแลแพลตฟอร์มจาก `Admin:Email`/`Admin:Password` (ใน Development คือ `admin@autopost.local` / `admin1234`) ถ้าไม่ตั้งค่าไว้จะไม่สร้าง
 - **JWT:** ตั้ง `Jwt:Key` (อย่างน้อย 32 ตัวอักษร) ทุก environment นอก Development ไม่อย่างนั้นระบบจะไม่ยอมเริ่ม เช่น `Jwt__Key=...`
-- เวิร์กสเปซใหม่ทุกอันจะมี **ข้อมูลตัวอย่าง** จากดีไซน์: บัญชีโซเชียล 7 บัญชี (เพจ Facebook พร้อม 20 กลุ่ม), ข้อความสำเร็จรูป 4 อัน, ประวัติโพสต์ 1 สัปดาห์ คิวโพสต์ล่วงหน้า 1 สัปดาห์ และรายงานข้อผิดพลาด 5 รายการ (บัญชีตัวอย่างไม่มีเครื่องผูกอยู่ โพสต์ของบัญชีเหล่านี้จึงไม่ถูกส่งจริง บัญชีจริงได้มาจากการจับคู่ส่วนขยาย)
+- เวิร์กสเปซใหม่ **ว่างเปล่า** จนกว่าจะจับคู่เบราว์เซอร์ (บัญชี Facebook และกลุ่มมาจากส่วนขยายจริง) ถ้าต้องการข้อมูลตัวอย่างสำหรับถ่ายภาพหน้าจอหรือสาธิตในเครื่อง ตั้ง `Demo__SeedNewWorkspaces=true` แล้วเวิร์กสเปซใหม่จะมี **ข้อมูลตัวอย่าง** จากดีไซน์: บัญชีโซเชียล 7 บัญชี (เพจ Facebook พร้อม 20 กลุ่ม), ข้อความสำเร็จรูป 4 อัน, ประวัติโพสต์ 1 สัปดาห์ คิวโพสต์ล่วงหน้า 1 สัปดาห์ และรายงานข้อผิดพลาด 5 รายการ (บัญชีตัวอย่างไม่มีเครื่องผูกอยู่ โพสต์ของบัญชีเหล่านี้จึงไม่ถูกส่งจริง บัญชีจริงได้มาจากการจับคู่ส่วนขยาย)
 - Integration test ใช้ฐาน `siriautopost_test` (ลบแล้วสร้างใหม่ทุกครั้ง) เปลี่ยนได้ด้วย environment variable `SIRIAUTOPOST_TEST_DB`
 - เพิ่ม migration: `dotnet ef migrations add <ชื่อ> -p src/SIRIAUTOPOST.Infrastructure -s src/SIRIAUTOPOST.Api -o Data/Migrations`
 - เพิ่มฟีเจอร์ใหม่: Entity ใน Domain → Command/Query + Handler ใน `Application/Features/<ฟีเจอร์>/<ฟีเจอร์>.cs` → ลงทะเบียนใน `Application/DependencyInjection.cs` → Repository + Configuration ใน Infrastructure → Controller ใน Api
@@ -68,7 +68,8 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 | กลุ่ม | Endpoint |
 |---|---|
 | Auth | `POST /api/auth/signup`, `POST /api/auth/login`, `GET /api/auth/me`, `PUT /api/auth/me/plan` (`plan`, `cycle`, `promoCode`) |
-| แผนและบิล | `GET /api/plans` (ไม่ต้องเข้าสู่ระบบ), `GET /api/billing/invoices` |
+| แผนและบิล | `GET /api/plans` (ไม่ต้องเข้าสู่ระบบ), `GET /api/billing/invoices`, `GET /api/billing/invoices/{id}/statement` (หน้า HTML สำหรับพิมพ์), `GET /api/billing/profile`, `PUT .../profile/notifications`, `PUT/DELETE .../profile/payment-method` |
+| สาธารณะ | `GET /api/public/stats` (ไม่ต้องเข้าสู่ระบบ: ตัวเลขรวมของแพลตฟอร์มใน 7 วัน สำหรับหน้าแรก) |
 | ทีม | `GET/POST /api/workspaces/{ws}/members`, `PUT/DELETE .../members/{memberId}` |
 | เจ้าของแพลตฟอร์ม (`role=admin`) | `GET /api/admin/summary`, `GET /api/admin/customers`, `GET /api/admin/jobs?customerId&take`, `POST /api/admin/customers/{id}/status\|pause\|plan\|limits\|retry-failed\|refund`, `PUT .../note`, `DELETE .../devices/{deviceId}`, `GET /api/admin/transactions`, `POST .../transactions/{id}/refund\|paid`, `PUT /api/admin/plans/{key}`, `GET/POST /api/admin/promos`, `PUT .../promos/{code}/active` |
 | เวิร์กสเปซ | `GET/POST /api/workspaces`, `GET /api/workspaces/{ws}/accounts`, `POST .../accounts/{id}/reconnect` |
@@ -81,6 +82,7 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ยกเว้น signup, login, `GET /api/plans`, `/healthz` และ `/api/device/*` (ใช้หัว `X-Device-Key` จากการจับคู่ ยกเว้น `pair`)
 
 - **แผนและการเงิน:** ราคาและข้อจำกัดของแต่ละแผน (บัญชี, โพสต์ต่อวัน, อุปกรณ์, ที่นั่งทีม) อยู่ในตาราง `plan_settings` แก้ได้จากหน้าแอดมิน และแอดมินตั้งค่าเฉพาะลูกค้ารายคนทับได้ การเปลี่ยนแผนแบบเสียเงินจะ **บันทึกยอด** ลงสมุดบัญชี (`transactions`, รองรับโค้ดส่วนลด d10/d20/d30/dFree และรายปีลด 20%) แต่ **ยังไม่ได้ตัดบัตรจริง** เพราะยังไม่ได้เชื่อม payment gateway (เช่น Omise/Stripe ต้องใช้คีย์ของร้าน)
+- **บัตรที่บันทึก:** เก็บเฉพาะยี่ห้อ เลข 4 ตัวท้าย และวันหมดอายุ (เหมือนที่ payment provider ส่งกลับหลังแปลงบัตรเป็น token) API ไม่มีช่องรับเลขบัตรหรือ CVC และหน้าเว็บไม่ส่งไปอยู่แล้ว ใบแสดงรายการที่ดาวน์โหลดได้ระบุชัดว่ายังไม่ได้ตัดเงินจริง จึงไม่ใช่ใบเสร็จ
 - **ทีม:** เชิญด้วยอีเมล (ถ้ายังไม่มีบัญชี จะเข้าทีมให้เองตอนสมัคร) บทบาทในเวิร์กสเปซ: ผู้ชม (ดูอย่างเดียว) → ผู้แก้ไข (โพสต์, คลังสื่อ) → ผู้ดูแล (ตั้งค่า anti-ban/ออฟไลน์, อุปกรณ์, สมาชิก) → เจ้าของ จำนวนที่นั่ง (รวมเจ้าของ) มาจากแผนของเจ้าของ
 - **สถานะลูกค้า:** แอดมินระงับ/แบนได้ (เข้าสู่ระบบไม่ได้ ได้ 403 และ token เดิมใช้ไม่ได้ทันที) หยุดงานโพสต์ทั้งหมดของลูกค้า หรือคืนเงินรายการล่าสุด
 - **โหมดช่วยเหลือ:** แอดมินเปิดแดชบอร์ดของลูกค้าได้ 1 ชั่วโมงแบบ **ดูอย่างเดียว** (`POST /api/admin/customers/{id}/impersonate`) คำขอที่แก้ข้อมูลทุกอย่างจะได้ 403

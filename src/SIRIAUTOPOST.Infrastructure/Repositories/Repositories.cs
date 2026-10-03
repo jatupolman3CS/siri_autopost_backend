@@ -143,6 +143,17 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
         return rows.Select(r => (r.WorkspaceId, r.Status, r.Count)).ToList();
     }
 
+    public async Task<IReadOnlyList<(DateTimeOffset At, PostStatus Status)>> ListFinishedAsync(
+        DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        var rows = await Real
+            .Where(x => x.ScheduledAt >= from && x.ScheduledAt < to &&
+                        (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
+            .Select(x => new { x.ScheduledAt, x.Status })
+            .ToListAsync(ct);
+        return rows.Select(r => (r.ScheduledAt, r.Status)).ToList();
+    }
+
     public async Task<IReadOnlyList<Post>> ListRecentAsync(IEnumerable<Guid> workspaceIds, DateTimeOffset before, int take, CancellationToken ct = default)
     {
         var ids = workspaceIds.ToList();
@@ -204,6 +215,9 @@ public sealed class DeviceRepository(AppDbContext db) : IDeviceRepository
 
     public Task<Device?> GetByIdAsync(Guid id, CancellationToken ct = default) =>
         db.Devices.FirstOrDefaultAsync(x => x.Id == id, ct);
+
+    public Task<int> CountSeenSinceAsync(DateTimeOffset since, CancellationToken ct = default) =>
+        db.Devices.CountAsync(x => x.LastSeenAt >= since, ct);
 
     public Task<Device?> GetByKeyHashAsync(string keyHash, CancellationToken ct = default) =>
         db.Devices.FirstOrDefaultAsync(x => x.KeyHash == keyHash, ct);

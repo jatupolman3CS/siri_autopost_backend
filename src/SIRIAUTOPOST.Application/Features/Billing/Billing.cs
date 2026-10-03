@@ -62,3 +62,94 @@ public sealed class ChangePlanCommandHandler(
         return UserDto.From(user);
     }
 }
+
+/// <summary>Billing preferences and the card on file.</summary>
+public sealed record GetBillingProfileQuery : IQuery<BillingProfileDto>;
+
+public sealed class GetBillingProfileQueryHandler(IUserRepository users, ICurrentUser current, TimeProvider clock)
+    : IQueryHandler<GetBillingProfileQuery, BillingProfileDto>
+{
+    public async Task<BillingProfileDto> HandleAsync(GetBillingProfileQuery q, CancellationToken ct = default) =>
+        BillingProfiles.Dto(await BillingProfiles.UserAsync(users, current, ct), clock.GetUtcNow());
+}
+
+public sealed record UpdateBillingNotificationsCommand(bool NotifyFailed, bool NotifyExpiring, bool NotifyRenewal) : ICommand<BillingProfileDto>;
+
+public sealed class UpdateBillingNotificationsCommandHandler(IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<UpdateBillingNotificationsCommand, BillingProfileDto>
+{
+    public async Task<BillingProfileDto> HandleAsync(UpdateBillingNotificationsCommand c, CancellationToken ct = default)
+    {
+        var user = await BillingProfiles.UserAsync(users, current, ct);
+        user.SetBillingNotifications(c.NotifyFailed, c.NotifyExpiring, c.NotifyRenewal);
+        await uow.SaveChangesAsync(ct);
+        return BillingProfiles.Dto(user, clock.GetUtcNow());
+    }
+}
+
+/// <summary>
+/// Saves the card the payment provider returned (brand, last four digits, expiry). The web app never sends
+/// the number or the CVC, and this API has no field for them.
+/// </summary>
+public sealed record SetPaymentMethodCommand(string? Brand, string Last4, int ExpMonth, int ExpYear) : ICommand<BillingProfileDto>;
+
+public sealed class SetPaymentMethodCommandHandler(IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SetPaymentMethodCommand, BillingProfileDto>
+{
+    public async Task<BillingProfileDto> HandleAsync(SetPaymentMethodCommand c, CancellationToken ct = default)
+    {
+        var user = await BillingProfiles.UserAsync(users, current, ct);
+        var now = clock.GetUtcNow();
+        user.SetPaymentMethod(c.Brand, c.Last4, c.ExpMonth, c.ExpYear, now);
+        await uow.SaveChangesAsync(ct);
+        return BillingProfiles.Dto(user, now);
+    }
+}
+
+public sealed record RemovePaymentMethodCommand : ICommand<BillingProfileDto>;
+
+public sealed class RemovePaymentMethodCommandHandler(IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<RemovePaymentMethodCommand, BillingProfileDto>
+{
+    public async Task<BillingProfileDto> HandleAsync(RemovePaymentMethodCommand c, CancellationToken ct = default)
+    {
+        var user = await BillingProfiles.UserAsync(users, current, ct);
+        user.RemovePaymentMethod();
+        await uow.SaveChangesAsync(ct);
+        return BillingProfiles.Dto(user, clock.GetUtcNow());
+    }
+}
+
+/// <summary>One of the signed-in customer's own charges or refunds, with who it is for.</summary>
+public sealed record GetStatementQuery(Guid TransactionId) : IQuery<StatementDto>;
+
+public sealed class GetStatementQueryHandler(ITransactionRepository transactions, IUserRepository users, ICurrentUser current)
+    : IQueryHandler<GetStatementQuery, StatementDto>
+{
+    public async Task<StatementDto> HandleAsync(GetStatementQuery q, CancellationToken ct = default)
+    {
+        // Someone else's transaction is the same 404 as a missing one.
+        var tx = await transactions.GetAsync(q.TransactionId, ct);
+        if (tx is null || tx.UserId != current.UserId) throw new NotFoundException("รายการ", q.TransactionId);
+        var user = await BillingProfiles.UserAsync(users, current, ct);
+        return new StatementDto(tx.Id, tx.CreatedAt, tx.Type, tx.Amount, tx.Plan, tx.Cycle, tx.PromoCode, user.Name, user.Email);
+    }
+}
+
+internal static class BillingProfiles
+{
+    public static async Task<User> UserAsync(IUserRepository users, ICurrentUser current, CancellationToken ct) =>
+        await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
+
+    /// <summary>A card "expires soon" in its last month of validity and the one before.</summary>
+    public static BillingProfileDto Dto(User user, DateTimeOffset now)
+    {
+        var b = user.Billing;
+        PaymentMethodDto? card = null;
+        if (b is { HasCard: true, CardValidThrough: { } through })
+            card = new PaymentMethodDto(
+                b.CardBrand ?? "card", b.CardLast4!, b.CardExpMonth!.Value, b.CardExpYear!.Value,
+                Expired: through <= now, ExpiresSoon: through > now && through <= now.AddMonths(1));
+        return new BillingProfileDto(b.NotifyFailed, b.NotifyExpiring, b.NotifyRenewal, card, PaymentsConnected: false);
+    }
+}

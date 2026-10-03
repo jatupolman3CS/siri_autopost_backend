@@ -103,6 +103,8 @@ public interface IPostRepository
         IEnumerable<Guid> workspaceIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
     /// <summary>The newest posts of these workspaces scheduled before a time, any status.</summary>
     Task<IReadOnlyList<Post>> ListRecentAsync(IEnumerable<Guid> workspaceIds, DateTimeOffset before, int take, CancellationToken ct = default);
+    /// <summary>Platform-wide: when and how the posts scheduled in [from, to) ended (sent, awaiting approval or failed).</summary>
+    Task<IReadOnlyList<(DateTimeOffset At, PostStatus Status)>> ListFinishedAsync(DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
     /// <summary>Failed posts not dismissed yet.</summary>
     Task<IReadOnlyList<Post>> ListFailedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     void Add(Post post);
@@ -127,6 +129,8 @@ public interface IDeviceRepository
     Task<Device?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<Device?> GetByKeyHashAsync(string keyHash, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Platform-wide: devices that called in since a time.</summary>
+    Task<int> CountSeenSinceAsync(DateTimeOffset since, CancellationToken ct = default);
     Task<IReadOnlyList<Device>> ListByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     void Add(Device device);
     void Remove(Device device);

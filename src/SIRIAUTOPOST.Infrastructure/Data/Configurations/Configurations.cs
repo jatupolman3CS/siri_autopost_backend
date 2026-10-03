@@ -15,6 +15,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         b.Property(x => x.PasswordHash).HasMaxLength(300);
         b.Property(x => x.Note).HasMaxLength(500);
         b.OwnsOne(x => x.Limits, o => o.ToJson("limit_overrides"));
+        b.OwnsOne(x => x.Billing, o => o.ToJson("billing_profile"));
     }
 }
 

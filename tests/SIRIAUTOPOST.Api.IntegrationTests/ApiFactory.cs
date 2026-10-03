@@ -39,6 +39,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "integration-test-signing-key-0123456789abcdef");
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);
+        // Most tests use the design's sample workspace (accounts, posts, errors); new workspaces are empty by default.
+        builder.UseSetting("Demo:SeedNewWorkspaces", "true");
+        builder.UseSetting("Public:StatsCacheSeconds", "0");
         builder.ConfigureTestServices(s => s.AddSingleton<TimeProvider>(Clock));
     }
 

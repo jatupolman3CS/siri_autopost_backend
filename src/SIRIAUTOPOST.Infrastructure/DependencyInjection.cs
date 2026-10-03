@@ -42,7 +42,10 @@ public static class DependencyInjection
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IDatabaseProbe, DatabaseProbe>();
         services.AddScoped<IPromoRepository, PromoRepository>();
-        services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
+        // New workspaces start empty. Demo:SeedNewWorkspaces=true fills them with the design's sample accounts,
+        // posts and errors (for screenshots and local demos only: none of it ever goes out).
+        if (config.GetValue<bool>("Demo:SeedNewWorkspaces")) services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
+        else services.AddSingleton<IWorkspaceSeeder, NoWorkspaceSeeder>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();

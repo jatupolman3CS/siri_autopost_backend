@@ -5,6 +5,7 @@ using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.Public;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
@@ -33,6 +34,12 @@ public static class DependencyInjection
         // Plans and billing
         services.AddQuery<GetPlansQuery, IReadOnlyList<PlanDto>, GetPlansQueryHandler>();
         services.AddQuery<GetInvoicesQuery, IReadOnlyList<TransactionDto>, GetInvoicesQueryHandler>();
+        services.AddQuery<GetBillingProfileQuery, BillingProfileDto, GetBillingProfileQueryHandler>();
+        services.AddCommand<UpdateBillingNotificationsCommand, BillingProfileDto, UpdateBillingNotificationsCommandHandler>();
+        services.AddCommand<SetPaymentMethodCommand, BillingProfileDto, SetPaymentMethodCommandHandler>();
+        services.AddCommand<RemovePaymentMethodCommand, BillingProfileDto, RemovePaymentMethodCommandHandler>();
+        services.AddQuery<GetStatementQuery, StatementDto, GetStatementQueryHandler>();
+        services.AddQuery<GetPublicStatsQuery, PublicStatsDto, GetPublicStatsQueryHandler>();
         services.AddCommand<ChangePlanCommand, UserDto, ChangePlanCommandHandler>();
 
         // Team

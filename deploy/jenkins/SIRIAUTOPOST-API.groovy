@@ -1,17 +1,5 @@
-// PRD pipeline for siri_autopost_backend (Jenkins job: SIRIAUTOPOST-API).
-// Builds SIRIAUTOPOST.Api into the local registry and deploys the API for
-// https://siriautopost.siristudiophoto.com into namespace siriautopost (deploy/k8s/overlays/prd).
-//
-// Same conventions as the SIRISTUDIOPHOTO jobs: docker + kubectl on the Jenkins host, registry localhost:5000.
-// Run this job before SIRIAUTOPOST-WEB the first time: the dashboard's nginx needs Service `api` to exist.
-//
-// Credential required (Jenkins "Secret file"): siriautopost-env-file, a .env file like the other jobs use.
-// deploy/prepare-env.sh picks what the API needs from it (only those keys reach the pod):
-//   Database                    Postgres inside the namespace (deploy/k8s/postgres), password generated once into the
-//                               postgres-env secret. Put ConnectionStrings__Default in the env file to use another server.
-//   Jwt__Key (32+ chars)        or derived from AppSettings__Secret
-//   Admin__Email/Admin__Password  optional: creates the platform admin on first start
-
+// Inline pipeline for Jenkins job SIRIAUTOPOST-API (same style as SIRISTUDIOPHOT-API / SIRI-UPSKILL-API:
+// pipeline script pasted in the job, checkout with credential gitlab-auth-id). Keep it in sync with ./Jenkinsfile.
 pipeline {
     agent any
 
@@ -27,13 +15,23 @@ pipeline {
         OVERLAY       = 'deploy/k8s/overlays/prd'
         API_IMAGE     = 'localhost:5000/siriautopost-api'
         PUBLIC_URL    = 'https://siriautopost.siristudiophoto.com'
+        GIT_URL       = 'https://github.com/jatupolman3CS/siri_autopost_backend.git'
     }
 
     stages {
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    credentialsId: 'gitlab-auth-id',
+                    url: "${GIT_URL}"
+            }
+        }
+
         stage('Prepare') {
             steps {
                 script {
-                    env.IMAGE_TAG = "prd-${env.BUILD_NUMBER}-${env.GIT_COMMIT.take(7)}"
+                    def commit = sh(script: 'git rev-parse --short=7 HEAD', returnStdout: true).trim()
+                    env.IMAGE_TAG = "prd-${env.BUILD_NUMBER}-${commit}"
                 }
                 echo "Image tag: ${env.IMAGE_TAG}"
             }

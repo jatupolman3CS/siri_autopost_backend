@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using SIRIAUTOPOST.Api.Middlewares;
 using SIRIAUTOPOST.Infrastructure.Data;
 using SIRIAUTOPOST.Infrastructure.Seeding;
+using SIRIAUTOPOST.Infrastructure.Services;
 
 namespace SIRIAUTOPOST.Api.Extensions;
 
@@ -19,6 +20,11 @@ public static class WebApplicationExtensions
         if (app.Environment.IsDevelopment()) app.MapOpenApi().AllowAnonymous(); // /openapi/v1.json
         app.MapControllers();
         app.MapGet("/healthz", () => Results.Ok(new { ok = true })).AllowAnonymous().ExcludeFromDescription();
+
+        // Shutting down: end every event stream and waiting device sync at once (they reconnect to the next
+        // instance) instead of holding the host open until Kestrel's shutdown timeout.
+        var events = app.Services.GetRequiredService<DeviceEventBus>();
+        app.Lifetime.ApplicationStopping.Register(events.Stop);
         return app;
     }
 

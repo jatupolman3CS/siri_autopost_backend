@@ -55,7 +55,8 @@ public sealed record GetPlatformHealthQuery : IQuery<PlatformHealthDto>;
 
 public sealed class GetPlatformHealthQueryHandler(
     IUserRepository users, IAuditRepository audit, IPlanRepository plans, IWorkspaceRepository workspaces,
-    IDeviceRepository devices, IPostRepository posts, IRequestTimings timings, IDatabaseProbe database, TimeProvider clock)
+    IDeviceRepository devices, IPostRepository posts, IRequestTimings timings, IDatabaseProbe database, IDeviceEventBus events,
+    TimeProvider clock)
     : IQueryHandler<GetPlatformHealthQuery, PlatformHealthDto>
 {
     public async Task<PlatformHealthDto> HandleAsync(GetPlatformHealthQuery q, CancellationToken ct = default)
@@ -95,7 +96,8 @@ public sealed class GetPlatformHealthQueryHandler(
             due, next,
             latest, latest is null ? 0 : devs.Count(d => d.Version == latest),
             day.Ok + day.Failed == 0 ? null : Math.Round(100.0 * day.Failed / (day.Ok + day.Failed), 1),
-            PaymentsConnected: false);
+            PaymentsConnected: false,
+            events.Stats.Streams, events.Stats.DeviceWaits, events.Stats.Published, events.Stats.Dropped);
     }
 }
 

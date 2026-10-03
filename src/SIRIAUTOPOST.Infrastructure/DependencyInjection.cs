@@ -33,6 +33,9 @@ public static class DependencyInjection
         services.AddScoped<IDeviceRepository, DeviceRepository>();
         services.AddScoped<IDevicePairingRepository, DevicePairingRepository>();
         services.AddScoped<IExtensionRepository, ExtensionRepository>();
+        services.AddScoped<IDeviceEventRepository, DeviceEventRepository>();
+        services.AddSingleton<DeviceEventBus>();
+        services.AddSingleton<IDeviceEventBus>(sp => sp.GetRequiredService<DeviceEventBus>());
         services.AddScoped<IMemberRepository, MemberRepository>();
         services.AddScoped<IPlanRepository, PlanRepository>();
         services.AddScoped<ITransactionRepository, TransactionRepository>();

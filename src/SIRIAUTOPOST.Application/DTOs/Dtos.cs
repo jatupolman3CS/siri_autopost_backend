@@ -187,7 +187,8 @@ public sealed record PlatformHealthDto(
     int QueueDue, int QueueNext24h,
     string? LatestExtension, int OnLatestExtension,
     double? ErrorRate24h,
-    bool PaymentsConnected);
+    bool PaymentsConnected,
+    int EventStreams, int DeviceWaits, long EventsPublished, long EventsDropped);
 
 /// <summary>One activity-log line. From/To are values (plan keys, statuses, amounts), not display text.</summary>
 public sealed record AuditEntryDto(
@@ -247,3 +248,15 @@ public sealed record DeviceCommandItemDto(Guid Id, string Cmd, System.Text.Json.
 /// <param name="HasContent">False: the device may upload its own settings (first sync).</param>
 /// <param name="Commands">Commands to run now (only when asked for).</param>
 public sealed record DeviceSyncDto(int Revision, bool HasContent, IReadOnlyList<DeviceCommandItemDto> Commands);
+
+/// <summary>One line of the workspace's event stream (see DeviceEventType for the types and payloads).</summary>
+public sealed record DeviceEventDto(long Seq, Guid DeviceId, string Type, System.Text.Json.JsonElement Payload, DateTimeOffset At)
+{
+    public static DeviceEventDto From(DeviceEvent e) =>
+        new(e.Seq, e.DeviceId, e.Type, Common.ExtensionSettings.Element(e.Payload) ?? default, e.At);
+}
+
+/// <param name="Head">The newest Seq of the workspace right now; a stream resumes from it.</param>
+/// <param name="Events">Events after the Seq asked for, oldest first.</param>
+/// <param name="More">True when there were more than asked for: ask again from the last Seq.</param>
+public sealed record DeviceEventsPageDto(long Head, IReadOnlyList<DeviceEventDto> Events, bool More);

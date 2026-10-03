@@ -16,6 +16,9 @@ spec:
         app.kubernetes.io/name: api
         app.kubernetes.io/part-of: siriautopost
     spec:
+      # On stop the API ends its event streams and waiting device syncs itself (clients reconnect); this
+      # only has to cover in-flight requests and Kestrel's shutdown.
+      terminationGracePeriodSeconds: 40
       containers:
         - name: api
           image: siriautopost-api

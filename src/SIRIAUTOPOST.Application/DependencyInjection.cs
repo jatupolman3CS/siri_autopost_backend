@@ -8,6 +8,7 @@ using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
+using SIRIAUTOPOST.Application.Features.Events;
 using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
@@ -90,6 +91,7 @@ public static class DependencyInjection
         services.AddQuery<GetDeviceCommandQuery, DeviceCommandDto, GetDeviceCommandQueryHandler>();
         services.AddCommand<ClearDeviceLogsCommand, Unit, ClearDeviceLogsCommandHandler>();
         services.AddCommand<DeviceSyncCommand, DeviceSyncDto, DeviceSyncCommandHandler>();
+        services.AddQuery<GetWorkspaceEventsQuery, DeviceEventsPageDto, GetWorkspaceEventsQueryHandler>();
         services.AddQuery<GetOwnExtensionConfigQuery, ExtensionConfigDto, GetOwnExtensionConfigQueryHandler>();
         services.AddCommand<SaveOwnExtensionConfigCommand, ConfigSavedDto, SaveOwnExtensionConfigCommandHandler>();
         services.AddQuery<GetMissingImagesQuery, MissingImagesDto, GetMissingImagesQueryHandler>();

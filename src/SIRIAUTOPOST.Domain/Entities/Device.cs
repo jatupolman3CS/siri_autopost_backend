@@ -40,10 +40,13 @@ public class Device : Entity
 
     public bool IsOnline(DateTimeOffset now) => LastSeenAt is { } seen && now - seen <= OnlineWindow;
 
-    public void Seen(string? version, DateTimeOffset now)
+    /// <summary>Records a call from the device. Returns true when it was offline until now.</summary>
+    public bool Seen(string? version, DateTimeOffset now)
     {
+        var wasOffline = !IsOnline(now);
         LastSeenAt = now;
         if (!string.IsNullOrWhiteSpace(version)) Version = Cut(version.Trim(), 40);
+        return wasOffline;
     }
 
     /// <summary>Renamed in the web app; an empty name keeps the old one.</summary>

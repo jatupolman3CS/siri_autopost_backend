@@ -7,8 +7,8 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
 | | |
 |---|---|
 | Namespace | `siriautopost` |
-| Jenkins jobs | `SIRIAUTOPOST-BACKEND` (this repo, `Jenkinsfile`), `SIRIAUTOPOST-WEB` (siri_autopost_ui, `Jenkinsfile`) |
-| Branch | `*/main` (both repos are public, no git credential needed) |
+| Jenkins jobs | `SIRIAUTOPOST-API` (this repo, `Jenkinsfile`), `SIRIAUTOPOST-WEB` (siri_autopost_ui, `Jenkinsfile`) |
+| Branch | `main` (both repos are public; the jobs still check out with credential `gitlab-auth-id`, like the other systems) |
 | Images | `localhost:5000/siriautopost-api`, `localhost:5000/siriautopost-web` |
 | Database | Postgres 18 StatefulSet `postgres` in the namespace, database `SIRIAUTOPOST_PRD`, 10Gi volume |
 | Routing | tunnel → `http://172.17.0.1:30907` (Service `ui`, NodePort) → nginx serves the dashboard and proxies `/api` to Service `api:8080` |
@@ -35,10 +35,10 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
      external server instead;
    - `Jwt__Key` (32+ chars), or derived from `AppSettings__Secret`;
    - optional `Admin__Email` / `Admin__Password` to create the platform admin.
-4. **Jenkins jobs** (Pipeline, "Pipeline script from SCM", Git, branch `*/main`, Script Path `Jenkinsfile`):
-   - `SIRIAUTOPOST-BACKEND` → https://github.com/jatupolman3CS/siri_autopost_backend.git
+4. **Jenkins jobs** (Pipeline, "Pipeline script": paste `deploy/jenkins/SIRIAUTOPOST-API.groovy` and `SIRIAUTOPOST-WEB.groovy`, same style as SIRISTUDIOPHOT-API; the `Jenkinsfile` in each repo is the same pipeline):
+   - `SIRIAUTOPOST-API` → https://github.com/jatupolman3CS/siri_autopost_backend.git
    - `SIRIAUTOPOST-WEB` → https://github.com/jatupolman3CS/siri_autopost_ui.git
-5. Build `SIRIAUTOPOST-BACKEND` first (it creates Service `api`, which the dashboard's nginx needs), then
+5. Build `SIRIAUTOPOST-API` first (it creates Service `api`, which the dashboard's nginx needs), then
    `SIRIAUTOPOST-WEB`.
 
 ## Check

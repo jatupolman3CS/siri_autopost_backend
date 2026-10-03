@@ -132,6 +132,17 @@ public interface IDeviceRepository
     void Remove(Device device);
 }
 
+public interface IDeviceEventRepository
+{
+    /// <summary>Events of a workspace after <paramref name="afterSeq"/>, oldest first, at most <paramref name="take"/>.</summary>
+    Task<IReadOnlyList<DeviceEvent>> ListAfterAsync(Guid workspaceId, long afterSeq, int take, CancellationToken ct = default);
+    /// <summary>The newest Seq of a workspace (0 when it has no events).</summary>
+    Task<long> HeadAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Deletes all but the newest <paramref name="keep"/> events of a device.</summary>
+    Task PruneAsync(Guid deviceId, int keep, CancellationToken ct = default);
+    void Add(DeviceEvent e);
+}
+
 public interface IDevicePairingRepository
 {
     Task<DevicePairing?> GetByCodeAsync(string code, CancellationToken ct = default);

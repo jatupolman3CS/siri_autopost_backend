@@ -56,7 +56,7 @@ public sealed record RevokeDeviceCommand(Guid WorkspaceId, Guid DeviceId) : ICom
 
 public sealed class RevokeDeviceCommandHandler(
     IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RevokeDeviceCommand, Unit>
 {
     public async Task<Unit> HandleAsync(RevokeDeviceCommand c, CancellationToken ct = default)
@@ -68,6 +68,7 @@ public sealed class RevokeDeviceCommandHandler(
         foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
             p.Fail(FailureCode.Network, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", now);
         devices.Remove(device);
+        events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Revoked, new { name = device.Name }, now));
         await uow.SaveChangesAsync(ct);
         return Unit.Value;
     }
@@ -131,7 +132,8 @@ public sealed record PairDeviceCommand(string Code, string Name, string? Browser
 
 public sealed class PairDeviceCommandHandler(
     IDevicePairingRepository pairings, IWorkspaceRepository workspaces, IUserRepository users, IPlanRepository plans,
-    IDeviceRepository devices, IAccountRepository accounts, IDeviceSecrets secrets, IUnitOfWork uow, TimeProvider clock)
+    IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events, IDeviceSecrets secrets, IUnitOfWork uow,
+    TimeProvider clock)
     : ICommandHandler<PairDeviceCommand, PairResultDto>
 {
     public async Task<PairResultDto> HandleAsync(PairDeviceCommand c, CancellationToken ct = default)
@@ -148,6 +150,7 @@ public sealed class PairDeviceCommandHandler(
         devices.Add(device);
         var account = SocialAccount.Connect(ws.Id, device, await accounts.CountAsync(ws.Id, ct));
         accounts.Add(account);
+        events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Paired, new { name = device.Name, accountId = account.Id }, now));
         await uow.SaveChangesAsync(ct);
         return new PairResultDto(key, device.Id, device.Name, ws.Id, ws.Name, account.Id);
     }
@@ -164,13 +167,15 @@ public sealed record DeviceHeartbeatCommand(string? Version) : ICommand<DeviceSt
 
 public sealed class DeviceHeartbeatCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IUnitOfWork uow, TimeProvider clock)
+    IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<DeviceHeartbeatCommand, DeviceStatusDto>
 {
     public async Task<DeviceStatusDto> HandleAsync(DeviceHeartbeatCommand c, CancellationToken ct = default)
     {
         var device = await DeviceAccess.RequireAsync(devices, current, ct);
-        device.Seen(c.Version, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        if (device.Seen(c.Version, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         await uow.SaveChangesAsync(ct);
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
@@ -206,17 +211,20 @@ public sealed record ClaimJobCommand : ICommand<JobDto?>;
 
 public sealed class ClaimJobCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, IUnitOfWork uow,
-    TimeProvider clock)
+    IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, IDeviceEventRepository events,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ClaimJobCommand, JobDto?>
 {
     public async Task<JobDto?> HandleAsync(ClaimJobCommand c, CancellationToken ct = default)
     {
         var now = clock.GetUtcNow();
         var device = await DeviceAccess.RequireAsync(devices, current, ct);
-        device.Seen(null, now);
+        if (device.Seen(null, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         var job = await NextAsync(device, ws, now, ct);
+        if (job is not null)
+            events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Post, new { postId = job.PostId, status = PostStatus.Posting }, now));
         await uow.SaveChangesAsync(ct);
         return job;
     }
@@ -286,14 +294,15 @@ public sealed record ReportJobResultCommand(
 
 public sealed class ReportJobResultCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts,
-    IUnitOfWork uow, TimeProvider clock)
+    IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ReportJobResultCommand, PostDto>
 {
     public async Task<PostDto> HandleAsync(ReportJobResultCommand c, CancellationToken ct = default)
     {
         var now = clock.GetUtcNow();
         var device = await DeviceAccess.RequireAsync(devices, current, ct);
-        device.Seen(null, now);
+        if (device.Seen(null, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         var post = await posts.GetAsync(device.WorkspaceId, c.PostId, ct);
         if (post is null || post.ClaimedByDeviceId != device.Id) throw new NotFoundException("งานโพสต์", c.PostId);
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
@@ -308,6 +317,8 @@ public sealed class ReportJobResultCommandHandler(
             post.Fail(code, c.Error, now);
             if (c.NeedsLogin) account?.MarkNeedsLogin();
         }
+        events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Post,
+            new { postId = post.Id, status = post.Status, failureCode = post.FailureCode }, now));
         await uow.SaveChangesAsync(ct);
         return PostDto.From(post);
     }

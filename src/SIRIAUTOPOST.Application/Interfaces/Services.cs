@@ -81,3 +81,41 @@ public interface IDatabaseProbe
     /// <summary>Round trip of a trivial query.</summary>
     Task<TimeSpan> PingAsync(CancellationToken ct = default);
 }
+
+/// <summary>
+/// Fans out <see cref="Domain.Entities.DeviceEvent"/>s saved by this process to the streams waiting for them
+/// (the web app's event stream, a device's long sync). In-process today; the same interface fits Redis
+/// pub/sub when the API runs on more than one instance. The database stays the source of truth: a client
+/// that missed events reads them back by Seq.
+/// </summary>
+public interface IDeviceEventBus
+{
+    /// <summary>Hands saved events (Seq assigned) to every subscriber of their workspace or device.</summary>
+    void Publish(IReadOnlyList<Domain.Entities.DeviceEvent> events);
+
+    /// <summary>Events of one workspace from now on. Dispose to stop.</summary>
+    IDeviceEventSubscription Subscribe(Guid workspaceId);
+
+    /// <summary>
+    /// Waits until an event of <paramref name="type"/> for the device arrives, the timeout passes, the caller
+    /// cancels or the application stops. True when the event arrived.
+    /// </summary>
+    Task<bool> WaitForAsync(Guid deviceId, string type, TimeSpan timeout, CancellationToken ct = default);
+
+    /// <summary>Signalled when the application is shutting down: streams end so clients reconnect elsewhere.</summary>
+    CancellationToken Stopping { get; }
+
+    DeviceEventBusStats Stats { get; }
+}
+
+public interface IDeviceEventSubscription : IDisposable
+{
+    /// <summary>Completes when the subscription ends (disposed or the application stops).</summary>
+    System.Threading.Channels.ChannelReader<Domain.Entities.DeviceEvent> Events { get; }
+}
+
+/// <param name="Streams">Web event streams open right now.</param>
+/// <param name="DeviceWaits">Devices waiting in a long sync right now.</param>
+/// <param name="Published">Events published since the process started.</param>
+/// <param name="Dropped">Events a slow stream lost (it refetches by Seq).</param>
+public sealed record DeviceEventBusStats(int Streams, int DeviceWaits, long Published, long Dropped);

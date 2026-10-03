@@ -283,6 +283,43 @@ assert.equal(live.revision, 3);
 assert.ok(live.state && typeof live.state === 'object', 'state reported');
 assert.ok(live.logs.some((l) => l.msg.includes('โหลดการตั้งค่าจากเว็บแล้ว')), 'log lines reported');
 
+step('the workspace event stream recorded all of it, in order');
+const events = (await api('GET', `/api/workspaces/${ws.id}/events?after=0`)).json;
+const types = events.events.map((e) => e.type);
+for (const t of ['device.paired', 'device.config', 'device.state', 'device.log', 'device.command'])
+  assert.ok(types.includes(t), `event ${t} recorded (got ${types.join(', ')})`);
+assert.ok(events.events.every((e, i) => i === 0 || e.seq > events.events[i - 1].seq), 'seq ascending');
+assert.equal(events.head, events.events[events.events.length - 1].seq);
+const cmdEvents = events.events.filter((e) => e.type === 'device.command' && e.payload.id === cmd.id).map((e) => e.payload.status);
+assert.deepEqual(cmdEvents, ['pending', 'done'], 'the command went pending -> done on the stream');
+
+step('a sync held open (wait) returns as soon as the web app sends a command');
+{
+  const c = data.get('cloud');
+  const t0 = Date.now();
+  const held = fetch(`${API}/api/device/sync`, {
+    method: 'POST',
+    headers: { 'X-Device-Key': c.deviceKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: '2.2.0', takeCommands: true, wait: true }),
+  }).then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 500));
+  const sent = (await api('POST', `${devBase}/commands`, { cmd: 'syncNow' })).json;
+  const got = await held;
+  assert.ok(Date.now() - t0 < 10000, 'answered well before the 25 s wait');
+  // The background listener of background.js holds a sync open too; whichever wakes first takes the command.
+  const status = (await api('GET', `${devBase}/commands/${sent.id}`)).json.status;
+  assert.ok(got.commands.length === 1 || ['sent', 'done'].includes(status), `command taken at once (held: ${got.commands.length}, status: ${status})`);
+  if (got.commands.length === 1) {
+    assert.equal(got.commands[0].id, sent.id);
+    r = await fetch(`${API}/api/device/commands/${sent.id}/result`, {
+      method: 'POST',
+      headers: { 'X-Device-Key': c.deviceKey, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ result: { ok: true } }),
+    });
+    assert.equal(r.status, 204);
+  }
+}
+
 step('faster anti-ban for the test: no typing, no browsing, 1-2 minute gap');
 const engine = (await api('GET', `/api/workspaces/${ws.id}/engine`)).json;
 r = await api('PUT', `/api/workspaces/${ws.id}/engine/anti-ban`, { ...engine.antiBan, min: 1, max: 2, typing: false, scroll: false });

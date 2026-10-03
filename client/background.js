@@ -1723,9 +1723,12 @@ function setCloud(patch) {
 }
 
 // fetch with the device key; errors carry the API's Thai message (ProblemDetails title).
-async function cloudApi(c, method, path, body, { blob = false } = {}) {
+// signal: an AbortController of the caller's; aborting it ends the call with err.aborted = true.
+async function cloudApi(c, method, path, body, { blob = false, signal = null } = {}) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), 120000);
+  const onOuter = () => ctrl.abort();
+  if (signal) signal.aborted ? ctrl.abort() : signal.addEventListener('abort', onOuter, { once: true });
   let res;
   try {
     res = await fetch(normServer(c.apiUrl) + path, {
@@ -1739,9 +1742,13 @@ async function cloudApi(c, method, path, body, { blob = false } = {}) {
       cache: 'no-store',
     });
   } catch (e) {
-    throw new Error(e?.name === 'AbortError' ? 'เว็บ AutoPost ไม่ตอบ (หมดเวลา)' : `ติดต่อเว็บ AutoPost ไม่ได้ (${e?.message || e})`);
+    const byCaller = !!signal?.aborted;
+    const err = new Error(byCaller ? 'ยกเลิกการรอ' : e?.name === 'AbortError' ? 'เว็บ AutoPost ไม่ตอบ (หมดเวลา)' : `ติดต่อเว็บ AutoPost ไม่ได้ (${e?.message || e})`);
+    err.aborted = byCaller;
+    throw err;
   } finally {
     clearTimeout(timer);
+    if (signal) signal.removeEventListener('abort', onOuter);
   }
   if (res.ok && blob) return res.blob();
   let data = null;
@@ -1925,6 +1932,51 @@ async function ensureCloudAlarm() {
   if (!(await chrome.alarms.get(CLOUD_ALARM))) {
     await chrome.alarms.create(CLOUD_ALARM, { periodInMinutes: CLOUD_PERIOD_MIN, delayInMinutes: CLOUD_PERIOD_MIN });
   }
+  cloudListen();
+}
+
+// ---------- live: a sync held open so the web app's buttons arrive at once ----------
+//
+// cloudListen loops on cloudConfigSync({ wait: true }): the server holds each call until the web app sends
+// a command (or ~25 s pass), so Start/Stop on the web reach this browser within a second instead of on the
+// next 30-second alarm. Every round also reports state and new log lines. Other syncs (an edit to push, a
+// button, the alarm) call cloudWake() to cut the open call short and run at once. The loop is only a
+// shortcut: the alarm still fires every 30 s and restarts it after the service worker was put to sleep.
+
+let cloudWaitCtrl = null;  // AbortController of the sync call held open right now
+let cloudListening = false;
+let cloudListenKeep = null;
+let cloudListenFailures = 0;
+
+function cloudWake() {
+  if (cloudWaitCtrl) cloudWaitCtrl.abort();
+}
+
+function cloudListen() {
+  if (cloudListening) return;
+  cloudListening = true;
+  // MV3 ends an idle worker after 30 s; an extension API call now and then keeps it up while a call is open.
+  cloudListenKeep = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
+  (async () => {
+    try {
+      while (true) {
+        const c = await getCloud();
+        if (!c.enabled || !c.apiUrl || !c.deviceKey) return;
+        const r = await cloudConfigSync({ wait: true });
+        if (r.ok) {
+          cloudListenFailures = 0;
+          continue;
+        }
+        // The web is unreachable (or unbound: cloud is off now): back off up to a minute, the alarm covers the rest.
+        const delay = Math.min(60000, 5000 * 2 ** Math.min(cloudListenFailures++, 4)) * (0.7 + Math.random() * 0.6);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    } finally {
+      clearInterval(cloudListenKeep);
+      cloudListenKeep = null;
+      cloudListening = false;
+    }
+  })();
 }
 
 // "Pair": trade the code from the web app for this browser's device key.
@@ -2009,13 +2061,29 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 let cloudStateSent = ''; // state is sent only when it changed
 
 // State and new log lines out; the web revision and waiting commands in.
-async function cloudReport(c, takeCommands) {
+// wait: the server holds the call (up to ~25 s) until the web app sends a command, so a button on the web
+// reaches this browser at once. cloudWake() cuts the wait short; the answer is then { aborted: true }.
+async function cloudReport(c, takeCommands, { wait = false } = {}) {
   const { state, logs = [] } = await chrome.storage.local.get(['state', 'logs']);
   const stateJson = JSON.stringify(state || {});
   const fresh = logs.filter((l) => l.t > c.lastLogT).slice(-300);
   const body = { version: chrome.runtime.getManifest().version, takeCommands, logs: fresh };
   if (stateJson !== cloudStateSent) body.state = state || {};
-  const res = await cloudApi(c, 'POST', '/api/device/sync', body);
+  let res;
+  if (wait) {
+    const ctrl = new AbortController();
+    cloudWaitCtrl = ctrl;
+    try {
+      res = await cloudApi(c, 'POST', '/api/device/sync', { ...body, wait: true }, { signal: ctrl.signal });
+    } catch (e) {
+      if (e?.aborted) return { aborted: true, commands: [] };
+      throw e;
+    } finally {
+      if (cloudWaitCtrl === ctrl) cloudWaitCtrl = null;
+    }
+  } else {
+    res = await cloudApi(c, 'POST', '/api/device/sync', body);
+  }
   cloudStateSent = stateJson;
   if (fresh.length) await setCloud({ lastLogT: fresh[fresh.length - 1].t });
   return res;
@@ -2099,11 +2167,12 @@ async function cloudSyncSettings(c, server, mode) {
   if (localEdited) return cloudPushConfig(c, local, c.configRevision, { quiet: true });
 }
 
-async function doCloudConfigSync({ mode = 'auto' } = {}) {
+async function doCloudConfigSync({ mode = 'auto', wait = false } = {}) {
   const c = await getCloud();
   if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
   try {
-    const s = await cloudReport(c, true);
+    const s = await cloudReport(c, true, { wait });
+    if (s.aborted) return { ok: true, aborted: true }; // woken up: the sync queued behind this one takes over
     await cloudSyncSettings(await getCloud(), s, mode);
     const report = (id, result) => cloudApi(c, 'POST', `/api/device/commands/${id}/result`, { result });
     // Report the new state right away so the web page sees it.
@@ -2124,8 +2193,11 @@ async function doCloudConfigSync({ mode = 'auto' } = {}) {
 let cloudConfigChain = Promise.resolve();
 let cloudConfigQueued = null;
 function cloudConfigSync(opts = {}) {
+  // A sync that must run now (an edit, a button, the alarm) cuts a waiting one short so it is not stuck behind it.
+  if (!opts.wait) cloudWake();
   if (cloudConfigQueued) {
     if (opts.mode) cloudConfigQueued.opts.mode = opts.mode;
+    if (!opts.wait) cloudConfigQueued.opts.wait = false;
     return cloudConfigQueued.promise;
   }
   const entry = { opts: { ...opts } };
@@ -2171,7 +2243,10 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === CLOUD_ALARM) {
     enqueue(() => cloudTick());
-    cloudConfigSync();
+    // The listener reports state and log on every round; when it is not running (the worker was just
+    // woken), do one plain sync and start it again.
+    if (!cloudListening) cloudConfigSync();
+    cloudListen();
     return;
   }
   if (alarm.name.startsWith(ALARM_PREFIX)) {

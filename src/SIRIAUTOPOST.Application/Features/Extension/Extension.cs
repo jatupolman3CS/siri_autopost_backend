@@ -35,15 +35,15 @@ public sealed record SaveExtensionConfigCommand(Guid WorkspaceId, Guid DeviceId,
     : ICommand<ConfigSavedDto>;
 
 public sealed class SaveExtensionConfigCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, ICurrentUser current,
-    IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, IDeviceEventRepository events,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SaveExtensionConfigCommand, ConfigSavedDto>
 {
     public async Task<ConfigSavedDto> HandleAsync(SaveExtensionConfigCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        return await ExtensionConfigs.SaveAsync(ext, uow, ws.Id, device.Id, c.Settings, c.BaseRevision, false, clock.GetUtcNow(), ct);
+        return await ExtensionConfigs.SaveAsync(ext, events, uow, ws.Id, device.Id, c.Settings, c.BaseRevision, false, clock.GetUtcNow(), ct);
     }
 }
 
@@ -101,8 +101,8 @@ public sealed class GetDeviceLiveQueryHandler(
 public sealed record SendDeviceCommandCommand(Guid WorkspaceId, Guid DeviceId, string Cmd, JsonElement? Args) : ICommand<DeviceCommandDto>;
 
 public sealed class SendDeviceCommandCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, ICurrentUser current,
-    IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, IDeviceEventRepository events,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SendDeviceCommandCommand, DeviceCommandDto>
 {
     public async Task<DeviceCommandDto> HandleAsync(SendDeviceCommandCommand c, CancellationToken ct = default)
@@ -110,11 +110,21 @@ public sealed class SendDeviceCommandCommandHandler(
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
         var args = c.Args is { ValueKind: JsonValueKind.Object } a ? a.GetRawText() : "{}";
-        var cmd = DeviceCommand.Create(ws.Id, device.Id, c.Cmd, args, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        var cmd = DeviceCommand.Create(ws.Id, device.Id, c.Cmd, args, now);
         ext.Add(cmd);
+        events.Add(CommandEvents.Of(cmd, now)); // wakes a device waiting in a long sync
         await uow.SaveChangesAsync(ct);
         return DeviceCommandDto.From(cmd);
     }
+}
+
+internal static class CommandEvents
+{
+    /// <summary>A "device.command" event for the command's current status.</summary>
+    public static DeviceEvent Of(DeviceCommand cmd, DateTimeOffset now) =>
+        DeviceEvents.Make(cmd.WorkspaceId, cmd.DeviceId, DeviceEventType.Command,
+            new { id = cmd.Id, cmd = cmd.Cmd, status = cmd.Status, result = ExtensionSettings.Element(cmd.Result) }, now);
 }
 
 public sealed record GetDeviceCommandQuery(Guid WorkspaceId, Guid DeviceId, Guid CommandId) : IQuery<DeviceCommandDto>;
@@ -138,16 +148,20 @@ public sealed class GetDeviceCommandQueryHandler(
 public sealed record ClearDeviceLogsCommand(Guid WorkspaceId, Guid DeviceId) : ICommand<Unit>;
 
 public sealed class ClearDeviceLogsCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, ICurrentUser current,
-    IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, IDeviceEventRepository events,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ClearDeviceLogsCommand, Unit>
 {
     public async Task<Unit> HandleAsync(ClearDeviceLogsCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
+        var now = clock.GetUtcNow();
         await ext.ClearLogsAsync(device.Id, ct);
-        ext.Add(DeviceCommand.Create(ws.Id, device.Id, "clearLogs", "{}", clock.GetUtcNow()));
+        var cmd = DeviceCommand.Create(ws.Id, device.Id, "clearLogs", "{}", now);
+        ext.Add(cmd);
+        events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.LogCleared, new { }, now));
+        events.Add(CommandEvents.Of(cmd, now));
         await uow.SaveChangesAsync(ct);
         return Unit.Value;
     }
@@ -160,29 +174,38 @@ public sealed record DeviceLogEntry(long T, string? Level, string? Msg);
 
 /// <summary>
 /// Every 30 seconds: the device reports its state (when it changed) and new log lines, and learns the
-/// server's settings revision and the commands waiting for it.
+/// server's settings revision and the commands waiting for it. With <paramref name="Wait"/> and no command
+/// waiting, the call stays open (up to <see cref="DeviceSyncCommandHandler.MaxWait"/>) until the web app sends
+/// one, so a button on the web reaches the extension at once instead of on its next 30-second sync.
 /// </summary>
-public sealed record DeviceSyncCommand(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands)
+public sealed record DeviceSyncCommand(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands, bool Wait = false)
     : ICommand<DeviceSyncDto>;
 
 public sealed class DeviceSyncCommandHandler(
-    ICurrentDevice current, IDeviceRepository devices, IExtensionRepository ext, IUnitOfWork uow, TimeProvider clock)
+    ICurrentDevice current, IDeviceRepository devices, IExtensionRepository ext, IDeviceEventRepository events,
+    IDeviceEventBus bus, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<DeviceSyncCommand, DeviceSyncDto>
 {
     /// <summary>Lines taken from one sync (the extension keeps 400).</summary>
     public const int MaxLogsPerSync = 400;
+    /// <summary>A waiting sync answers by then even when nothing happened (under proxy and browser timeouts).</summary>
+    public static readonly TimeSpan MaxWait = TimeSpan.FromSeconds(25);
 
     public async Task<DeviceSyncDto> HandleAsync(DeviceSyncCommand c, CancellationToken ct = default)
     {
         var now = clock.GetUtcNow();
         var device = await devices.GetByIdAsync(current.DeviceId, ct) ?? throw new AuthenticationException("อุปกรณ์นี้ถูกยกเลิกการผูกแล้ว");
-        device.Seen(c.Version, now);
+        if (device.Seen(c.Version, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
 
         if (c.State is { ValueKind: JsonValueKind.Object } st)
         {
             var state = await ext.GetStateAsync(device.Id, ct);
             if (state is null) ext.Add(state = DeviceState.Create(device.Id));
-            state.Set(st.GetRawText(), now);
+            var json = st.GetRawText();
+            state.Set(json, now);
+            events.Add(DeviceEvents.MakeRaw(device.WorkspaceId, device.Id, DeviceEventType.State,
+                $"{{\"state\":{json},\"at\":{JsonSerializer.Serialize(now)}}}", now));
         }
 
         var newLogs = false;
@@ -193,26 +216,51 @@ public sealed class DeviceSyncCommandHandler(
                 .Select(l => DeviceLog.Create(device.Id, l.T, l.Level, l.Msg)).ToList();
             ext.AddRange(fresh);
             newLogs = fresh.Count > 0;
+            if (newLogs)
+            {
+                var truncated = fresh.Count > DeviceEvents.MaxLogLines;
+                var lines = truncated ? [] : fresh.Select(DeviceLogDto.From).ToList();
+                events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Log, new { lines, truncated }, now));
+            }
         }
 
+        var commands = await TakeAsync(c.TakeCommands, now, ct);
+        var head = await ext.GetConfigHeadAsync(device.Id, ct);
+        await uow.SaveChangesAsync(ct);
+        if (newLogs)
+        {
+            await ext.PruneLogsAsync(device.Id, DeviceLog.KeepPerDevice, ct);
+            await events.PruneAsync(device.Id, DeviceEvent.KeepPerDevice, ct);
+        }
+
+        // Nothing to run: hold the call until the web app sends a command (or the wait is over), then take it.
+        if (c.Wait && c.TakeCommands && commands.Count == 0
+            && await bus.WaitForAsync(device.Id, DeviceEventType.Command, MaxWait, ct))
+        {
+            commands = await TakeAsync(true, clock.GetUtcNow(), ct);
+            await uow.SaveChangesAsync(ct);
+        }
+        return new DeviceSyncDto(head?.Revision ?? 0, head?.HasContent ?? false, commands);
+    }
+
+    /// <summary>Expires stale commands and, when asked, marks the rest sent and returns them.</summary>
+    private async Task<List<DeviceCommandItemDto>> TakeAsync(bool take, DateTimeOffset now, CancellationToken ct)
+    {
         var commands = new List<DeviceCommandItemDto>();
-        foreach (var cmd in await ext.ListPendingCommandsAsync(device.Id, ct))
+        foreach (var cmd in await ext.ListPendingCommandsAsync(current.DeviceId, ct))
         {
             if (cmd.Stale(now))
             {
                 cmd.Expire();
+                events.Add(CommandEvents.Of(cmd, now));
                 continue;
             }
-            if (!c.TakeCommands) continue;
+            if (!take) continue;
             cmd.Send(now);
             using var args = JsonDocument.Parse(cmd.Args);
             commands.Add(new DeviceCommandItemDto(cmd.Id, cmd.Cmd, args.RootElement.Clone()));
         }
-
-        var head = await ext.GetConfigHeadAsync(device.Id, ct);
-        await uow.SaveChangesAsync(ct);
-        if (newLogs) await ext.PruneLogsAsync(device.Id, DeviceLog.KeepPerDevice, ct);
-        return new DeviceSyncDto(head?.Revision ?? 0, head?.HasContent ?? false, commands);
+        return commands;
     }
 }
 
@@ -229,11 +277,11 @@ public sealed class GetOwnExtensionConfigQueryHandler(ICurrentDevice current, IE
 public sealed record SaveOwnExtensionConfigCommand(JsonElement Settings, int? BaseRevision) : ICommand<ConfigSavedDto>;
 
 public sealed class SaveOwnExtensionConfigCommandHandler(
-    ICurrentDevice current, IExtensionRepository ext, IUnitOfWork uow, TimeProvider clock)
+    ICurrentDevice current, IExtensionRepository ext, IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SaveOwnExtensionConfigCommand, ConfigSavedDto>
 {
     public Task<ConfigSavedDto> HandleAsync(SaveOwnExtensionConfigCommand c, CancellationToken ct = default) =>
-        ExtensionConfigs.SaveAsync(ext, uow, current.WorkspaceId, current.DeviceId, c.Settings, c.BaseRevision, true, clock.GetUtcNow(), ct);
+        ExtensionConfigs.SaveAsync(ext, events, uow, current.WorkspaceId, current.DeviceId, c.Settings, c.BaseRevision, true, clock.GetUtcNow(), ct);
 }
 
 /// <summary>The ids the server does not have yet, so the device uploads only those.</summary>
@@ -278,14 +326,16 @@ public sealed class PutOwnExtensionImageCommandHandler(
 public sealed record ReportCommandResultCommand(Guid CommandId, JsonElement? Result) : ICommand<Unit>;
 
 public sealed class ReportCommandResultCommandHandler(
-    ICurrentDevice current, IExtensionRepository ext, IUnitOfWork uow, TimeProvider clock)
+    ICurrentDevice current, IExtensionRepository ext, IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ReportCommandResultCommand, Unit>
 {
     public async Task<Unit> HandleAsync(ReportCommandResultCommand c, CancellationToken ct = default)
     {
         var cmd = await ext.GetCommandAsync(current.DeviceId, c.CommandId, ct) ?? throw new NotFoundException("คำสั่ง", c.CommandId);
         var result = c.Result is { ValueKind: JsonValueKind.Object } r ? r.GetRawText() : "{\"ok\":true}";
-        cmd.Complete(result, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        cmd.Complete(result, now);
+        events.Add(CommandEvents.Of(cmd, now)); // the web page waiting for this answer gets it now
         await uow.SaveChangesAsync(ct);
         return Unit.Value;
     }
@@ -301,14 +351,16 @@ internal static class ExtensionConfigs
             c?.HasContent ?? false);
 
     public static async Task<ConfigSavedDto> SaveAsync(
-        IExtensionRepository ext, IUnitOfWork uow, Guid workspaceId, Guid deviceId, JsonElement settings, int? baseRevision,
-        bool byDevice, DateTimeOffset now, CancellationToken ct)
+        IExtensionRepository ext, IDeviceEventRepository events, IUnitOfWork uow, Guid workspaceId, Guid deviceId, JsonElement settings,
+        int? baseRevision, bool byDevice, DateTimeOffset now, CancellationToken ct)
     {
         if (!ExtensionSettings.IsValid(settings)) throw new DomainException("รูปแบบการตั้งค่าไม่ถูกต้อง (ต้องมี campaigns)");
         var config = await ext.GetConfigAsync(deviceId, ct);
         if (config is null) ext.Add(config = ExtensionConfig.Create(workspaceId, deviceId));
         var json = settings.GetRawText();
         var changed = config.Save(json, ExtensionSettings.HasContent(json), baseRevision, byDevice, now);
+        if (changed)
+            events.Add(DeviceEvents.Make(workspaceId, deviceId, DeviceEventType.Config, new { revision = config.Revision, byDevice }, now));
         await uow.SaveChangesAsync(ct);
         if (changed) await CleanupImagesAsync(ext, workspaceId, now, ct);
         return new ConfigSavedDto(config.Revision, config.UpdatedAt);

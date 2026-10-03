@@ -1,10 +1,11 @@
 using Microsoft.EntityFrameworkCore;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Infrastructure.Data;
 
-public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(options), IUnitOfWork
+public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBus? events = null) : DbContext(options), IUnitOfWork
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<Workspace> Workspaces => Set<Workspace>();
@@ -24,6 +25,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<DeviceState> DeviceStates => Set<DeviceState>();
     public DbSet<DeviceLog> DeviceLogs => Set<DeviceLog>();
     public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
+    public DbSet<DeviceEvent> DeviceEvents => Set<DeviceEvent>();
 
     // Picks up every IEntityTypeConfiguration in Data/Configurations.
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>
@@ -33,5 +35,20 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     protected override void ConfigureConventions(ModelConfigurationBuilder b)
     {
         b.Properties<Enum>().HaveConversion<string>().HaveMaxLength(30);
+    }
+
+    /// <summary>
+    /// Saves, then hands the device events written in this save (now with their Seq) to the streams waiting for
+    /// them. Publishing after the commit means a stream never announces something that was rolled back, and a
+    /// client that connects in between still finds the events by Seq.
+    /// </summary>
+    public override async Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
+    {
+        var added = events is null
+            ? null
+            : ChangeTracker.Entries<DeviceEvent>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).ToList();
+        var n = await base.SaveChangesAsync(cancellationToken);
+        if (added is { Count: > 0 }) events!.Publish(added);
+        return n;
     }
 }

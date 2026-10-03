@@ -8,7 +8,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
 {
     public void Configure(EntityTypeBuilder<User> b)
     {
-        b.ToTable("users");
+        b.ToTable("USERS");
         b.Property(x => x.Email).HasMaxLength(254).IsRequired();
         b.HasIndex(x => x.Email).IsUnique();
         b.Property(x => x.Name).HasMaxLength(120);
@@ -22,7 +22,7 @@ public sealed class WorkspaceConfiguration : IEntityTypeConfiguration<Workspace>
 {
     public void Configure(EntityTypeBuilder<Workspace> b)
     {
-        b.ToTable("workspaces");
+        b.ToTable("WORKSPACES");
         b.Property(x => x.Name).HasMaxLength(Workspace.MaxNameLength).IsRequired();
         b.HasIndex(x => x.OwnerId);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.OwnerId).OnDelete(DeleteBehavior.Cascade);
@@ -40,7 +40,7 @@ public sealed class SocialAccountConfiguration : IEntityTypeConfiguration<Social
 {
     public void Configure(EntityTypeBuilder<SocialAccount> b)
     {
-        b.ToTable("social_accounts");
+        b.ToTable("SOCIAL_ACCOUNTS");
         b.Property(x => x.Name).HasMaxLength(120).IsRequired();
         b.Property(x => x.Handle).HasMaxLength(200);
         b.Property(x => x.DefaultTarget).HasMaxLength(120);
@@ -56,7 +56,7 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
 {
     public void Configure(EntityTypeBuilder<Post> b)
     {
-        b.ToTable("posts");
+        b.ToTable("POSTS");
         b.Property(x => x.Target).HasMaxLength(Post.MaxTargetLength);
         b.Property(x => x.Content).HasMaxLength(Post.MaxContentLength).IsRequired();
         b.Property(x => x.FailureDetail).HasMaxLength(Post.MaxDetailLength);
@@ -74,7 +74,7 @@ public sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFile>
 {
     public void Configure(EntityTypeBuilder<MediaFile> b)
     {
-        b.ToTable("media_files");
+        b.ToTable("MEDIA_FILES");
         b.Property(x => x.Name).HasMaxLength(200).IsRequired();
         b.Property(x => x.ContentType).HasMaxLength(100);
         b.HasIndex(x => x.WorkspaceId);
@@ -86,7 +86,7 @@ public sealed class SnippetConfiguration : IEntityTypeConfiguration<Snippet>
 {
     public void Configure(EntityTypeBuilder<Snippet> b)
     {
-        b.ToTable("snippets");
+        b.ToTable("SNIPPETS");
         b.Property(x => x.Title).HasMaxLength(Snippet.MaxTitleLength).IsRequired();
         b.Property(x => x.Text).HasMaxLength(Snippet.MaxTextLength).IsRequired();
         b.HasIndex(x => x.WorkspaceId);
@@ -98,7 +98,7 @@ public sealed class DeviceConfiguration : IEntityTypeConfiguration<Device>
 {
     public void Configure(EntityTypeBuilder<Device> b)
     {
-        b.ToTable("devices");
+        b.ToTable("DEVICES");
         b.Property(x => x.Name).HasMaxLength(Device.MaxNameLength).IsRequired();
         b.Property(x => x.Browser).HasMaxLength(120);
         b.Property(x => x.Version).HasMaxLength(40);
@@ -113,7 +113,7 @@ public sealed class DevicePairingConfiguration : IEntityTypeConfiguration<Device
 {
     public void Configure(EntityTypeBuilder<DevicePairing> b)
     {
-        b.ToTable("device_pairings");
+        b.ToTable("DEVICE_PAIRINGS");
         b.Property(x => x.Code).HasMaxLength(9).IsRequired();
         b.HasIndex(x => x.Code).IsUnique();
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
@@ -124,7 +124,7 @@ public sealed class WorkspaceMemberConfiguration : IEntityTypeConfiguration<Work
 {
     public void Configure(EntityTypeBuilder<WorkspaceMember> b)
     {
-        b.ToTable("workspace_members");
+        b.ToTable("WORKSPACE_MEMBERS");
         b.Property(x => x.Email).HasMaxLength(254).IsRequired();
         b.HasIndex(x => new { x.WorkspaceId, x.Email }).IsUnique();
         b.HasIndex(x => x.UserId);
@@ -137,7 +137,7 @@ public sealed class PlanSettingConfiguration : IEntityTypeConfiguration<PlanSett
 {
     public void Configure(EntityTypeBuilder<PlanSetting> b)
     {
-        b.ToTable("plan_settings");
+        b.ToTable("PLAN_SETTINGS");
         b.HasKey(x => x.Key);
         // The design's prices and limits; the platform admin edits them from there.
         b.HasData(PlanSetting.Defaults);
@@ -148,7 +148,7 @@ public sealed class TransactionConfiguration : IEntityTypeConfiguration<Transact
 {
     public void Configure(EntityTypeBuilder<Transaction> b)
     {
-        b.ToTable("transactions");
+        b.ToTable("TRANSACTIONS");
         b.Property(x => x.PromoCode).HasMaxLength(30);
         b.HasIndex(x => new { x.UserId, x.CreatedAt });
         b.HasIndex(x => x.CreatedAt);
@@ -160,7 +160,7 @@ public sealed class AuditEntryConfiguration : IEntityTypeConfiguration<AuditEntr
 {
     public void Configure(EntityTypeBuilder<AuditEntry> b)
     {
-        b.ToTable("audit_entries");
+        b.ToTable("AUDIT_ENTRIES");
         b.Property(x => x.From).HasMaxLength(200);
         b.Property(x => x.To).HasMaxLength(200);
         b.HasIndex(x => new { x.CustomerId, x.At });
@@ -173,7 +173,7 @@ public sealed class PromoConfiguration : IEntityTypeConfiguration<Promo>
 {
     public void Configure(EntityTypeBuilder<Promo> b)
     {
-        b.ToTable("promos");
+        b.ToTable("PROMOS");
         b.Property(x => x.Code).HasMaxLength(30).IsRequired();
         b.HasIndex(x => x.Code).IsUnique();
         b.Property(x => x.Discount).HasMaxLength(10).IsRequired();
@@ -184,7 +184,7 @@ public sealed class ExtensionConfigConfiguration : IEntityTypeConfiguration<Exte
 {
     public void Configure(EntityTypeBuilder<ExtensionConfig> b)
     {
-        b.ToTable("extension_configs");
+        b.ToTable("EXTENSION_CONFIGS");
         // text, not jsonb: the JSON is compared byte for byte to keep the revision on identical saves.
         b.Property(x => x.Settings).HasColumnType("text").IsRequired();
         b.HasIndex(x => x.DeviceId).IsUnique();
@@ -198,7 +198,7 @@ public sealed class ExtensionImageConfiguration : IEntityTypeConfiguration<Exten
 {
     public void Configure(EntityTypeBuilder<ExtensionImage> b)
     {
-        b.ToTable("extension_images");
+        b.ToTable("EXTENSION_IMAGES");
         b.Property(x => x.ImageId).HasMaxLength(100).IsRequired();
         b.Property(x => x.Name).HasMaxLength(200).IsRequired();
         b.Property(x => x.ContentType).HasMaxLength(100);
@@ -211,7 +211,7 @@ public sealed class DeviceStateConfiguration : IEntityTypeConfiguration<DeviceSt
 {
     public void Configure(EntityTypeBuilder<DeviceState> b)
     {
-        b.ToTable("device_states");
+        b.ToTable("DEVICE_STATES");
         b.Property(x => x.Json).HasColumnType("text").IsRequired();
         b.HasIndex(x => x.DeviceId).IsUnique();
         b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
@@ -222,7 +222,7 @@ public sealed class DeviceLogConfiguration : IEntityTypeConfiguration<DeviceLog>
 {
     public void Configure(EntityTypeBuilder<DeviceLog> b)
     {
-        b.ToTable("device_logs");
+        b.ToTable("DEVICE_LOGS");
         b.Property(x => x.Level).HasMaxLength(20);
         b.Property(x => x.Message).HasMaxLength(DeviceLog.MaxMessageLength);
         b.HasIndex(x => new { x.DeviceId, x.T });
@@ -234,11 +234,26 @@ public sealed class DeviceCommandConfiguration : IEntityTypeConfiguration<Device
 {
     public void Configure(EntityTypeBuilder<DeviceCommand> b)
     {
-        b.ToTable("device_commands");
+        b.ToTable("DEVICE_COMMANDS");
         b.Property(x => x.Cmd).HasMaxLength(40).IsRequired();
         b.Property(x => x.Args).HasColumnType("text").IsRequired();
         b.Property(x => x.Result).HasColumnType("text");
         b.HasIndex(x => new { x.DeviceId, x.Status });
         b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class DeviceEventConfiguration : IEntityTypeConfiguration<DeviceEvent>
+{
+    public void Configure(EntityTypeBuilder<DeviceEvent> b)
+    {
+        b.ToTable("DEVICE_EVENTS");
+        b.HasKey(x => x.Seq);
+        b.Property(x => x.Seq).UseIdentityAlwaysColumn();
+        b.Property(x => x.Type).HasMaxLength(40).IsRequired();
+        b.Property(x => x.Payload).HasColumnType("text").IsRequired();
+        b.HasIndex(x => new { x.WorkspaceId, x.Seq });
+        b.HasIndex(x => new { x.DeviceId, x.Seq });
+        // No foreign key: a "device.revoked" event outlives its device.
     }
 }

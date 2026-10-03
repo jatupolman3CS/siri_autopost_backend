@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SIRIAUTOPOST.Infrastructure.Data;
@@ -12,9 +13,11 @@ using SIRIAUTOPOST.Infrastructure.Data;
 namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261003190432_DeviceEvents")]
+    partial class DeviceEvents
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -67,7 +70,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("CustomerId", "At")
                         .HasDatabaseName("ix_audit_entries_customer_id_at");
 
-                    b.ToTable("AUDIT_ENTRIES", (string)null);
+                    b.ToTable("audit_entries", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Device", b =>
@@ -127,7 +130,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_devices_workspace_id");
 
-                    b.ToTable("DEVICES", (string)null);
+                    b.ToTable("devices", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.DeviceCommand", b =>
@@ -184,7 +187,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("DeviceId", "Status")
                         .HasDatabaseName("ix_device_commands_device_id_status");
 
-                    b.ToTable("DEVICE_COMMANDS", (string)null);
+                    b.ToTable("device_commands", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.DeviceEvent", b =>
@@ -228,7 +231,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId", "Seq")
                         .HasDatabaseName("ix_device_events_workspace_id_seq");
 
-                    b.ToTable("DEVICE_EVENTS", (string)null);
+                    b.ToTable("device_events", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.DeviceLog", b =>
@@ -264,7 +267,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("DeviceId", "T")
                         .HasDatabaseName("ix_device_logs_device_id_t");
 
-                    b.ToTable("DEVICE_LOGS", (string)null);
+                    b.ToTable("device_logs", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.DevicePairing", b =>
@@ -302,7 +305,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_device_pairings_workspace_id");
 
-                    b.ToTable("DEVICE_PAIRINGS", (string)null);
+                    b.ToTable("device_pairings", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.DeviceState", b =>
@@ -332,7 +335,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_device_states_device_id");
 
-                    b.ToTable("DEVICE_STATES", (string)null);
+                    b.ToTable("device_states", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.ExtensionConfig", b =>
@@ -381,7 +384,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_extension_configs_workspace_id");
 
-                    b.ToTable("EXTENSION_CONFIGS", (string)null);
+                    b.ToTable("extension_configs", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.ExtensionImage", b =>
@@ -433,7 +436,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_extension_images_workspace_id_image_id");
 
-                    b.ToTable("EXTENSION_IMAGES", (string)null);
+                    b.ToTable("extension_images", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.MediaFile", b =>
@@ -488,7 +491,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_media_files_workspace_id");
 
-                    b.ToTable("MEDIA_FILES", (string)null);
+                    b.ToTable("media_files", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PlanSetting", b =>
@@ -521,7 +524,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasKey("Key")
                         .HasName("pk_plan_settings");
 
-                    b.ToTable("PLAN_SETTINGS", (string)null);
+                    b.ToTable("plan_settings", (string)null);
 
                     b.HasData(
                         new
@@ -655,7 +658,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("AccountId", "Status", "ScheduledAt")
                         .HasDatabaseName("ix_posts_account_id_status_scheduled_at");
 
-                    b.ToTable("POSTS", (string)null);
+                    b.ToTable("posts", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Promo", b =>
@@ -696,7 +699,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_promos_code");
 
-                    b.ToTable("PROMOS", (string)null);
+                    b.ToTable("promos", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Snippet", b =>
@@ -736,7 +739,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_snippets_workspace_id");
 
-                    b.ToTable("SNIPPETS", (string)null);
+                    b.ToTable("snippets", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.SocialAccount", b =>
@@ -802,7 +805,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_social_accounts_workspace_id");
 
-                    b.ToTable("SOCIAL_ACCOUNTS", (string)null);
+                    b.ToTable("social_accounts", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Transaction", b =>
@@ -860,7 +863,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("UserId", "CreatedAt")
                         .HasDatabaseName("ix_transactions_user_id_created_at");
 
-                    b.ToTable("TRANSACTIONS", (string)null);
+                    b.ToTable("transactions", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.User", b =>
@@ -936,7 +939,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_users_email");
 
-                    b.ToTable("USERS", (string)null);
+                    b.ToTable("users", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Workspace", b =>
@@ -970,7 +973,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasIndex("OwnerId")
                         .HasDatabaseName("ix_workspaces_owner_id");
 
-                    b.ToTable("WORKSPACES", (string)null);
+                    b.ToTable("workspaces", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.WorkspaceMember", b =>
@@ -1018,7 +1021,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_workspace_members_workspace_id_email");
 
-                    b.ToTable("WORKSPACE_MEMBERS", (string)null);
+                    b.ToTable("workspace_members", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Device", b =>
@@ -1172,7 +1175,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                             b1.HasKey("SocialAccountId", "__synthesizedOrdinal")
                                 .HasName("pk_social_accounts");
 
-                            b1.ToTable("SOCIAL_ACCOUNTS");
+                            b1.ToTable("social_accounts");
 
                             b1
                                 .ToJson("group_links")
@@ -1212,7 +1215,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
                             b1.HasKey("UserId");
 
-                            b1.ToTable("USERS");
+                            b1.ToTable("users");
 
                             b1
                                 .ToJson("limit_overrides")
@@ -1256,7 +1259,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
                             b1.HasKey("WorkspaceId");
 
-                            b1.ToTable("WORKSPACES");
+                            b1.ToTable("workspaces");
 
                             b1
                                 .ToJson("anti_ban")
@@ -1285,7 +1288,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                                     b2.HasKey("AntiBanSettingsWorkspaceId")
                                         .HasName("pk_workspaces");
 
-                                    b2.ToTable("WORKSPACES");
+                                    b2.ToTable("workspaces");
 
                                     b2.WithOwner()
                                         .HasForeignKey("AntiBanSettingsWorkspaceId")
@@ -1315,7 +1318,7 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
                             b1.HasKey("WorkspaceId");
 
-                            b1.ToTable("WORKSPACES");
+                            b1.ToTable("workspaces");
 
                             b1
                                 .ToJson("offline")

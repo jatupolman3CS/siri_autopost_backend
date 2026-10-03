@@ -25,7 +25,8 @@ public sealed class DeviceApiController : ControllerBase
     public sealed record HeartbeatRequest(string? Version);
     public sealed record GroupsRequest(IReadOnlyList<GroupLinkDto> Groups);
     public sealed record ResultRequest(bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error);
-    public sealed record SyncRequest(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands);
+    /// <param name="Wait">With takeCommands: hold the call (up to 25 s) until the web app sends a command.</param>
+    public sealed record SyncRequest(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands, bool Wait = false);
     public sealed record ConfigRequest(JsonElement Settings, int? BaseRevision);
     public sealed record IdsRequest(IReadOnlyList<string>? Ids);
     public sealed record CommandResultRequest(JsonElement? Result);
@@ -77,12 +78,13 @@ public sealed class DeviceApiController : ControllerBase
 
     /// <summary>
     /// Every 30 seconds: state (when it changed) and new log lines in; the server's settings revision and,
-    /// with takeCommands, the web app's waiting commands out.
+    /// with takeCommands, the web app's waiting commands out. With wait, the call stays open up to 25 s until a
+    /// command arrives (long polling), so the extension can loop on it and react to the web app at once.
     /// </summary>
     [HttpPost("sync")]
     public Task<DeviceSyncDto> Sync(
         SyncRequest r, [FromServices] ICommandHandler<DeviceSyncCommand, DeviceSyncDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new DeviceSyncCommand(r.Version, r.State, r.Logs, r.TakeCommands), ct);
+        handler.HandleAsync(new DeviceSyncCommand(r.Version, r.State, r.Logs, r.TakeCommands, r.Wait), ct);
 
     [HttpGet("config")]
     public Task<ExtensionConfigDto> Config(

@@ -87,7 +87,7 @@ public static class CommandStatus
 public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
 {
     // Tables share the database with other apps: every name starts with fbap_.
-    public const string MigrationsTable = "fbap_ef_migrations";
+    public const string MigrationsTable = "FBAP_EF_MIGRATIONS";
 
     public DbSet<User> Users => Set<User>();
     public DbSet<Profile> Profiles => Set<Profile>();
@@ -100,20 +100,20 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
     {
         b.Entity<User>(e =>
         {
-            e.ToTable("fbap_users");
+            e.ToTable("FBAP_USERS");
             e.HasIndex(x => x.Username).IsUnique();
             e.Property(x => x.Username).HasMaxLength(100);
         });
         b.Entity<Profile>(e =>
         {
-            e.ToTable("fbap_profiles");
+            e.ToTable("FBAP_PROFILES");
             e.Property(x => x.Name).HasMaxLength(200);
             e.Property(x => x.Settings).HasColumnType("jsonb");
             e.Property(x => x.UpdatedBy).HasMaxLength(200);
         });
         b.Entity<ProfileImage>(e =>
         {
-            e.ToTable("fbap_profile_images");
+            e.ToTable("FBAP_PROFILE_IMAGES");
             e.HasKey(x => new { x.ProfileId, x.ImageId });
             e.Property(x => x.ImageId).HasMaxLength(100);
             e.Property(x => x.Name).HasMaxLength(300);
@@ -122,7 +122,7 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
         });
         b.Entity<Device>(e =>
         {
-            e.ToTable("fbap_devices");
+            e.ToTable("FBAP_DEVICES");
             e.Property(x => x.Name).HasMaxLength(200);
             e.HasIndex(x => x.KeyHash).IsUnique();
             e.Property(x => x.State).HasColumnType("jsonb");
@@ -131,14 +131,14 @@ public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
         });
         b.Entity<DeviceLog>(e =>
         {
-            e.ToTable("fbap_device_logs");
+            e.ToTable("FBAP_DEVICE_LOGS");
             e.HasIndex(x => new { x.DeviceId, x.Id });
             e.Property(x => x.Level).HasMaxLength(20);
             e.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
         });
         b.Entity<DeviceCommand>(e =>
         {
-            e.ToTable("fbap_device_commands");
+            e.ToTable("FBAP_DEVICE_COMMANDS");
             e.HasIndex(x => new { x.DeviceId, x.Status });
             e.Property(x => x.Cmd).HasMaxLength(50);
             e.Property(x => x.Status).HasMaxLength(20);

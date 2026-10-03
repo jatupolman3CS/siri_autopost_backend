@@ -385,3 +385,22 @@ public sealed class PromoRepository(AppDbContext db) : IPromoRepository
 
     public void Add(Promo promo) => db.Promos.Add(promo);
 }
+
+public sealed class DeviceEventRepository(AppDbContext db) : IDeviceEventRepository
+{
+    public async Task<IReadOnlyList<DeviceEvent>> ListAfterAsync(Guid workspaceId, long afterSeq, int take, CancellationToken ct = default) =>
+        await db.DeviceEvents.Where(x => x.WorkspaceId == workspaceId && x.Seq > afterSeq)
+            .OrderBy(x => x.Seq).Take(take).ToListAsync(ct);
+
+    public async Task<long> HeadAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.DeviceEvents.Where(x => x.WorkspaceId == workspaceId).MaxAsync(x => (long?)x.Seq, ct) ?? 0;
+
+    public async Task PruneAsync(Guid deviceId, int keep, CancellationToken ct = default)
+    {
+        var cut = await db.DeviceEvents.Where(x => x.DeviceId == deviceId)
+            .OrderByDescending(x => x.Seq).Skip(keep).Select(x => (long?)x.Seq).FirstOrDefaultAsync(ct);
+        if (cut is { } s) await db.DeviceEvents.Where(x => x.DeviceId == deviceId && x.Seq <= s).ExecuteDeleteAsync(ct);
+    }
+
+    public void Add(DeviceEvent e) => db.DeviceEvents.Add(e);
+}

@@ -13,6 +13,14 @@ public class User : Entity
     public PlanKey Plan { get; private set; }
     public BillingCycle Cycle { get; private set; }
     public CustomerStatus Status { get; private set; }
+    /// <summary>The Stripe customer behind this user's payments (created on the first checkout).</summary>
+    public string? StripeCustomerId { get; private set; }
+    /// <summary>The live Stripe subscription that pays for <see cref="Plan"/>; null on Free and on plans the admin granted.</summary>
+    public string? StripeSubscriptionId { get; private set; }
+    /// <summary>When the current billing period ends (the next renewal, or the end of a cancelled plan).</summary>
+    public DateTimeOffset? PlanRenewsAt { get; private set; }
+    /// <summary>The subscription ends at <see cref="PlanRenewsAt"/> instead of renewing; the plan stays until then.</summary>
+    public bool CancelAtPeriodEnd { get; private set; }
     /// <summary>The platform admin paused this customer's posting (devices take no posts).</summary>
     public bool Paused { get; private set; }
     /// <summary>Platform admin's note about the customer.</summary>
@@ -33,8 +41,7 @@ public class User : Entity
             Name = string.IsNullOrWhiteSpace(name) ? normalized.Split('@')[0] : name.Trim(),
             Role = role,
             Plan = plan,
-            // A paid plan chosen at sign-up starts as a trial until the first payment.
-            Status = plan == PlanKey.Free || role == UserRole.Admin ? CustomerStatus.Active : CustomerStatus.Trial,
+            Status = CustomerStatus.Active,
             CreatedAt = now,
             LastSeenAt = now,
         };
@@ -51,17 +58,61 @@ public class User : Entity
 
     public void SetPasswordHash(string hash) => PasswordHash = hash;
 
-    /// <summary>Self-service change; a paid charge ends a trial or past-due state.</summary>
-    public void ChangePlan(PlanKey plan, BillingCycle cycle, bool paid)
+    public bool HasSubscription => StripeSubscriptionId is not null;
+
+    public void LinkStripeCustomer(string customerId) => StripeCustomerId = customerId;
+
+    /// <summary>
+    /// Takes over what Stripe says about the subscription that pays for this plan: the plan and cycle, when it
+    /// renews, whether it is cancelled at the end of the period, and whether the last payment failed. Blocked
+    /// customers stay blocked: only the platform admin lifts that.
+    /// </summary>
+    public void ApplySubscription(string subscriptionId, PlanKey plan, BillingCycle cycle, DateTimeOffset? renewsAt, bool cancelAtPeriodEnd, bool pastDue)
     {
+        StripeSubscriptionId = subscriptionId;
         Plan = plan;
         Cycle = cycle;
-        if (paid || plan == PlanKey.Free) Status = Status is CustomerStatus.Trial or CustomerStatus.PastDue ? CustomerStatus.Active : Status;
+        PlanRenewsAt = renewsAt;
+        CancelAtPeriodEnd = cancelAtPeriodEnd;
+        if (!IsBlocked) Status = pastDue ? CustomerStatus.PastDue : CustomerStatus.Active;
     }
 
-    /// <summary>The platform admin moves the customer to another plan (no charge).</summary>
+    /// <summary>A payment came in: a past-due customer is current again.</summary>
+    public void MarkPaid()
+    {
+        if (Status == CustomerStatus.PastDue) Status = CustomerStatus.Active;
+    }
+
+    /// <summary>A renewal payment failed: the plan stays while Stripe retries.</summary>
+    public void MarkPastDue()
+    {
+        if (Status == CustomerStatus.Active) Status = CustomerStatus.PastDue;
+    }
+
+    /// <summary>The subscription is over (cancelled, or unpaid after Stripe's retries): back to Free.</summary>
+    public void EndSubscription()
+    {
+        StripeSubscriptionId = null;
+        PlanRenewsAt = null;
+        CancelAtPeriodEnd = false;
+        Plan = PlanKey.Free;
+        if (Status is CustomerStatus.Trial or CustomerStatus.PastDue) Status = CustomerStatus.Active;
+    }
+
+    /// <summary>A customer without a subscription (a plan the admin granted) drops to Free by themselves.</summary>
+    public void DowngradeToFree()
+    {
+        if (HasSubscription) throw new DomainException("ยกเลิกการสมัครสมาชิกก่อนจึงจะย้ายไปแผน Free ได้");
+        Plan = PlanKey.Free;
+    }
+
+    /// <summary>
+    /// The platform admin grants another plan without a charge and clears the limit overrides. A customer who
+    /// pays through Stripe changes plan themselves: moving the plan here would only be undone by the next event.
+    /// </summary>
     public void SetPlanByAdmin(PlanKey plan)
     {
+        if (HasSubscription) throw new DomainException("ลูกค้านี้จ่ายผ่าน Stripe อยู่ ให้ลูกค้าเปลี่ยนแผนเอง หรือยกเลิกการสมัครก่อน");
         Plan = plan;
         Limits = new LimitOverrides();
     }

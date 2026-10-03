@@ -12,45 +12,47 @@ public class BillingAndTeamTests(ApiFactory factory)
     private static readonly System.Text.Json.JsonSerializerOptions Json = ApiFactory.Json;
 
     [Fact]
-    public async Task Plans_are_public_and_a_paid_plan_change_records_a_charge()
+    public async Task Plans_are_public_and_a_new_account_starts_on_free()
     {
         var anon = factory.CreateClient();
         var plans = (await anon.GetFromJsonAsync<List<PlanDto>>("/api/plans", Json))!;
         Assert.Equal([PlanKey.Free, PlanKey.Basic, PlanKey.Pro, PlanKey.Agency], plans.Select(p => p.Key));
         Assert.Equal((790, (int?)3), (plans[2].Price, plans[2].Devices));
 
-        var (client, auth, _) = await factory.SignUpAsync("pro");
-        Assert.Equal(CustomerStatus.Trial, auth.User.Status);
-        var res = await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "pro", cycle = "year" }, Json);
-        res.EnsureSuccessStatusCode();
-        var me = (await res.Content.ReadFromJsonAsync<UserDto>(Json))!;
-        Assert.Equal((CustomerStatus.Active, BillingCycle.Year), (me.Status, me.Cycle));
-
-        await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "free" }, Json);
-        var invoices = (await client.GetFromJsonAsync<List<TransactionDto>>("/api/billing/invoices", Json))!;
-        var charge = Assert.Single(invoices);
-        Assert.Equal((TransactionType.Charge, 632 * 12, PlanKey.Pro), (charge.Type, charge.Amount, charge.Plan));
+        // A paid plan is bought at Stripe Checkout: signing up never hands one out.
+        var res = await anon.PostAsJsonAsync("/api/auth/signup", new { email = $"u{Guid.NewGuid():N}@shop.co", password = "password1", plan = "agency" }, Json);
+        var auth = (await res.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
+        Assert.Equal((PlanKey.Free, CustomerStatus.Active), (auth.User.Plan, auth.User.Status));
     }
 
     [Fact]
-    public async Task Promo_codes_discount_the_charge_and_count_their_uses()
+    public async Task Promo_codes_discount_the_first_invoice_and_count_their_uses_once_the_checkout_is_paid()
     {
         var admin = await factory.AdminAsync();
         var code = $"T{Guid.NewGuid():N}"[..12].ToUpperInvariant();
         (await admin.PostAsJsonAsync("/api/admin/promos", new { code, discount = "d20" }, Json)).EnsureSuccessStatusCode();
 
-        var (client, _, _) = await factory.SignUpAsync();
-        var bad = await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "basic", promoCode = "NOPE123" }, Json);
+        var (client, auth, _) = await factory.SignUpAsync();
+        var bad = await client.PutAsJsonAsync("/api/billing/plan", new { plan = "basic", promoCode = "NOPE123" }, Json);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, bad.StatusCode);
-        (await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "basic", cycle = "month", promoCode = code.ToLowerInvariant() }, Json))
+        var onFree = await client.PutAsJsonAsync("/api/billing/plan", new { plan = "free", promoCode = code }, Json);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, onFree.StatusCode);
+
+        (await client.PutAsJsonAsync("/api/billing/plan", new { plan = "basic", cycle = "month", promoCode = code.ToLowerInvariant() }, Json))
             .EnsureSuccessStatusCode();
+        var request = factory.Payments.Session(factory.Payments.LastSessionOf(auth.User.Id));
+        Assert.Equal((58, code), (request.FirstDiscount, request.PromoCode)); // 20% of 290
+        var unpaid = (await admin.GetFromJsonAsync<List<PromoDto>>("/api/admin/promos", Json))!.Single(p => p.Code == code);
+        Assert.Equal(0, unpaid.Uses); // opening Checkout is not using the code
+
+        await factory.SubscribeAsync(client, auth, PlanKey.Basic, promoCode: code);
         var charge = (await client.GetFromJsonAsync<List<TransactionDto>>("/api/billing/invoices", Json))!.Single();
-        Assert.Equal((232, code), (charge.Amount, charge.PromoCode));
-        var promo = (await admin.GetFromJsonAsync<List<PromoDto>>("/api/admin/promos", Json))!.Single(p => p.Code == code);
-        Assert.Equal(1, promo.Uses);
+        Assert.Equal((232m, code), (charge.Amount, charge.PromoCode));
+        Assert.Equal(1, (await admin.GetFromJsonAsync<List<PromoDto>>("/api/admin/promos", Json))!.Single(p => p.Code == code).Uses);
 
         (await admin.PutAsJsonAsync($"/api/admin/promos/{code}/active", new { active = false }, Json)).EnsureSuccessStatusCode();
-        var closed = await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "pro", promoCode = code }, Json);
+        var (other, _, _) = await factory.SignUpAsync();
+        var closed = await other.PutAsJsonAsync("/api/billing/plan", new { plan = "pro", promoCode = code }, Json);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, closed.StatusCode);
     }
 

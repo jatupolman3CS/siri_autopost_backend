@@ -14,6 +14,9 @@ public sealed class UserRepository(AppDbContext db) : IUserRepository
     public Task<User?> GetByEmailAsync(string normalizedEmail, CancellationToken ct = default) =>
         db.Users.FirstOrDefaultAsync(x => x.Email == normalizedEmail, ct);
 
+    public Task<User?> GetByStripeCustomerAsync(string customerId, CancellationToken ct = default) =>
+        db.Users.FirstOrDefaultAsync(x => x.StripeCustomerId == customerId, ct);
+
     public async Task<IReadOnlyList<User>> ListAsync(CancellationToken ct = default) =>
         await db.Users.OrderBy(x => x.CreatedAt).ToListAsync(ct);
 
@@ -360,6 +363,15 @@ public sealed class TransactionRepository(AppDbContext db) : ITransactionReposit
     public Task<Transaction?> GetAsync(Guid id, CancellationToken ct = default) =>
         db.Transactions.FirstOrDefaultAsync(x => x.Id == id, ct);
 
+    public Task<Transaction?> GetByInvoiceAsync(string stripeInvoiceId, CancellationToken ct = default) =>
+        db.Transactions.FirstOrDefaultAsync(x => x.StripeInvoiceId == stripeInvoiceId, ct);
+
+    public Task<Transaction?> GetChargeByPaymentIntentAsync(string paymentIntentId, CancellationToken ct = default) =>
+        db.Transactions.FirstOrDefaultAsync(x => x.StripePaymentIntentId == paymentIntentId && x.Type == TransactionType.Charge, ct);
+
+    public Task<Transaction?> GetByRefundAsync(string stripeRefundId, CancellationToken ct = default) =>
+        db.Transactions.FirstOrDefaultAsync(x => x.StripeRefundId == stripeRefundId, ct);
+
     public void Add(Transaction transaction) => db.Transactions.Add(transaction);
 }
 
@@ -373,6 +385,13 @@ public sealed class AuditRepository(AppDbContext db) : IAuditRepository
         await db.Audit.Where(x => x.Action == AuditAction.PlanChanged && x.At >= since).OrderBy(x => x.At).ToListAsync(ct);
 
     public void Add(AuditEntry entry) => db.Audit.Add(entry);
+}
+
+public sealed class PaymentEventRepository(AppDbContext db) : IPaymentEventRepository
+{
+    public Task<bool> ExistsAsync(string key, CancellationToken ct = default) => db.PaymentEvents.AnyAsync(x => x.Key == key, ct);
+
+    public void Add(ProcessedPaymentEvent processed) => db.PaymentEvents.Add(processed);
 }
 
 public sealed class PromoRepository(AppDbContext db) : IPromoRepository

@@ -24,7 +24,6 @@ public sealed class SignUpCommandValidator : AbstractValidator<SignUpCommand>
         RuleFor(x => x.Password).NotEmpty().MinimumLength(MinPasswordLength).MaximumLength(100)
             .WithMessage($"รหัสผ่านต้องยาวอย่างน้อย {MinPasswordLength} ตัวอักษร");
         RuleFor(x => x.Name).MaximumLength(120);
-        RuleFor(x => x.Plan).IsInEnum();
     }
 }
 
@@ -45,6 +44,13 @@ public sealed class ChangePlanCommandValidator : AbstractValidator<ChangePlanCom
         RuleFor(x => x.Cycle).IsInEnum();
         RuleFor(x => x.PromoCode).MaximumLength(30);
     }
+}
+
+public sealed class ConfirmCheckoutCommandValidator : AbstractValidator<ConfirmCheckoutCommand>
+{
+    public ConfirmCheckoutCommandValidator() =>
+        RuleFor(x => x.SessionId).NotEmpty().MaximumLength(200).Must(id => id.StartsWith("cs_", StringComparison.Ordinal))
+            .WithMessage("รหัสการชำระเงินไม่ถูกต้อง");
 }
 
 public sealed class InviteMemberCommandValidator : AbstractValidator<InviteMemberCommand>

@@ -6,6 +6,7 @@ using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Infrastructure.Auth;
 using SIRIAUTOPOST.Infrastructure.Data;
 using SIRIAUTOPOST.Infrastructure.Diagnostics;
+using SIRIAUTOPOST.Infrastructure.Payments;
 using SIRIAUTOPOST.Infrastructure.Repositories;
 using SIRIAUTOPOST.Infrastructure.Seeding;
 using SIRIAUTOPOST.Infrastructure.Services;
@@ -42,11 +43,14 @@ public static class DependencyInjection
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IDatabaseProbe, DatabaseProbe>();
         services.AddScoped<IPromoRepository, PromoRepository>();
+        services.AddScoped<IPaymentEventRepository, PaymentEventRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddSingleton<IGoogleTokenVerifier>(sp => new GoogleTokenVerifier(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }, sp.GetRequiredService<IConfiguration>()));
+        services.Configure<StripeOptions>(config.GetSection(StripeOptions.Section));
+        services.AddSingleton<IPaymentGateway, StripePaymentGateway>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IRandomSource, RandomSource>();
         services.AddSingleton<IDeviceSecrets, DeviceSecrets>();

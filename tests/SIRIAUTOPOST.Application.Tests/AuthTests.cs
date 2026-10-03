@@ -29,19 +29,20 @@ public class AuthTests
         var handler = new SignUpCommandHandler(_users, Substitute.For<IWorkspaceRepository>(), Substitute.For<IMemberRepository>(), Substitute.For<IWorkspaceSeeder>(),
             _hasher, _tokens, Substitute.For<IUnitOfWork>(), new FixedClock(Now));
 
-        await Assert.ThrowsAsync<ConflictException>(() => handler.HandleAsync(new SignUpCommand("A@shop.co", "password1", null, null)));
+        await Assert.ThrowsAsync<ConflictException>(() => handler.HandleAsync(new SignUpCommand("A@shop.co", "password1", null)));
     }
 
     [Fact]
-    public async Task Sign_up_creates_a_seeded_workspace_on_the_chosen_plan()
+    public async Task Sign_up_creates_a_seeded_workspace_on_the_free_plan()
     {
         var workspaces = Substitute.For<IWorkspaceRepository>();
         var seeder = Substitute.For<IWorkspaceSeeder>();
         var handler = new SignUpCommandHandler(_users, workspaces, Substitute.For<IMemberRepository>(), seeder, _hasher, _tokens, Substitute.For<IUnitOfWork>(), new FixedClock(Now));
 
-        var result = await handler.HandleAsync(new SignUpCommand("new@shop.co", "password1", "Nattaya", PlanKey.Pro));
+        var result = await handler.HandleAsync(new SignUpCommand("new@shop.co", "password1", "Nattaya"));
 
-        Assert.Equal(PlanKey.Pro, result.User.Plan);
+        // A paid plan is bought at Stripe Checkout afterwards, so nobody starts on one for free.
+        Assert.Equal((PlanKey.Free, CustomerStatus.Active), (result.User.Plan, result.User.Status));
         Assert.Equal(UserRole.User, result.User.Role);
         workspaces.Received(1).Add(Arg.Any<Workspace>());
         await seeder.Received(1).SeedAsync(Arg.Any<Workspace>(), Arg.Any<CancellationToken>());
@@ -66,7 +67,7 @@ public class AuthTests
         var inner = Substitute.For<ICommandHandler<SignUpCommand, AuthResultDto>>();
         var decorator = new ValidationCommandHandlerDecorator<SignUpCommand, AuthResultDto>(inner, [new SignUpCommandValidator()]);
 
-        var ex = await Assert.ThrowsAsync<ValidationException>(() => decorator.HandleAsync(new SignUpCommand("not-an-email", "short", null, null)));
+        var ex = await Assert.ThrowsAsync<ValidationException>(() => decorator.HandleAsync(new SignUpCommand("not-an-email", "short", null)));
 
         Assert.Contains(ex.Errors, e => e.PropertyName == nameof(SignUpCommand.Email));
         Assert.Contains(ex.Errors, e => e.PropertyName == nameof(SignUpCommand.Password));

@@ -37,7 +37,7 @@ public class ImpersonationAndHealthTests(ApiFactory factory)
         Assert.Equal(ws, Assert.Single(workspaces).Id);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync("/api/admin/customers")).StatusCode); // a customer's session
         // Read-only: nothing is changed in the customer's name.
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "pro" }, Json)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.PutAsJsonAsync("/api/billing/plan", new { plan = "pro" }, Json)).StatusCode);
         var post = await client.PostAsJsonAsync($"/api/workspaces/{ws}/snippets", new { label = "x", text = "y" }, Json);
         Assert.Equal(HttpStatusCode.Forbidden, post.StatusCode);
         Assert.Contains("ดูได้อย่างเดียว", await post.Content.ReadAsStringAsync());
@@ -68,12 +68,15 @@ public class ImpersonationAndHealthTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task Admin_actions_and_self_service_plan_changes_are_logged()
+    public async Task Admin_actions_and_plan_changes_are_logged()
     {
         var admin = await factory.AdminAsync();
         var (client, auth, _) = await factory.SignUpAsync();
         var id = auth.User.Id;
-        await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "pro" }, Json);
+        // The customer subscribes and Stripe, not a person, applies it; Stripe ends it later the same way.
+        var sub = await factory.SubscribeAsync(client, auth, PlanKey.Pro);
+        factory.Payments.Set(sub, s => s with { State = Application.Interfaces.SubscriptionState.Canceled });
+        await factory.SendAsync("customer.subscription.deleted", Payments.StripeEvents.Subscription(sub, factory.Payments.CustomerOf(id), "canceled"));
         await admin.PutAsJsonAsync($"/api/admin/customers/{id}/plan", new { plan = "agency" }, Json);
         await admin.PutAsJsonAsync($"/api/admin/customers/{id}/limits", new { accounts = 5, posts = (int?)null, devices = 0, seats = (int?)null }, Json);
         await admin.PostAsJsonAsync($"/api/admin/customers/{id}/status", new { status = "suspended" }, Json);
@@ -82,13 +85,13 @@ public class ImpersonationAndHealthTests(ApiFactory factory)
 
         var log = await AuditAsync(admin, id);
         Assert.Equal(
-            [AuditAction.Refunded, AuditAction.StatusChanged, AuditAction.StatusChanged, AuditAction.LimitsChanged, AuditAction.PlanChanged, AuditAction.PlanChanged],
+            [AuditAction.Refunded, AuditAction.StatusChanged, AuditAction.StatusChanged, AuditAction.LimitsChanged, AuditAction.PlanChanged, AuditAction.PlanChanged, AuditAction.PlanChanged],
             log.Select(e => e.Action));
-        var self = log[^1];
-        Assert.Equal((auth.User.Email, "free", "pro"), (self.ActorEmail, self.From, self.To));
-        Assert.Equal((ApiFactory.AdminEmail, "pro", "agency"), (log[^2].ActorEmail, log[^2].From, log[^2].To));
-        Assert.Equal("accounts=5 posts=- devices=0 seats=-", log[^3].To);
-        Assert.Equal(("active", "suspended"), (log[^4].From, log[^4].To));
+        Assert.Equal((Guid.Empty, "", "free", "pro"), (log[^1].ActorId, log[^1].ActorEmail, log[^1].From, log[^1].To)); // no person behind it
+        Assert.Equal((Guid.Empty, "pro", "free"), (log[^2].ActorId, log[^2].From, log[^2].To));
+        Assert.Equal((ApiFactory.AdminEmail, "free", "agency"), (log[^3].ActorEmail, log[^3].From, log[^3].To));
+        Assert.Equal("accounts=5 posts=- devices=0 seats=-", log[^4].To);
+        Assert.Equal(("active", "suspended"), (log[^5].From, log[^5].To));
         Assert.Equal("790", log[0].To); // the refunded amount
     }
 
@@ -97,8 +100,8 @@ public class ImpersonationAndHealthTests(ApiFactory factory)
     {
         var admin = await factory.AdminAsync();
         var before = (await admin.GetFromJsonAsync<PlatformHealthDto>("/api/admin/health", Json))!;
-        var (client, _, _) = await factory.SignUpAsync();
-        (await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "pro" }, Json)).EnsureSuccessStatusCode();
+        var (client, auth, _) = await factory.SignUpAsync();
+        await factory.SubscribeAsync(client, auth, PlanKey.Pro);
 
         var after = (await admin.GetFromJsonAsync<PlatformHealthDto>("/api/admin/health", Json))!;
         Assert.Equal(before.Mrr + 790, after.Mrr);
@@ -106,6 +109,6 @@ public class ImpersonationAndHealthTests(ApiFactory factory)
         Assert.NotNull(after.ApiP95Ms);
         Assert.True(after.ApiSamples > 0);
         Assert.InRange(after.DbMs, 0, 5000);
-        Assert.False(after.PaymentsConnected);
+        Assert.True(after.PaymentsConnected); // Stripe is configured (the fake)
     }
 }

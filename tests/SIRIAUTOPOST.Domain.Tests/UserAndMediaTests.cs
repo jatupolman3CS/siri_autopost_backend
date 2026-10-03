@@ -15,7 +15,7 @@ public class UserAndMediaTests
         Assert.Equal("nattaya@baandee.co", u.Email);
         Assert.Equal("nattaya", u.Name);
         Assert.False(u.HasAdvancedAntiBan);
-        u.ChangePlan(PlanKey.Pro, BillingCycle.Month, paid: true);
+        u.SetPlanByAdmin(PlanKey.Pro);
         Assert.True(u.HasAdvancedAntiBan);
     }
 

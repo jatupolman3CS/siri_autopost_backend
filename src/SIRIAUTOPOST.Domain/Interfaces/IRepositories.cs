@@ -7,6 +7,7 @@ public interface IUserRepository
 {
     Task<User?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<User?> GetByEmailAsync(string normalizedEmail, CancellationToken ct = default);
+    Task<User?> GetByStripeCustomerAsync(string customerId, CancellationToken ct = default);
     Task<IReadOnlyList<User>> ListAsync(CancellationToken ct = default);
     Task<IReadOnlyList<User>> ListByIdsAsync(IEnumerable<Guid> ids, CancellationToken ct = default);
     void Add(User user);
@@ -46,7 +47,17 @@ public interface ITransactionRepository
     Task<IReadOnlyList<Transaction>> ListByUserAsync(Guid userId, CancellationToken ct = default);
     Task<IReadOnlyList<Transaction>> ListAsync(DateTimeOffset since, CancellationToken ct = default);
     Task<Transaction?> GetAsync(Guid id, CancellationToken ct = default);
+    Task<Transaction?> GetByInvoiceAsync(string stripeInvoiceId, CancellationToken ct = default);
+    /// <summary>The charge a Stripe payment intent paid for.</summary>
+    Task<Transaction?> GetChargeByPaymentIntentAsync(string paymentIntentId, CancellationToken ct = default);
+    Task<Transaction?> GetByRefundAsync(string stripeRefundId, CancellationToken ct = default);
     void Add(Transaction transaction);
+}
+
+public interface IPaymentEventRepository
+{
+    Task<bool> ExistsAsync(string key, CancellationToken ct = default);
+    void Add(ProcessedPaymentEvent processed);
 }
 
 public interface IAuditRepository

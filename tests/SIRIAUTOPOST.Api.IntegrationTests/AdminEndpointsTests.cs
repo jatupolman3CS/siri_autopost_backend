@@ -81,7 +81,7 @@ public class AdminEndpointsTests(ApiFactory factory)
         var admin = await factory.AdminAsync();
         var before = (await admin.GetFromJsonAsync<AdminSummaryDto>("/api/admin/summary", Json))!;
         var (client, auth, _) = await factory.SignUpAsync();
-        await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "agency", cycle = "month" }, Json);
+        await factory.SubscribeAsync(client, auth, PlanKey.Agency);
 
         var summary = (await admin.GetFromJsonAsync<AdminSummaryDto>("/api/admin/summary", Json))!;
         Assert.Equal(before.Agency + 1, summary.Agency);
@@ -89,7 +89,8 @@ public class AdminEndpointsTests(ApiFactory factory)
         Assert.Equal(before.Revenue[^1].Amount + 1990, summary.Revenue[^1].Amount);
 
         var refund = (await (await admin.PostAsync($"/api/admin/customers/{auth.User.Id}/refund", null)).Content.ReadFromJsonAsync<TransactionDto>(Json))!;
-        Assert.Equal((TransactionType.Refund, 1990), (refund.Type, refund.Amount));
+        Assert.Equal((TransactionType.Refund, 1990m), (refund.Type, refund.Amount));
+        Assert.Contains(factory.Payments.Refunds, r => r.Amount == 1990m && r.PaymentIntent.StartsWith("pi_in_")); // the money went back through Stripe
         Assert.Equal(HttpStatusCode.Conflict, (await admin.PostAsync($"/api/admin/customers/{auth.User.Id}/refund", null)).StatusCode);
         var all = (await admin.GetFromJsonAsync<List<TransactionDto>>("/api/admin/transactions", Json))!;
         Assert.Equal(2, all.Count(t => t.UserId == auth.User.Id));

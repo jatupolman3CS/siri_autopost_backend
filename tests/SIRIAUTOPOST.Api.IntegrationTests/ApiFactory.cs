@@ -7,7 +7,12 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using SIRIAUTOPOST.Api.IntegrationTests.Payments;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Domain.Enums;
+using SIRIAUTOPOST.Domain.ValueObjects;
 using SIRIAUTOPOST.Infrastructure.Data;
 
 namespace SIRIAUTOPOST.Api.IntegrationTests;
@@ -18,6 +23,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
     public const string AdminEmail = "admin@test.local";
     public const string AdminPassword = "admin-password";
+    public const string StripeWebhookSecret = "whsec_integration_test";
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -26,6 +32,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
     /// <summary>The API's clock. Tests that move it must put it back (see <see cref="TestClock.Advance"/>).</summary>
     public TestClock Clock { get; } = new();
+
+    /// <summary>Stripe, played by the tests. Tests that switch it off or make it decline must put it back.</summary>
+    public FakePaymentGateway Payments { get; } = new(StripeWebhookSecret);
 
     private static readonly string ConnectionString =
         Environment.GetEnvironmentVariable("SIRIAUTOPOST_TEST_DB")
@@ -39,7 +48,12 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "integration-test-signing-key-0123456789abcdef");
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);
-        builder.ConfigureTestServices(s => s.AddSingleton<TimeProvider>(Clock));
+        builder.ConfigureTestServices(s =>
+        {
+            s.AddSingleton<TimeProvider>(Clock);
+            s.RemoveAll<IPaymentGateway>();
+            s.AddSingleton<IPaymentGateway>(Payments);
+        });
     }
 
     public async Task InitializeAsync()
@@ -67,18 +81,63 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         return client;
     }
 
-    /// <summary>Signs up a fresh user and returns a client carrying their token, plus their first workspace.</summary>
+    /// <summary>
+    /// Signs up a fresh user (always on Free) and returns a client carrying their token, plus their first workspace.
+    /// With a paid <paramref name="plan"/> the platform admin grants it, as it would a complimentary plan.
+    /// </summary>
     public async Task<(HttpClient Client, AuthResultDto Auth, Guid WorkspaceId)> SignUpAsync(string? plan = null, string? email = null)
     {
         var client = CreateClient();
         email ??= $"u{Guid.NewGuid():N}@shop.co";
-        var res = await client.PostAsJsonAsync("/api/auth/signup", new { email, password = "password1", plan }, Json);
+        var res = await client.PostAsJsonAsync("/api/auth/signup", new { email, password = "password1" }, Json);
         res.EnsureSuccessStatusCode();
         var auth = (await res.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
+        if (plan is not null and not "free")
+        {
+            var admin = await AdminAsync();
+            (await admin.PutAsJsonAsync($"/api/admin/customers/{auth.User.Id}/plan", new { plan }, Json)).EnsureSuccessStatusCode();
+            auth = auth with { User = (await client.GetFromJsonAsync<UserDto>("/api/auth/me", Json))! };
+        }
         var ws = (await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!;
         return (client, auth, ws[0].Id);
     }
+
+    /// <summary>Delivers a webhook to the API the way Stripe does: raw JSON body, signed with the endpoint secret.</summary>
+    public async Task<HttpResponseMessage> WebhookAsync(string json, string? secret = StripeWebhookSecret)
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/api/webhooks/stripe") { Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json") };
+        if (secret is not null) req.Headers.Add("Stripe-Signature", StripeEvents.Signature(json, secret));
+        return await CreateClient().SendAsync(req);
+    }
+
+    public async Task SendAsync(string type, object data, string? id = null) =>
+        (await WebhookAsync(StripeEvents.Event(type, data, id))).EnsureSuccessStatusCode();
+
+    /// <summary>
+    /// The customer subscribes the way the web app does: chooses a plan, pays on Stripe's page, and Stripe tells us
+    /// (checkout.session.completed, then invoice.paid for the first payment). Returns the subscription id.
+    /// </summary>
+    public async Task<string> SubscribeAsync(
+        HttpClient client, AuthResultDto auth, PlanKey plan, BillingCycle cycle = BillingCycle.Month, string? promoCode = null, decimal? firstInvoice = null)
+    {
+        var res = await client.PutAsJsonAsync("/api/billing/plan", new { plan, cycle, promoCode }, Json);
+        res.EnsureSuccessStatusCode();
+        var change = (await res.Content.ReadFromJsonAsync<PlanChangeDto>(Json))!;
+        Assert.NotNull(change.CheckoutUrl);
+        var session = Payments.LastSessionOf(auth.User.Id);
+        var request = Payments.Session(session);
+        var subscription = Payments.PayCheckout(session);
+        var customer = Payments.CustomerOf(auth.User.Id);
+        var (p, c) = (AuditEntryKey(plan), cycle == BillingCycle.Year ? "year" : "month");
+        await SendAsync("checkout.session.completed", StripeEvents.Session(session, customer, subscription, auth.User.Id, p, c, request.PromoCode));
+        var amount = firstInvoice ?? Pricing.Period(request.Price, cycle) - request.FirstDiscount;
+        await SendAsync("invoice.paid", StripeEvents.Invoice(
+            $"in_{Guid.NewGuid():N}"[..20], customer, subscription, amount, auth.User.Id, p, c, "subscription_create", request.PromoCode));
+        return subscription;
+    }
+
+    private static string AuditEntryKey(PlanKey plan) => plan.ToString().ToLowerInvariant();
 }
 
 /// <summary>System time plus an offset a test can move forward (and must reset).</summary>

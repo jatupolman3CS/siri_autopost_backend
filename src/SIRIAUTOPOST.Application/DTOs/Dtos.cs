@@ -17,11 +17,48 @@ public sealed record PlanDto(PlanKey Key, int Price, int? Accounts, int? Posts, 
     public static PlanDto From(PlanSetting p) => new(p.Key, p.Price, p.Accounts, p.Posts, p.Devices, p.Seats);
 }
 
+/// <param name="Amount">Baht, positive (a refund is money going back); Stripe's satang give it cents.</param>
+/// <param name="ReceiptUrl">Stripe's hosted invoice page; null for rows without a Stripe invoice.</param>
+/// <param name="Refundable">The platform admin can refund it through Stripe (a charge paid there; refunds already made are not counted here).</param>
+/// <param name="RefundOfId">On a refund: the charge it gives money back for.</param>
 public sealed record TransactionDto(
-    Guid Id, Guid UserId, TransactionType Type, int Amount, PlanKey Plan, BillingCycle Cycle, string? PromoCode, DateTimeOffset CreatedAt)
+    Guid Id, Guid UserId, TransactionType Type, decimal Amount, PlanKey Plan, BillingCycle Cycle, string? PromoCode, DateTimeOffset CreatedAt,
+    string? ReceiptUrl, bool Refundable, Guid? RefundOfId)
 {
-    public static TransactionDto From(Transaction t) => new(t.Id, t.UserId, t.Type, t.Amount, t.Plan, t.Cycle, t.PromoCode, t.CreatedAt);
+    public static TransactionDto From(Transaction t) =>
+        new(t.Id, t.UserId, t.Type, t.Amount, t.Plan, t.Cycle, t.PromoCode, t.CreatedAt, t.ReceiptUrl, t.CanRefund, t.RefundOfId);
 }
+
+public sealed record CardDto(string Brand, string Last4, int ExpMonth, int ExpYear);
+
+/// <summary>The signed-in customer's billing state, for the billing page.</summary>
+/// <param name="PaymentsEnabled">Stripe is configured; without it a paid plan cannot be bought.</param>
+/// <param name="HasSubscription">The plan is paid through a Stripe subscription (false on Free and on plans the admin granted).</param>
+/// <param name="RenewsAt">End of the current period: the next renewal, or when a cancelled plan ends.</param>
+/// <param name="CancelAtPeriodEnd">The subscription ends at <paramref name="RenewsAt"/> instead of renewing.</param>
+/// <param name="CanManagePayment">Stripe knows this customer, so the billing portal (card, invoices) can be opened.</param>
+/// <param name="Card">The default card on file; null when none.</param>
+/// <param name="Limits">What the customer may use now: the plan's limits with the platform admin's overrides for them.</param>
+/// <param name="Usage">What the customer uses, counted the way the limits are enforced.</param>
+public sealed record BillingDto(
+    bool PaymentsEnabled, PlanKey Plan, BillingCycle Cycle, CustomerStatus Status, bool HasSubscription, DateTimeOffset? RenewsAt,
+    bool CancelAtPeriodEnd, bool CanManagePayment, CardDto? Card, LimitsDto Limits, UsageDto Usage);
+
+/// <summary>Limits in force for a customer; null = unlimited.</summary>
+public sealed record LimitsDto(int? Accounts, int? Posts, int? Devices, int? Seats)
+{
+    public static LimitsDto From(EffectiveLimits l) => new(l.Accounts, l.Posts, l.Devices, l.Seats);
+}
+
+/// <param name="Accounts">Accounts connected through the extension, all the customer's workspaces (the sample accounts do not count).</param>
+/// <param name="PostsLast24h">Posts published in the last 24 hours, all the customer's workspaces: the plan's posts-per-day window.</param>
+/// <param name="Devices">Devices in the customer's busiest workspace: devices are limited per workspace.</param>
+public sealed record UsageDto(int Accounts, int PostsLast24h, int Devices);
+
+/// <summary>The outcome of choosing a plan: the plan changed already, or the customer must pay first at <paramref name="CheckoutUrl"/>.</summary>
+public sealed record PlanChangeDto(UserDto User, string? CheckoutUrl);
+
+public sealed record UrlDto(string Url);
 
 public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserDto User);
 
@@ -168,12 +205,11 @@ public sealed record LimitOverridesDto(int? Accounts, int? Posts, int? Devices, 
 public sealed record CustomerDto(
     Guid Id, string Name, string Email, PlanKey Plan, CustomerStatus Status, DateTimeOffset Since, BillingCycle Cycle,
     int Accounts, int Seats, string Ext, DateTimeOffset? LastActiveAt, bool Paused, CustomerJobsDto Jobs,
-    IReadOnlyList<CustomerDeviceDto> Devices, string? Note, int Workspaces, LimitOverridesDto Limits);
+    IReadOnlyList<CustomerDeviceDto> Devices, string? Note, int Workspaces, LimitOverridesDto Limits,
+    bool HasSubscription, DateTimeOffset? RenewsAt, bool CancelAtPeriodEnd);
 
-public sealed record RevenueMonthDto(int Year, int Month, int Amount);
+public sealed record RevenueMonthDto(int Year, int Month, decimal Amount);
 
-/// <param name="Basic">Paying customers per plan (active or past due).</param>
-/// <param name="Revenue">Charges minus refunds, the last 12 months, oldest first.</param>
 /// <summary>
 /// The admin overview's live figures. Changes compare with 30 days earlier (MRR, churn) or the 7 days
 /// before (success rate). Rates are percentages; null when there is nothing to measure yet.
@@ -190,11 +226,16 @@ public sealed record PlatformHealthDto(
     bool PaymentsConnected,
     int EventStreams, int DeviceWaits, long EventsPublished, long EventsDropped);
 
-/// <summary>One activity-log line. From/To are values (plan keys, statuses, amounts), not display text.</summary>
+/// <summary>
+/// One activity-log line. From/To are values (plan keys, statuses, amounts), not display text. A change Stripe made
+/// on its own (a subscription that ended, a refund from its dashboard) has an empty ActorId and ActorEmail.
+/// </summary>
 public sealed record AuditEntryDto(
     Guid Id, DateTimeOffset At, AuditAction Action, Guid ActorId, string ActorEmail, Guid? CustomerId, string? CustomerEmail,
     string? From, string? To);
 
+/// <param name="Basic">Paying customers per plan (active or past due); Pro and Agency likewise.</param>
+/// <param name="Revenue">Charges minus refunds, the last 12 months, oldest first.</param>
 public sealed record AdminSummaryDto(int Basic, int Pro, int Agency, IReadOnlyList<RevenueMonthDto> Revenue);
 
 public sealed record AdminJobDto(

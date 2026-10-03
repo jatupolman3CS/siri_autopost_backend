@@ -33,7 +33,12 @@ public static class DependencyInjection
         // Plans and billing
         services.AddQuery<GetPlansQuery, IReadOnlyList<PlanDto>, GetPlansQueryHandler>();
         services.AddQuery<GetInvoicesQuery, IReadOnlyList<TransactionDto>, GetInvoicesQueryHandler>();
-        services.AddCommand<ChangePlanCommand, UserDto, ChangePlanCommandHandler>();
+        services.AddScoped<PaymentSync>();
+        services.AddQuery<GetBillingQuery, BillingDto, GetBillingQueryHandler>();
+        services.AddCommand<ChangePlanCommand, PlanChangeDto, ChangePlanCommandHandler>();
+        services.AddCommand<ConfirmCheckoutCommand, UserDto, ConfirmCheckoutCommandHandler>();
+        services.AddCommand<CreatePortalSessionCommand, UrlDto, CreatePortalSessionCommandHandler>();
+        services.AddCommand<StripeWebhookCommand, Unit, StripeWebhookCommandHandler>();
 
         // Team
         services.AddQuery<GetMembersQuery, IReadOnlyList<MemberDto>, GetMembersQueryHandler>();
@@ -117,7 +122,7 @@ public static class DependencyInjection
         services.AddCommand<RetryCustomerFailedCommand, int, RetryCustomerFailedCommandHandler>();
         services.AddQuery<GetTransactionsQuery, IReadOnlyList<TransactionDto>, GetTransactionsQueryHandler>();
         services.AddCommand<RefundCommand, TransactionDto, RefundCommandHandler>();
-        services.AddCommand<RecordPaymentCommand, TransactionDto, RecordPaymentCommandHandler>();
+        services.AddCommand<RetryPaymentCommand, TransactionDto, RetryPaymentCommandHandler>();
         services.AddCommand<UpdatePlanCommand, PlanDto, UpdatePlanCommandHandler>();
         services.AddQuery<GetPromosQuery, IReadOnlyList<PromoDto>, GetPromosQueryHandler>();
         services.AddCommand<CreatePromoCommand, PromoDto, CreatePromoCommandHandler>();

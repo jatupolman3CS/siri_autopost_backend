@@ -1,4 +1,6 @@
+using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
@@ -41,7 +43,7 @@ public sealed class GetAdminSummaryQueryHandler(IUserRepository users, ITransact
         var months = Enumerable.Range(0, 12).Select(i => first.AddMonths(i)).Select(m =>
         {
             var inMonth = tx.Where(t => t.CreatedAt.ToOffset(Thai) is var d && d.Year == m.Year && d.Month == m.Month);
-            var net = inMonth.Sum(t => t.Type == TransactionType.Charge ? t.Amount : t.Type == TransactionType.Refund ? -t.Amount : 0);
+            var net = inMonth.Sum(t => t.Type == TransactionType.Charge ? t.Amount : t.Type == TransactionType.Refund ? -t.Amount : 0m);
             return new RevenueMonthDto(m.Year, m.Month, net);
         }).ToList();
         return new AdminSummaryDto(
@@ -56,7 +58,7 @@ public sealed record GetPlatformHealthQuery : IQuery<PlatformHealthDto>;
 public sealed class GetPlatformHealthQueryHandler(
     IUserRepository users, IAuditRepository audit, IPlanRepository plans, IWorkspaceRepository workspaces,
     IDeviceRepository devices, IPostRepository posts, IRequestTimings timings, IDatabaseProbe database, IDeviceEventBus events,
-    TimeProvider clock)
+    IPaymentGateway gateway, TimeProvider clock)
     : IQueryHandler<GetPlatformHealthQuery, PlatformHealthDto>
 {
     public async Task<PlatformHealthDto> HandleAsync(GetPlatformHealthQuery q, CancellationToken ct = default)
@@ -96,7 +98,7 @@ public sealed class GetPlatformHealthQueryHandler(
             due, next,
             latest, latest is null ? 0 : devs.Count(d => d.Version == latest),
             day.Ok + day.Failed == 0 ? null : Math.Round(100.0 * day.Failed / (day.Ok + day.Failed), 1),
-            PaymentsConnected: false,
+            PaymentsConnected: gateway.Enabled,
             events.Stats.Streams, events.Stats.DeviceWaits, events.Stats.Published, events.Stats.Dropped);
     }
 }
@@ -123,16 +125,25 @@ public sealed class GetAdminJobsQueryHandler(
     }
 }
 
+/// <summary>
+/// Sets the customer's standing. A customer who pays through Stripe is not billed while blocked: collection
+/// pauses when they are suspended or banned and resumes when they are restored.
+/// </summary>
 public sealed record SetCustomerStatusCommand(Guid CustomerId, CustomerStatus Status) : ICommand<CustomerDto>;
 
-public sealed class SetCustomerStatusCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
+public sealed class SetCustomerStatusCommandHandler(
+    IUserRepository users, AdminCustomers customers, AdminAudit audit, IPaymentGateway gateway, IUnitOfWork uow)
     : ICommandHandler<SetCustomerStatusCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(SetCustomerStatusCommand c, CancellationToken ct = default)
     {
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
         var from = user.Status;
+        var wasBlocked = user.IsBlocked;
         user.SetStatus(c.Status);
+        // Before the save: when Stripe cannot be reached the status stays as it was, so nobody is billed while blocked.
+        if (user.StripeSubscriptionId is { } subscription && wasBlocked != user.IsBlocked)
+            await gateway.SetBillingPausedAsync(subscription, user.IsBlocked, ct);
         audit.Record(AuditAction.StatusChanged, user.Id, AdminAudit.Key(from), AdminAudit.Key(c.Status));
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
@@ -155,7 +166,10 @@ public sealed class SetCustomerPausedCommandHandler(IUserRepository users, Admin
     }
 }
 
-/// <summary>Moves the customer to another plan without a charge, and clears their limit overrides.</summary>
+/// <summary>
+/// Grants the customer another plan without a charge, and clears their limit overrides. Refused while the
+/// customer pays through a Stripe subscription (they change plan themselves).
+/// </summary>
 public sealed record SetCustomerPlanCommand(Guid CustomerId, PlanKey Plan) : ICommand<CustomerDto>;
 
 public sealed class SetCustomerPlanCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
@@ -257,10 +271,15 @@ public sealed class GetTransactionsQueryHandler(ITransactionRepository transacti
         (await transactions.ListAsync(DateTimeOffset.MinValue, ct)).Select(TransactionDto.From).ToList();
 }
 
-/// <summary>Records a refund of a charge (TransactionId), or of the customer's latest charge.</summary>
+/// <summary>
+/// Refunds a charge (TransactionId), or the customer's latest charge, through Stripe, and records the refund.
+/// Only charges that were paid at Stripe can be refunded; a partial refund made in the Stripe dashboard counts
+/// as the refund (the rest is refunded there too).
+/// </summary>
 public sealed record RefundCommand(Guid? TransactionId, Guid? CustomerId) : ICommand<TransactionDto>;
 
-public sealed class RefundCommandHandler(ITransactionRepository transactions, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
+public sealed class RefundCommandHandler(
+    ITransactionRepository transactions, IPaymentGateway gateway, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RefundCommand, TransactionDto>
 {
     public async Task<TransactionDto> HandleAsync(RefundCommand c, CancellationToken ct = default)
@@ -274,29 +293,48 @@ public sealed class RefundCommandHandler(ITransactionRepository transactions, Ad
         }
         var all = await transactions.ListByUserAsync(charge.UserId, ct);
         if (all.Any(t => t.RefundOfId == charge.Id)) throw new ConflictException("รายการนี้คืนเงินไปแล้ว");
-        var refund = charge.RefundOf(clock.GetUtcNow());
+        if (!charge.CanRefund) throw new DomainException("รายการนี้ไม่ได้ชำระผ่าน Stripe หรือไม่มียอดเรียกเก็บ จึงคืนเงินผ่านระบบไม่ได้");
+
+        var done = await gateway.RefundAsync(charge.StripePaymentIntentId!, charge.Amount, $"refund:{charge.Id}", ct);
+        var refund = charge.RefundOf(clock.GetUtcNow(), charge.Amount, done.Id);
         transactions.Add(refund);
-        audit.Record(AuditAction.Refunded, charge.UserId, charge.Id.ToString(), refund.Amount.ToString());
-        await uow.SaveChangesAsync(ct);
+        audit.Record(AuditAction.Refunded, charge.UserId, charge.Id.ToString(), Money.Text(refund.Amount));
+        try
+        {
+            await uow.SaveChangesAsync(ct);
+        }
+        catch (DuplicateKeyException)
+        {
+            // Stripe's refund event was recorded between the call and the save: the refund is in the ledger already.
+            throw new ConflictException("รายการนี้คืนเงินไปแล้ว");
+        }
         return TransactionDto.From(refund);
     }
 }
 
-/// <summary>A failed charge was paid (recorded by hand: no payment provider is connected).</summary>
-public sealed record RecordPaymentCommand(Guid TransactionId) : ICommand<TransactionDto>;
+/// <summary>Asks Stripe to collect a failed invoice again with the customer's current card; the ledger row turns into a paid charge.</summary>
+public sealed record RetryPaymentCommand(Guid TransactionId) : ICommand<TransactionDto>;
 
-public sealed class RecordPaymentCommandHandler(
-    ITransactionRepository transactions, IUserRepository users, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
-    : ICommandHandler<RecordPaymentCommand, TransactionDto>
+public sealed class RetryPaymentCommandHandler(
+    ITransactionRepository transactions, PaymentSync sync, IPaymentGateway gateway, AdminAudit audit, IUnitOfWork uow)
+    : ICommandHandler<RetryPaymentCommand, TransactionDto>
 {
-    public async Task<TransactionDto> HandleAsync(RecordPaymentCommand c, CancellationToken ct = default)
+    public async Task<TransactionDto> HandleAsync(RetryPaymentCommand c, CancellationToken ct = default)
     {
         var tx = await transactions.GetAsync(c.TransactionId, ct) ?? throw new NotFoundException("รายการ", c.TransactionId);
-        tx.MarkPaid(clock.GetUtcNow());
-        var user = await users.GetByIdAsync(tx.UserId, ct);
-        if (user?.Status == CustomerStatus.PastDue) user.SetStatus(CustomerStatus.Active);
-        audit.Record(AuditAction.PaymentRecorded, tx.UserId, tx.Id.ToString(), tx.Amount.ToString());
-        await uow.SaveChangesAsync(ct);
+        if (tx.Type != TransactionType.Failed || tx.StripeInvoiceId is not { } invoiceId)
+            throw new DomainException("เรียกเก็บซ้ำได้เฉพาะรายการที่ล้มเหลวและมีใบแจ้งหนี้ใน Stripe");
+        var invoice = await gateway.PayInvoiceAsync(invoiceId, ct);
+        await sync.RecordInvoicePaidAsync(invoice, ct);
+        audit.Record(AuditAction.PaymentRetried, tx.UserId, tx.Id.ToString(), Money.Text(tx.Amount));
+        try
+        {
+            await uow.SaveChangesAsync(ct);
+        }
+        catch (DuplicateKeyException)
+        {
+            // Stripe's invoice.paid event got there first.
+        }
         return TransactionDto.From(tx);
     }
 }
@@ -460,7 +498,8 @@ public sealed class AdminCustomers(
                 new CustomerJobsDto(Count(PostStatus.Success) + Count(PostStatus.Pending), Count(PostStatus.Failed), Count(PostStatus.Queued), Count(PostStatus.Posting)),
                 myDevices.Select(d => new CustomerDeviceDto(d.Id, d.Name, d.Browser, d.LastSeenAt, d.IsOnline(now))).ToList(),
                 u.Note, mine.Count,
-                new LimitOverridesDto(u.Limits.Accounts, u.Limits.Posts, u.Limits.Devices, u.Limits.Seats));
+                new LimitOverridesDto(u.Limits.Accounts, u.Limits.Posts, u.Limits.Devices, u.Limits.Seats),
+                u.HasSubscription, u.PlanRenewsAt, u.CancelAtPeriodEnd);
         }).ToList();
     }
 }

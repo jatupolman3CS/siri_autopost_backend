@@ -75,12 +75,15 @@ public class AuthEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task Plan_can_be_changed()
+    public async Task A_new_account_is_free_with_no_subscription_and_no_card()
     {
         var (client, _, _) = await factory.SignUpAsync();
-        var res = await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "agency" });
-        var me = await res.Content.ReadFromJsonAsync<UserDto>(Json);
-        Assert.Equal(PlanKey.Agency, me!.Plan);
+        var billing = (await client.GetFromJsonAsync<BillingDto>("/api/billing", Json))!;
+        Assert.Equal((PlanKey.Free, CustomerStatus.Active, false, false), (billing.Plan, billing.Status, billing.HasSubscription, billing.CanManagePayment));
+        Assert.Null(billing.Card);
+        Assert.Null(billing.RenewsAt);
+        // The old self-service route is gone: a plan is chosen through /api/billing/plan (and paid at Stripe).
+        Assert.Equal(HttpStatusCode.NotFound, (await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "agency" }, Json)).StatusCode);
     }
 
     private sealed class FakeGoogle : IGoogleTokenVerifier
@@ -104,7 +107,7 @@ public class AuthEndpointsTests(ApiFactory factory)
         first.EnsureSuccessStatusCode();
         var a = (await first.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
         Assert.Equal(email, a.User.Email);
-        Assert.Equal(PlanKey.Pro, a.User.Plan);
+        Assert.Equal(PlanKey.Free, a.User.Plan); // a plan sent along is ignored: paid plans are bought at Checkout
 
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", a.Token);
         Assert.NotEmpty((await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!);

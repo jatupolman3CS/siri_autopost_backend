@@ -1,6 +1,8 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Entities;
+using SIRIAUTOPOST.Domain.Exceptions;
 using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Infrastructure.Data;
@@ -19,6 +21,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<PlanSetting> Plans => Set<PlanSetting>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Promo> Promos => Set<Promo>();
+    public DbSet<ProcessedPaymentEvent> PaymentEvents => Set<ProcessedPaymentEvent>();
     public DbSet<AuditEntry> Audit => Set<AuditEntry>();
     public DbSet<ExtensionConfig> ExtensionConfigs => Set<ExtensionConfig>();
     public DbSet<ExtensionImage> ExtensionImages => Set<ExtensionImage>();
@@ -47,7 +50,16 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
         var added = events is null
             ? null
             : ChangeTracker.Entries<DeviceEvent>().Where(e => e.State == EntityState.Added).Select(e => e.Entity).ToList();
-        var n = await base.SaveChangesAsync(cancellationToken);
+        int n;
+        try
+        {
+            n = await base.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is PostgresException { SqlState: PostgresErrorCodes.UniqueViolation } pg)
+        {
+            // A unique index said no (a retried webhook, two saves racing): callers that expect it catch this.
+            throw new DuplicateKeyException(pg.ConstraintName ?? "");
+        }
         if (added is { Count: > 0 }) events!.Publish(added);
         return n;
     }

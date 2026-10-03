@@ -1,0 +1,46 @@
+using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Domain.Exceptions;
+using Stripe;
+
+namespace SIRIAUTOPOST.Infrastructure.Payments;
+
+/// <summary>
+/// Verifies a webhook's Stripe-Signature and reads the events the app acts on. Pure (no network): the
+/// subscription behind an event is read from Stripe afterwards, so only ids and the invoice/refund facts matter here.
+/// </summary>
+public sealed class StripeWebhookParser(string secret)
+{
+    public PaymentEvent? Parse(string payload, string? signature)
+    {
+        if (string.IsNullOrWhiteSpace(secret)) throw new InvalidWebhookException("ยังไม่ได้ตั้งค่า Stripe:WebhookSecret");
+        if (string.IsNullOrWhiteSpace(signature)) throw new InvalidWebhookException("ไม่มีลายเซ็น Stripe-Signature");
+
+        Event e;
+        try
+        {
+            // An endpoint created on another API version still has the fields we read; do not refuse it for the version.
+            e = EventUtility.ConstructEvent(payload, signature, secret, throwOnApiVersionMismatch: false);
+        }
+        catch (StripeException ex)
+        {
+            throw new InvalidWebhookException($"ลายเซ็น webhook ไม่ถูกต้อง: {ex.Message}");
+        }
+
+        switch (e.Type)
+        {
+            case EventTypes.CheckoutSessionCompleted when e.Data.Object is Stripe.Checkout.Session { Mode: "subscription" } session:
+                return new CheckoutCompletedEvent(e.Id, StripeMapping.Session(session));
+            case EventTypes.CustomerSubscriptionCreated or EventTypes.CustomerSubscriptionUpdated or EventTypes.CustomerSubscriptionDeleted
+                when e.Data.Object is Subscription sub:
+                return new SubscriptionChangedEvent(e.Id, sub.Id, sub.CustomerId);
+            case EventTypes.InvoicePaid when e.Data.Object is Invoice paid:
+                return new InvoicePaidEvent(e.Id, StripeMapping.Invoice(paid, paid: true));
+            case EventTypes.InvoicePaymentFailed when e.Data.Object is Invoice failed:
+                return new InvoiceFailedEvent(e.Id, StripeMapping.Invoice(failed, paid: false));
+            case EventTypes.RefundCreated or EventTypes.RefundUpdated when e.Data.Object is Refund refund:
+                return new RefundEvent(e.Id, StripeMapping.Refund(refund));
+            default:
+                return null;
+        }
+    }
+}

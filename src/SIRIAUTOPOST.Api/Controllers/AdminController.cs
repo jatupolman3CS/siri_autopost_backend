@@ -87,7 +87,7 @@ public sealed class AdminController : ControllerBase
     public Task<int> RetryFailed(Guid id, [FromServices] ICommandHandler<RetryCustomerFailedCommand, int> h, CancellationToken ct) =>
         h.HandleAsync(new RetryCustomerFailedCommand(id), ct);
 
-    /// <summary>Refunds the customer's latest charge.</summary>
+    /// <summary>Refunds the customer's latest charge through Stripe.</summary>
     [HttpPost("customers/{id:guid}/refund")]
     public Task<TransactionDto> RefundLatest(Guid id, [FromServices] ICommandHandler<RefundCommand, TransactionDto> h, CancellationToken ct) =>
         h.HandleAsync(new RefundCommand(null, id), ct);
@@ -97,14 +97,15 @@ public sealed class AdminController : ControllerBase
         [FromServices] IQueryHandler<GetTransactionsQuery, IReadOnlyList<TransactionDto>> h, CancellationToken ct) =>
         h.HandleAsync(new GetTransactionsQuery(), ct);
 
+    /// <summary>Refunds one charge through Stripe.</summary>
     [HttpPost("transactions/{id:guid}/refund")]
     public Task<TransactionDto> Refund(Guid id, [FromServices] ICommandHandler<RefundCommand, TransactionDto> h, CancellationToken ct) =>
         h.HandleAsync(new RefundCommand(id, null), ct);
 
-    /// <summary>Records that a failed charge was paid (no payment provider is connected).</summary>
-    [HttpPost("transactions/{id:guid}/paid")]
-    public Task<TransactionDto> Paid(Guid id, [FromServices] ICommandHandler<RecordPaymentCommand, TransactionDto> h, CancellationToken ct) =>
-        h.HandleAsync(new RecordPaymentCommand(id), ct);
+    /// <summary>Asks Stripe to collect a failed invoice again.</summary>
+    [HttpPost("transactions/{id:guid}/retry")]
+    public Task<TransactionDto> Retry(Guid id, [FromServices] ICommandHandler<RetryPaymentCommand, TransactionDto> h, CancellationToken ct) =>
+        h.HandleAsync(new RetryPaymentCommand(id), ct);
 
     [HttpPut("plans/{key}")]
     public Task<PlanDto> UpdatePlan(PlanKey key, PlanSettingsRequest r, [FromServices] ICommandHandler<UpdatePlanCommand, PlanDto> h, CancellationToken ct) =>

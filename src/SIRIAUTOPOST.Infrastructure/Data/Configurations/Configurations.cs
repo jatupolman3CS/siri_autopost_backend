@@ -14,6 +14,10 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         b.Property(x => x.Name).HasMaxLength(120);
         b.Property(x => x.PasswordHash).HasMaxLength(300);
         b.Property(x => x.Note).HasMaxLength(500);
+        b.Property(x => x.StripeCustomerId).HasMaxLength(100);
+        b.Property(x => x.StripeSubscriptionId).HasMaxLength(100);
+        // Webhooks find the customer by the Stripe id; NULLs (every user without one) do not clash in a unique index.
+        b.HasIndex(x => x.StripeCustomerId).IsUnique();
         b.OwnsOne(x => x.Limits, o => o.ToJson("limit_overrides"));
     }
 }
@@ -150,9 +154,30 @@ public sealed class TransactionConfiguration : IEntityTypeConfiguration<Transact
     {
         b.ToTable("TRANSACTIONS");
         b.Property(x => x.PromoCode).HasMaxLength(30);
+        b.Property(x => x.Amount).HasPrecision(12, 2);
+        b.Property(x => x.StripeInvoiceId).HasMaxLength(100);
+        b.Property(x => x.StripePaymentIntentId).HasMaxLength(100);
+        b.Property(x => x.StripeRefundId).HasMaxLength(100);
+        b.Property(x => x.ReceiptUrl).HasMaxLength(500);
+        // One row per Stripe invoice and per Stripe refund: a redelivered webhook cannot record them twice.
+        b.HasIndex(x => x.StripeInvoiceId).IsUnique();
+        b.HasIndex(x => x.StripeRefundId).IsUnique();
+        b.HasIndex(x => x.StripePaymentIntentId);
         b.HasIndex(x => new { x.UserId, x.CreatedAt });
         b.HasIndex(x => x.CreatedAt);
         b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ProcessedPaymentEventConfiguration : IEntityTypeConfiguration<ProcessedPaymentEvent>
+{
+    public void Configure(EntityTypeBuilder<ProcessedPaymentEvent> b)
+    {
+        b.ToTable("PAYMENT_EVENTS");
+        b.HasKey(x => x.Key);
+        b.Property(x => x.Key).HasMaxLength(150);
+        b.Property(x => x.Type).HasMaxLength(60).IsRequired();
+        b.HasIndex(x => x.At);
     }
 }
 

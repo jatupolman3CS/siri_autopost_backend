@@ -73,9 +73,12 @@ public enum OfflinePolicy
 public enum CustomerStatus
 {
     Active,
-    /// <summary>Signed up on a paid plan and has not paid yet.</summary>
+    /// <summary>
+    /// Legacy: a paid plan chosen at sign-up before payments went through Stripe. Nothing sets it any more
+    /// (a new account starts on Free and buys a plan at Checkout); old rows are cleared by the admin.
+    /// </summary>
     Trial,
-    /// <summary>A charge failed.</summary>
+    /// <summary>A renewal payment failed; Stripe is retrying. The plan stays until the subscription ends.</summary>
     PastDue,
     /// <summary>Stopped by the platform admin: cannot sign in, devices take no posts.</summary>
     Suspended,
@@ -116,6 +119,8 @@ public enum AuditAction
     FailedRetried,
     Refunded,
     PaymentRecorded,
+    /// <summary>The admin asked Stripe to collect a failed invoice again.</summary>
+    PaymentRetried,
     PlanSettingsChanged,
     PromoCreated,
     PromoToggled,

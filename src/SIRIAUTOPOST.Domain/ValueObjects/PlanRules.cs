@@ -33,12 +33,17 @@ public static class Pricing
     public static int PerMonth(int price, BillingCycle cycle) =>
         cycle == BillingCycle.Year ? (int)Math.Round(price * YearlyFactor, MidpointRounding.AwayFromZero) : price;
 
+    /// <summary>The price of one billing period before any discount (a year is 12 months at the yearly rate).</summary>
+    public static int Period(int price, BillingCycle cycle) => PerMonth(price, cycle) * (cycle == BillingCycle.Year ? 12 : 1);
+
+    /// <summary>What a promo code takes off the first invoice; Stripe gets this as an amount-off coupon.</summary>
+    public static int FirstDiscount(int price, BillingCycle cycle, string? discount) => Period(price, cycle) - Charge(price, cycle, discount);
+
     /// <summary>The charge for one billing period, after a promo code's discount.</summary>
     public static int Charge(int price, BillingCycle cycle, string? discount)
     {
         var month = PerMonth(price, cycle);
-        var months = cycle == BillingCycle.Year ? 12 : 1;
-        decimal total = month * months;
+        decimal total = Period(price, cycle);
         total = discount switch
         {
             "d10" => total * 0.9m,

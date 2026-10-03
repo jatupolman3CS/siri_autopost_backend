@@ -8,9 +8,9 @@ using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Application.Features.Auth;
 
-public sealed record SignUpCommand(string Email, string Password, string? Name, PlanKey? Plan) : ICommand<AuthResultDto>;
+public sealed record SignUpCommand(string Email, string Password, string? Name) : ICommand<AuthResultDto>;
 
-/// <summary>New shop user with one workspace, filled with the sample accounts.</summary>
+/// <summary>New shop user on the Free plan with one workspace, filled with the sample accounts. A paid plan is bought at Stripe Checkout afterwards.</summary>
 public sealed class SignUpCommandHandler(
     IUserRepository users, IWorkspaceRepository workspaces, IMemberRepository members, IWorkspaceSeeder seeder,
     IPasswordHasher hasher, ITokenService tokens, IUnitOfWork uow, TimeProvider clock)
@@ -21,7 +21,7 @@ public sealed class SignUpCommandHandler(
         var email = User.NormalizeEmail(c.Email);
         if (await users.GetByEmailAsync(email, ct) is not null) throw new ConflictException("อีเมลนี้มีบัญชีอยู่แล้ว");
         var now = clock.GetUtcNow();
-        var user = User.Create(email, c.Name ?? "", UserRole.User, c.Plan ?? PlanKey.Free, now);
+        var user = User.Create(email, c.Name ?? "", UserRole.User, PlanKey.Free, now);
         user.SetPasswordHash(hasher.Hash(user, c.Password));
         users.Add(user);
         var ws = Workspace.Create(user.Id, $"เวิร์กสเปซของ {user.Name}", now);
@@ -58,7 +58,7 @@ public sealed class LogInCommandHandler(
     }
 }
 
-public sealed record GoogleLogInCommand(string IdToken, PlanKey? Plan) : ICommand<AuthResultDto>;
+public sealed record GoogleLogInCommand(string IdToken) : ICommand<AuthResultDto>;
 
 /// <summary>Signs in with a Google ID token; an unknown (verified) email gets a new shop account without a password.</summary>
 public sealed class GoogleLogInCommandHandler(
@@ -74,7 +74,7 @@ public sealed class GoogleLogInCommandHandler(
         var user = await users.GetByEmailAsync(email, ct);
         if (user is null)
         {
-            user = User.Create(email, identity.Name ?? "", UserRole.User, c.Plan ?? PlanKey.Free, now);
+            user = User.Create(email, identity.Name ?? "", UserRole.User, PlanKey.Free, now);
             users.Add(user); // no password hash: password login stays impossible until one is set
             var ws = Workspace.Create(user.Id, $"เวิร์กสเปซของ {user.Name}", now);
             workspaces.Add(ws);

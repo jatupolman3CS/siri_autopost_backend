@@ -14,16 +14,20 @@ public class PlatformMetricsTests
 
     private static User Customer(PlanKey plan, DateTimeOffset since)
     {
-        var u = User.Create($"{Guid.NewGuid():N}@shop.co", "c", UserRole.User, plan, since);
-        u.ChangePlan(plan, BillingCycle.Month, paid: true); // active, not trial
+        var u = User.Create($"{Guid.NewGuid():N}@shop.co", "c", UserRole.User, PlanKey.Free, since);
+        if (plan != PlanKey.Free) Subscribe(u, plan, BillingCycle.Month);
         return u;
     }
+
+    private static void Subscribe(User u, PlanKey plan, BillingCycle cycle) =>
+        u.ApplySubscription($"sub_{u.Id:N}", plan, cycle, null, cancelAtPeriodEnd: false, pastDue: false);
 
     /// <summary>Moves the customer to a plan and returns the log entry the handlers would write.</summary>
     private static AuditEntry Move(User u, PlanKey to, DateTimeOffset at)
     {
         var from = u.Plan;
-        u.ChangePlan(to, BillingCycle.Month, paid: to != PlanKey.Free);
+        if (to == PlanKey.Free) u.EndSubscription();
+        else Subscribe(u, to, BillingCycle.Month);
         return AuditEntry.PlanChange(u.Id, u, from, at);
     }
 
@@ -45,7 +49,7 @@ public class PlatformMetricsTests
         var leaves = Customer(PlanKey.Agency, Now.AddDays(-90));
         var joins = Customer(PlanKey.Basic, Now.AddDays(-3));
         var yearly = Customer(PlanKey.Pro, Now.AddDays(-90));
-        yearly.ChangePlan(PlanKey.Pro, BillingCycle.Year, paid: true);
+        Subscribe(yearly, PlanKey.Pro, BillingCycle.Year);
         var log = new[] { Move(leaves, PlanKey.Free, Now.AddDays(-10)) };
         var all = new[] { stays, leaves, joins, yearly };
 

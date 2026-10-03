@@ -4,6 +4,7 @@ using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
+using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
 using SIRIAUTOPOST.Application.Features.Workspaces;
@@ -145,4 +146,36 @@ public sealed class SyncDeviceGroupsCommandValidator : AbstractValidator<SyncDev
                 .WithMessage("ลิงก์กลุ่มต้องขึ้นต้นด้วย http:// หรือ https://");
         });
     }
+}
+
+public sealed class SendDeviceCommandCommandValidator : AbstractValidator<SendDeviceCommandCommand>
+{
+    public SendDeviceCommandCommandValidator() =>
+        RuleFor(x => x.Cmd).Must(c => DeviceCommand.Allowed.Contains(c ?? "")).WithMessage("ไม่รู้จักคำสั่งนี้");
+}
+
+public sealed class PutExtensionImageCommandValidator : AbstractValidator<PutExtensionImageCommand>
+{
+    public PutExtensionImageCommandValidator()
+    {
+        RuleFor(x => x.ImageId).Must(ExtensionImage.ValidId).WithMessage("รหัสรูปไม่ถูกต้อง");
+        RuleFor(x => x.Data).NotEmpty().WithMessage("ไม่มีข้อมูลไฟล์");
+        RuleFor(x => x.Name).MaximumLength(500);
+    }
+}
+
+public sealed class PutOwnExtensionImageCommandValidator : AbstractValidator<PutOwnExtensionImageCommand>
+{
+    public PutOwnExtensionImageCommandValidator()
+    {
+        RuleFor(x => x.ImageId).Must(ExtensionImage.ValidId).WithMessage("รหัสรูปไม่ถูกต้อง");
+        RuleFor(x => x.Data).NotEmpty().WithMessage("ไม่มีข้อมูลไฟล์");
+        RuleFor(x => x.Name).MaximumLength(500);
+    }
+}
+
+public sealed class UpdateDeviceCommandValidator : AbstractValidator<UpdateDeviceCommand>
+{
+    public UpdateDeviceCommandValidator() =>
+        RuleFor(x => x.Name).MaximumLength(Device.MaxNameLength).WithMessage($"ชื่อเครื่องยาวเกิน {Device.MaxNameLength} ตัวอักษร");
 }

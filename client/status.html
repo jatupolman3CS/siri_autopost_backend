@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AutoPost · สถานะการทำงาน</title>
+  <link rel="stylesheet" href="status.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" width="32" height="32">
+      <div>
+        <h1>AutoPost</h1>
+        <p class="muted">สถานะการทำงานของเครื่องนี้ · ตั้งค่าทั้งหมดที่หน้าเว็บ AutoPost</p>
+      </div>
+    </div>
+    <span id="linkBadge" class="badge">ยังไม่ได้เชื่อมต่อ</span>
+  </header>
+
+  <main>
+    <!-- Pairing asked by the web app (status.html#pair=...) -->
+    <section id="pairCard" class="card accent" hidden>
+      <h2>เว็บ AutoPost ขอเชื่อมต่อกับ Chrome เครื่องนี้</h2>
+      <dl class="facts">
+        <dt>เว็บ</dt><dd id="pairOrigin"></dd>
+        <dt>ชื่อเครื่อง</dt><dd id="pairName"></dd>
+      </dl>
+      <p id="pairReplace" class="warn" hidden></p>
+      <p class="muted">
+        เมื่ออนุญาต ชุดโพสต์ในเครื่องนี้ (ถ้ามี) จะถูกส่งขึ้นเว็บ จากนั้นการตั้งค่า การเริ่ม/หยุด และสิทธิ์ทั้งหมดทำที่หน้าเว็บ
+        เครื่องนี้ทำหน้าที่โพสต์และรายงานสถานะเท่านั้น และจะขออนุญาตจับภาพหน้าจอ (ใช้แนบในการแจ้งเตือน Telegram)
+      </p>
+      <div class="row">
+        <button id="btnAllow" class="btn primary" type="button">อนุญาตและเชื่อมต่อ</button>
+        <button id="btnDeny" class="btn" type="button">ไม่อนุญาต</button>
+      </div>
+      <p id="pairMsg" class="muted" hidden></p>
+    </section>
+
+    <!-- Not paired -->
+    <section id="unpairedCard" class="card" hidden>
+      <h2>ยังไม่ได้เชื่อมกับเว็บ AutoPost</h2>
+      <ol class="steps">
+        <li>เปิดหน้าเว็บ AutoPost <b>ใน Chrome เครื่องนี้</b> แล้วเข้าสู่ระบบ</li>
+        <li>ไปที่ <b>ทีมและเวิร์กสเปซ</b> &gt; <b>เพิ่มอุปกรณ์</b></li>
+        <li>กด <b>เชื่อมต่อ Chrome เครื่องนี้</b> แล้วกด "อนุญาต" ในหน้าที่เด้งขึ้นมา</li>
+      </ol>
+      <p class="muted">ชุดโพสต์ที่มีอยู่ในเครื่องนี้จะถูกส่งขึ้นเว็บให้เองตอนเชื่อมต่อ ไม่หาย</p>
+    </section>
+
+    <!-- Connection -->
+    <section id="linkCard" class="card" hidden>
+      <div class="head">
+        <h2>การเชื่อมต่อ</h2>
+        <div class="row">
+          <button id="btnSync" class="btn small" type="button">ซิงก์ตอนนี้</button>
+          <a id="openWeb" class="btn small primary" target="_blank" rel="noopener">เปิดหน้าเว็บ AutoPost</a>
+        </div>
+      </div>
+      <dl class="facts" id="linkFacts"></dl>
+      <p id="linkError" class="warn" hidden></p>
+    </section>
+
+    <!-- Run -->
+    <section id="runCard" class="card" hidden>
+      <div class="head">
+        <h2>การทำงาน</h2>
+        <span id="runBadge" class="badge">หยุด</span>
+      </div>
+      <p id="currentLine" class="strong" hidden></p>
+      <p id="guardLine" class="muted"></p>
+      <div id="captureWarn" class="warn row" hidden>
+        <span>ยังไม่ได้อนุญาตจับภาพหน้าจอ (ภาพแนบใน Telegram)</span>
+        <button id="btnCapture" class="btn small" type="button">อนุญาตจับภาพหน้าจอ</button>
+      </div>
+      <div id="campaigns" class="campaigns"></div>
+    </section>
+
+    <!-- Log -->
+    <section id="logCard" class="card" hidden>
+      <h2>บันทึกการทำงาน</h2>
+      <ol id="logs" class="logs"></ol>
+    </section>
+
+    <p id="legacyNote" class="muted center" hidden></p>
+  </main>
+
+  <script type="module" src="status.js"></script>
+</body>
+</html>

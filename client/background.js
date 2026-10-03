@@ -1553,7 +1553,8 @@ const remoteCommands = {
   syncNow: async () => ({ ok: true }),
 };
 
-async function runRemoteCommands(o, list) {
+// Runs commands sent from a web page; report(id, result) sends each result back.
+async function runRemoteCommands(list, report) {
   for (const c of list) {
     const fn = remoteCommands[c.cmd];
     let result;
@@ -1566,7 +1567,7 @@ async function runRemoteCommands(o, list) {
       await log('info', `รับคำสั่งจากหน้าเว็บ: ${c.cmd}${result && result.ok === false ? ` (ไม่สำเร็จ: ${result.error})` : ''}`);
     }
     try {
-      await serverApi(o, 'POST', `/api/device/commands/${c.id}/result`, { result: result ?? { ok: true } });
+      await report(c.id, result ?? { ok: true });
     } catch (e) {
       console.warn('[FBAP] command result', e);
     }
@@ -1582,7 +1583,8 @@ async function doSync({ mode = 'auto' } = {}) {
     await syncConfig(await getOnline(), hb.profile, mode);
     o = await getOnline();
     // Report the new state right away so the web page sees it.
-    if (await runRemoteCommands(o, hb.commands || [])) await heartbeat(await getOnline(), false);
+    const report = (id, result) => serverApi(o, 'POST', `/api/device/commands/${id}/result`, { result });
+    if (await runRemoteCommands(hb.commands || [], report)) await heartbeat(await getOnline(), false);
     await setOnline({
       deviceName: hb.device.name,
       profileName: hb.profile ? hb.profile.name : '',
@@ -1689,13 +1691,19 @@ const DEFAULT_CLOUD = {
   deviceId: '',
   deviceName: '',
   workspaceName: '',
-  paused: false,      // stop taking posts (heartbeats go on)
+  paused: false,      // paused in the web app: take no posts (heartbeats and settings go on)
   pausedUntil: 0,     // Facebook showed a warning: take no posts until then
   groupsHash: '',     // groups last sent to the web app
   groups: 0,
   lastSyncAt: 0,
   lastError: '',
   lastJob: null,      // { at, group, ok, error }
+  // The campaigns of this browser, shown and edited in the web app (cloudConfigSync).
+  configRevision: 0,  // web revision of the settings this browser has
+  configHash: '',     // hash of the settings at that revision (finds local edits)
+  lastLogT: 0,        // newest log line already sent
+  configSyncAt: 0,
+  configError: '',
 };
 
 async function getCloud() {
@@ -1877,6 +1885,7 @@ async function cloudTick({ claim = true } = {}) {
     c = await setCloud({
       deviceName: hb.deviceName,
       workspaceName: hb.workspaceName,
+      paused: !!hb.jobsPaused,
       groupsHash: hash,
       groups: count,
       lastSyncAt: Date.now(),
@@ -1891,11 +1900,23 @@ async function cloudTick({ claim = true } = {}) {
     return { ok: true, posted: true, result: !!r.ok };
   } catch (e) {
     const msg = e?.message || String(e);
+    if (e?.status === 401) return cloudForget(msg);
     const prev = (await getCloud()).lastError;
     await setCloud({ lastError: msg });
     if (msg !== prev) await log('warn', `[เว็บ AutoPost] ${msg}`);
     return { ok: false, error: msg };
   }
+}
+
+// Unbound in the web app (the key no longer works): back to "not paired". The campaigns stay in this
+// browser and go up again when it is paired with a workspace.
+async function cloudForget(msg) {
+  if ((await getCloud()).enabled) {
+    await setCloud({ ...DEFAULT_CLOUD });
+    await ensureCloudAlarm();
+    await log('warn', `[เว็บ AutoPost] ${msg}`);
+  }
+  return { ok: false, error: msg };
 }
 
 async function ensureCloudAlarm() {
@@ -1935,7 +1956,11 @@ async function cloudPair({ apiUrl, code, name }) {
   });
   await ensureCloudAlarm();
   await log('success', `[เว็บ AutoPost] จับคู่กับเวิร์กสเปซ "${pair.workspaceName}" แล้ว (เครื่อง "${pair.deviceName}")`);
-  return enqueue(() => cloudTick({ claim: false }));
+  cloudStateSent = '';
+  const tick = await enqueue(() => cloudTick({ claim: false }));
+  // Upload this browser's campaigns (or take the web's) right away.
+  await cloudConfigSync();
+  return tick;
 }
 
 async function cloudUnpair() {
@@ -1945,16 +1970,187 @@ async function cloudUnpair() {
   return { ok: true };
 }
 
-async function cloudSetPaused({ paused }) {
-  await setCloud({ paused: !!paused, ...(paused ? {} : { pausedUntil: 0 }) });
-  await log('info', paused ? '[เว็บ AutoPost] พักรับงานโพสต์' : '[เว็บ AutoPost] รับงานโพสต์ต่อ');
-  return { ok: true };
+// ---------- pairing started from the web app ----------
+// The web app opens <its origin>/connect-extension#ap-pair=1&code=...&name=... in this browser. The
+// extension sees that address (tabs permission), and sends the tab to its own status page, which asks
+// the person to allow it (one click, which also grants the screenshot permission Chrome only gives on
+// a click). The API is always the origin of that page: another site cannot point the pairing elsewhere.
+
+const CONNECT_PATH = '/connect-extension';
+
+function connectRequest(rawUrl) {
+  let u;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+  if (!/^https?:$/.test(u.protocol) || u.pathname.replace(/\/+$/, '') !== CONNECT_PATH) return null;
+  const p = new URLSearchParams(u.hash.slice(1));
+  const code = (p.get('code') || '').trim();
+  if (p.get('ap-pair') !== '1' || !code) return null;
+  return { apiUrl: u.origin, code, name: (p.get('name') || '').trim(), workspace: (p.get('ws') || '').trim() };
+}
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  const req = changeInfo.url ? connectRequest(changeInfo.url) : null;
+  if (!req) return;
+  const page = chrome.runtime.getURL('status.html') + '#pair=' + encodeURIComponent(JSON.stringify(req));
+  chrome.tabs.update(tabId, { url: page }).catch(() => {});
+});
+
+// ---------- cloud: this browser's campaigns in the SIRI AutoPost web app ----------
+// The web app shows and edits the same settings as this page (campaigns, groups, posts, media,
+// timing, Telegram), plus the run state and log, and sends the buttons (start, stop, test post...)
+// as commands. Same rules as the legacy online mode: the first sync with an empty web config uploads
+// what this browser has, later the side that changed wins, and when both changed the web wins.
+// Runs outside the post queue, so a "stop" from the web arrives while a post is going on.
+
+let cloudStateSent = ''; // state is sent only when it changed
+
+// State and new log lines out; the web revision and waiting commands in.
+async function cloudReport(c, takeCommands) {
+  const { state, logs = [] } = await chrome.storage.local.get(['state', 'logs']);
+  const stateJson = JSON.stringify(state || {});
+  const fresh = logs.filter((l) => l.t > c.lastLogT).slice(-300);
+  const body = { version: chrome.runtime.getManifest().version, takeCommands, logs: fresh };
+  if (stateJson !== cloudStateSent) body.state = state || {};
+  const res = await cloudApi(c, 'POST', '/api/device/sync', body);
+  cloudStateSent = stateJson;
+  if (fresh.length) await setCloud({ lastLogT: fresh[fresh.length - 1].t });
+  return res;
+}
+
+// Replaces this browser's settings with the web's.
+async function cloudPullConfig(c) {
+  const cfg = await cloudApi(c, 'GET', '/api/device/config');
+  if (!cfg.settings) {
+    // Nothing on the web yet: keep ours, just remember where we are.
+    const { hash } = await localSettings();
+    await setCloud({ configRevision: cfg.revision, configHash: hash });
+    return;
+  }
+  const incoming = migrateSettings(cfg.settings);
+  const existing = new Set((await storageKeys()).filter((k) => k.startsWith('img:')).map((k) => k.slice(4)));
+  let notFound = 0;
+  for (const id of imageIdsOf(incoming.campaigns)) {
+    if (existing.has(id)) continue;
+    try {
+      const rec = await cloudApi(c, 'GET', `/api/device/images/${encodeURIComponent(id)}`);
+      await chrome.storage.local.set({ ['img:' + id]: rec });
+      existing.add(id);
+    } catch (e) {
+      if (e.status !== 404) throw e;
+      notFound++;
+    }
+  }
+  const { settings: current } = await localSettings();
+  // Same rule as a config file: no Bot Token on the web = keep this computer's Telegram.
+  const res = applyImport(current, { settings: incoming, images: {} }, 'replace', existing);
+  await chrome.storage.local.set({ settings: res.settings, cloudPulled: { at: Date.now(), revision: cfg.revision } });
+  const used = new Set(res.settings.campaigns.flatMap(campaignImageIds));
+  const orphan = (await storageKeys()).filter((k) => k.startsWith('img:') && !used.has(k.slice(4)));
+  if (orphan.length) await chrome.storage.local.remove(orphan);
+  const { hash } = await localSettings();
+  await setCloud({ configRevision: cfg.revision, configHash: hash });
+  const sum = summarize(res.settings, {});
+  await log(
+    'success',
+    `[เว็บ AutoPost] โหลดการตั้งค่าจากเว็บแล้ว (ฉบับที่ ${cfg.revision}): ${sum.campaigns} ชุด · ${sum.groups} กลุ่ม · ${sum.posts} แบบโพสต์` +
+      (notFound ? ` (ไม่มีรูปบนเว็บ ${notFound} รูป)` : '')
+  );
+}
+
+// Sends this browser's settings (and the media the web lacks) up. baseRevision null = overwrite.
+async function cloudPushConfig(c, local, baseRevision, { quiet = false } = {}) {
+  const ids = imageIdsOf(local.settings.campaigns);
+  if (ids.length) {
+    const { missing } = await cloudApi(c, 'POST', '/api/device/images/missing', { ids });
+    for (const id of missing) {
+      const rec = (await chrome.storage.local.get('img:' + id))['img:' + id];
+      if (rec) await cloudApi(c, 'PUT', `/api/device/images/${encodeURIComponent(id)}`, rec);
+    }
+  }
+  try {
+    const r = await cloudApi(c, 'PUT', '/api/device/config', { settings: local.settings, baseRevision });
+    await setCloud({ configRevision: r.revision, configHash: local.hash });
+    if (!quiet) await log('success', `[เว็บ AutoPost] อัปโหลดการตั้งค่าของเครื่องนี้ขึ้นเว็บแล้ว (ฉบับที่ ${r.revision})`);
+  } catch (e) {
+    if (e.status !== 409) throw e;
+    await log('warn', '[เว็บ AutoPost] การตั้งค่าบนเว็บถูกแก้ไปก่อน: ใช้ของเว็บแทนการแก้ในเครื่องนี้');
+    await cloudPullConfig(c);
+  }
+}
+
+// mode 'auto': pull web changes, push local edits. 'pull' / 'push': replace one side with the other.
+async function cloudSyncSettings(c, server, mode) {
+  const local = await localSettings();
+  if (mode === 'push') return cloudPushConfig(c, local, null);
+  if (mode === 'pull') return cloudPullConfig(c);
+  // First sync with an empty web config: upload what this browser has.
+  if (!c.configRevision && !server.hasContent && hasContent(local.settings)) {
+    return cloudPushConfig(c, local, server.revision);
+  }
+  const localEdited = !!c.configHash && local.hash !== c.configHash;
+  if (server.revision !== c.configRevision || !c.configHash) {
+    if (localEdited) await log('warn', '[เว็บ AutoPost] การตั้งค่าถูกแก้ทั้งในเครื่องนี้และบนเว็บ: ใช้ของเว็บ');
+    return cloudPullConfig(c);
+  }
+  if (localEdited) return cloudPushConfig(c, local, c.configRevision, { quiet: true });
+}
+
+async function doCloudConfigSync({ mode = 'auto' } = {}) {
+  const c = await getCloud();
+  if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+  try {
+    const s = await cloudReport(c, true);
+    await cloudSyncSettings(await getCloud(), s, mode);
+    const report = (id, result) => cloudApi(c, 'POST', `/api/device/commands/${id}/result`, { result });
+    // Report the new state right away so the web page sees it.
+    if (await runRemoteCommands(s.commands || [], report)) await cloudReport(await getCloud(), false);
+    await setCloud({ configSyncAt: Date.now(), configError: '' });
+    return { ok: true };
+  } catch (e) {
+    const msg = e?.status === 404 ? 'เว็บ AutoPost เวอร์ชันนี้ยังไม่รองรับการแก้ชุดโพสต์บนเว็บ' : e?.message || String(e);
+    if (e?.status === 401) return cloudForget(msg);
+    const prev = (await getCloud()).configError;
+    await setCloud({ configError: msg });
+    if (msg !== prev) await log('warn', `[เว็บ AutoPost] ซิงก์การตั้งค่าไม่สำเร็จ: ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+// One sync at a time; requests made while one waits join it.
+let cloudConfigChain = Promise.resolve();
+let cloudConfigQueued = null;
+function cloudConfigSync(opts = {}) {
+  if (cloudConfigQueued) {
+    if (opts.mode) cloudConfigQueued.opts.mode = opts.mode;
+    return cloudConfigQueued.promise;
+  }
+  const entry = { opts: { ...opts } };
+  entry.promise = cloudConfigChain.then(() => {
+    cloudConfigQueued = null;
+    return doCloudConfigSync(entry.opts);
+  });
+  cloudConfigQueued = entry;
+  cloudConfigChain = entry.promise.catch(() => {});
+  return entry.promise;
+}
+
+// Local edits reach the web a few seconds after the last change.
+let cloudPushTimer = null;
+function scheduleCloudPush() {
+  clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(async () => {
+    if ((await getCloud()).enabled) cloudConfigSync();
+  }, PUSH_DELAY_MS);
 }
 
 // ---------- wiring ----------
 
 async function openDashboard() {
-  const url = chrome.runtime.getURL('dashboard.html');
+  const url = chrome.runtime.getURL('status.html');
   const [tab] = await chrome.tabs.query({ url });
   if (tab) {
     await chrome.tabs.update(tab.id, { active: true });
@@ -1975,6 +2171,7 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   }
   if (alarm.name === CLOUD_ALARM) {
     enqueue(() => cloudTick());
+    cloudConfigSync();
     return;
   }
   if (alarm.name.startsWith(ALARM_PREFIX)) {
@@ -1987,6 +2184,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (area === 'local' && changes.settings) {
     enqueue(() => syncCampaigns(changes.settings.oldValue, changes.settings.newValue));
     schedulePush();
+    scheduleCloudPush();
   }
 });
 
@@ -2067,8 +2265,13 @@ const commands = {
   onlineSync: (m) => syncOnline({ mode: m.mode || 'auto' }),
   cloudPair: (m) => cloudPair(m),
   cloudUnpair: () => cloudUnpair(),
-  cloudSync: () => enqueue(() => cloudTick()),
-  cloudPause: (m) => cloudSetPaused(m),
+  // Settings first (so new groups reach the web), then one job.
+  cloudSync: async () => {
+    const cfg = await cloudConfigSync();
+    if (!cfg.ok && !(await getCloud()).enabled) return cfg; // unbound in the web app
+    return enqueue(() => cloudTick());
+  },
+  cloudConfig: (m) => cloudConfigSync({ mode: m.mode || 'auto' }),
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

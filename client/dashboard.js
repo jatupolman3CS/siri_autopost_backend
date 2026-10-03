@@ -26,6 +26,13 @@ import { buildBackup, parseBackup, applyImport, summarize, imageIdsOf, BUNDLED_C
 import { readZip } from './lib/zip.js';
 import { convertSiriExport, nameFromFile } from './lib/siri-import.js';
 
+// Inside the extension this editor is retired: settings live in the AutoPost web app and the
+// extension only shows its status. The page stays for the legacy server's web editor (http/https).
+if (location.protocol === 'chrome-extension:') {
+  location.replace('status.html');
+  throw new Error('การตั้งค่าย้ายไปที่หน้าเว็บ AutoPost แล้ว');
+}
+
 const $ = (sel, root = document) => root.querySelector(sel);
 const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -1465,7 +1472,9 @@ async function renderCloud() {
       ` · ซิงก์ล่าสุด ${cloud.lastSyncAt ? fmtDateTime(cloud.lastSyncAt) : '-'}` +
       (job ? ` · งานล่าสุด ${fmtDateTime(job.at)} ${job.ok ? 'สำเร็จ' : 'ไม่สำเร็จ'} (${job.group})` : '') +
       (resting ? ` · พักหลัง Facebook แจ้งเตือนถึง ${fmtDateTime(cloud.pausedUntil)}` : '') +
-      (err ? ` · ⚠ ${err}` : '');
+      (cloud.configSyncAt ? ` · ชุดโพสต์บนเว็บ ฉบับที่ ${cloud.configRevision || 0} (ซิงก์ ${fmtDateTime(cloud.configSyncAt)})` : '') +
+      (err ? ` · ⚠ ${err}` : '') +
+      (cloud.configError ? ` · ⚠ ${cloud.configError}` : '');
   }
   if (!$('#cloudUrl').value) $('#cloudUrl').value = cloud.apiUrl || '';
 }
@@ -1483,6 +1492,19 @@ $('#btnCloudPair').addEventListener('click', async () => {
 $('#btnCloudSync').addEventListener('click', async () => {
   await save();
   await onlineAction($('#btnCloudSync'), () => bg('cloudSync'), 'ซิงก์กับเว็บ AutoPost แล้ว');
+  renderCloud();
+});
+
+$('#btnCloudPull').addEventListener('click', async () => {
+  if (!confirm('ดึงการตั้งค่า (ชุดโพสต์) จากเว็บ AutoPost มาแทนที่การตั้งค่าทั้งหมดในเครื่องนี้?')) return;
+  await onlineAction($('#btnCloudPull'), () => bg('cloudConfig', { mode: 'pull' }), 'ดึงการตั้งค่าจากเว็บแล้ว');
+  renderCloud();
+});
+
+$('#btnCloudPush').addEventListener('click', async () => {
+  if (!confirm('เขียนทับการตั้งค่า (ชุดโพสต์) บนเว็บ AutoPost ด้วยการตั้งค่าของเครื่องนี้?')) return;
+  await save();
+  await onlineAction($('#btnCloudPush'), () => bg('cloudConfig', { mode: 'push' }), 'อัปโหลดการตั้งค่าขึ้นเว็บแล้ว');
   renderCloud();
 });
 
@@ -1586,7 +1608,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   if (changes.online) renderOnline();
   if (changes.cloud) renderCloud();
   // Settings were replaced by a config file or the server: show the new data.
-  if (changes.configLoaded || changes.onlinePulled) location.reload();
+  if (changes.configLoaded || changes.onlinePulled || changes.cloudPulled) location.reload();
 });
 
 setInterval(renderOverview, 1000);

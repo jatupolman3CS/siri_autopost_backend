@@ -73,6 +73,33 @@ public sealed class RevokeDeviceCommandHandler(
     }
 }
 
+/// <summary>
+/// The web app's controls of a paired browser: its name (and its Facebook account's) and whether it takes
+/// posts scheduled on the web. null leaves a value as it is.
+/// </summary>
+public sealed record UpdateDeviceCommand(Guid WorkspaceId, Guid DeviceId, string? Name, bool? JobsPaused) : ICommand<DeviceDto>;
+
+public sealed class UpdateDeviceCommandHandler(
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<UpdateDeviceCommand, DeviceDto>
+{
+    public async Task<DeviceDto> HandleAsync(UpdateDeviceCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
+        var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        if (c.Name is not null)
+        {
+            device.Rename(c.Name);
+            account?.FollowDevice(device);
+        }
+        if (c.JobsPaused is { } paused) device.SetJobsPaused(paused);
+        await uow.SaveChangesAsync(ct);
+        return DeviceDto.From(device, account?.Id, clock.GetUtcNow());
+    }
+}
+
 internal static class DeviceLimit
 {
     /// <summary>
@@ -148,7 +175,7 @@ public sealed class DeviceHeartbeatCommandHandler(
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         return new DeviceStatusDto(device.Id, device.Name, ws.Id, ws.Name, account?.Id, account?.GroupLinks.Count ?? 0,
-            ws.ExtensionOnline, AntiBanDto.From(ws.AntiBan));
+            ws.ExtensionOnline, AntiBanDto.From(ws.AntiBan), device.JobsPaused);
     }
 }
 
@@ -203,7 +230,7 @@ public sealed class ClaimJobCommandHandler(
         if (claimed.Any(p => !p.ClaimExpired(now))) return null; // one post at a time
 
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
-        if (!ws.ExtensionOnline || account is null || !account.CanPost) return null;
+        if (device.JobsPaused || !ws.ExtensionOnline || account is null || !account.CanPost) return null;
         var owner = await users.OwnerOfAsync(ws, ct);
         if (!owner.CanPost) return null; // suspended, banned or paused by the platform admin
 

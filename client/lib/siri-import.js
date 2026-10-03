@@ -22,7 +22,9 @@ export function bytesToBase64(bytes) {
 
 async function sha1Hex(bytes) {
   // Node 18 has no global WebCrypto; extension pages and Node 19+ do.
-  const subtle = globalThis.crypto?.subtle || (await import('node:crypto')).webcrypto.subtle;
+  // A variable specifier: browser bundlers (Vite, Angular) must not try to resolve a Node module.
+  const cryptoModule = 'node:crypto';
+  const subtle = globalThis.crypto?.subtle || (await import(/* @vite-ignore */ cryptoModule)).webcrypto.subtle;
   const digest = await subtle.digest('SHA-1', bytes);
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }

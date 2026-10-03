@@ -64,7 +64,7 @@ globalThis.chrome = {
     onAlarm: event(listeners.alarm),
   },
   action: { onClicked: event([]) },
-  tabs: { query: async () => [], create: async () => ({}), update: async () => ({}) },
+  tabs: { query: async () => [], create: async () => ({}), update: async () => ({}), onUpdated: { addListener: () => {} } },
   windows: { update: async () => ({}) },
   permissions: { contains: async () => false },
 };

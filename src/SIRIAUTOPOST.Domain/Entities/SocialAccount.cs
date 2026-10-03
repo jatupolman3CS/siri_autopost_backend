@@ -67,6 +67,9 @@ public class SocialAccount : Entity
             SortOrder = sortOrder,
         };
 
+    /// <summary>Follows a rename of its browser in the web app.</summary>
+    public void FollowDevice(Device device) => Name = $"Facebook · {device.Name}";
+
     /// <summary>Replaces the groups with the ones the extension knows (names must be unique).</summary>
     public void SyncGroups(IEnumerable<GroupLink> links)
     {

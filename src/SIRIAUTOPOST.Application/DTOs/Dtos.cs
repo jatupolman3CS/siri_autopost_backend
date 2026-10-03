@@ -121,11 +121,13 @@ public sealed record ExtensionStateDto(bool Online, int Affected);
 
 /// <param name="Online">Called in within the last 100 seconds.</param>
 /// <param name="AccountId">The Facebook account this browser posts with.</param>
+/// <param name="JobsPaused">Set in the web app: the browser takes no posts scheduled on the web.</param>
 public sealed record DeviceDto(
-    Guid Id, string Name, string Browser, string Version, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online, Guid? AccountId)
+    Guid Id, string Name, string Browser, string Version, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online, Guid? AccountId,
+    bool JobsPaused)
 {
     public static DeviceDto From(Device d, Guid? accountId, DateTimeOffset now) =>
-        new(d.Id, d.Name, d.Browser, d.Version, d.CreatedAt, d.LastSeenAt, d.IsOnline(now), accountId);
+        new(d.Id, d.Name, d.Browser, d.Version, d.CreatedAt, d.LastSeenAt, d.IsOnline(now), accountId, d.JobsPaused);
 }
 
 /// <param name="MaxDevices">The owner's plan limit; null = unlimited.</param>
@@ -135,8 +137,10 @@ public sealed record PairingCodeDto(string Code, DateTimeOffset ExpiresAt, int? 
 public sealed record PairResultDto(string DeviceKey, Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid AccountId);
 
 /// <param name="Online">False while the offline simulation holds the workspace offline: take no jobs.</param>
+/// <param name="JobsPaused">Paused in the web app: take no jobs (state and settings still sync).</param>
 public sealed record DeviceStatusDto(
-    Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid? AccountId, int Groups, bool Online, AntiBanDto AntiBan);
+    Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid? AccountId, int Groups, bool Online, AntiBanDto AntiBan,
+    bool JobsPaused);
 
 public sealed record GroupLinkDto(string Name, string Url);
 
@@ -200,3 +204,46 @@ public sealed record PromoDto(string Code, string Discount, int Uses, DateTimeOf
 {
     public static PromoDto From(Promo p) => new(p.Code, p.Discount, p.Uses, p.ExpiresAt, p.Active);
 }
+
+/// <summary>The extension settings of one device (client/lib/shared.js shape), as saved last.</summary>
+/// <param name="Revision">0 = nothing saved yet.</param>
+/// <param name="Settings">null until the device or the web app saves something.</param>
+/// <param name="UpdatedByDevice">The last change came from the extension (false: from the web app).</param>
+/// <param name="HasContent">Holds real data (groups, posts or media), not just an empty campaign.</param>
+public sealed record ExtensionConfigDto(
+    Guid DeviceId, int Revision, System.Text.Json.JsonElement? Settings, DateTimeOffset? UpdatedAt, bool UpdatedByDevice, bool HasContent);
+
+public sealed record ConfigSavedDto(int Revision, DateTimeOffset? UpdatedAt);
+
+/// <summary>One stored media file in the extension's own record shape: data is a data URL.</summary>
+public sealed record ExtensionImageDto(string Name, string Type, string Data);
+
+public sealed record MissingImagesDto(IReadOnlyList<string> Missing);
+
+/// <param name="T">The extension's timestamp, Unix milliseconds.</param>
+/// <param name="Level">info, success, warn or error.</param>
+public sealed record DeviceLogDto(long T, string Level, string Msg)
+{
+    public static DeviceLogDto From(DeviceLog l) => new(l.T, l.Level, l.Message);
+}
+
+/// <summary>What the web app shows of a device's run: presence, its last reported state and log.</summary>
+/// <param name="State">The extension's "state" (running, campaign rounds, next times, pauses); null before the first sync.</param>
+/// <param name="Revision">The revision of the settings saved on the server.</param>
+public sealed record DeviceLiveDto(
+    Guid DeviceId, bool Online, DateTimeOffset? LastSeenAt, string Version, System.Text.Json.JsonElement? State,
+    DateTimeOffset? StateAt, int Revision, IReadOnlyList<DeviceLogDto> Logs);
+
+/// <param name="Result">The extension's answer ({ ok, error, ... }) once Status is done.</param>
+public sealed record DeviceCommandDto(Guid Id, string Cmd, CommandStatus Status, System.Text.Json.JsonElement? Result, DateTimeOffset CreatedAt)
+{
+    public static DeviceCommandDto From(DeviceCommand c) =>
+        new(c.Id, c.Cmd, c.Status, Common.ExtensionSettings.Element(c.Result), c.CreatedAt);
+}
+
+public sealed record DeviceCommandItemDto(Guid Id, string Cmd, System.Text.Json.JsonElement Args);
+
+/// <param name="Revision">The server's settings revision; the device pulls when it differs from its own.</param>
+/// <param name="HasContent">False: the device may upload its own settings (first sync).</param>
+/// <param name="Commands">Commands to run now (only when asked for).</param>
+public sealed record DeviceSyncDto(int Revision, bool HasContent, IReadOnlyList<DeviceCommandItemDto> Commands);

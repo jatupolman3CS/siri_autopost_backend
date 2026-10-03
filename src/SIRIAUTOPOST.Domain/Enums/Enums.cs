@@ -121,3 +121,15 @@ public enum AuditAction
     PromoToggled,
     Impersonated,
 }
+
+/// <summary>Where a <c>DeviceCommand</c> from the web app is.</summary>
+public enum CommandStatus
+{
+    /// <summary>Waiting for the device's next sync.</summary>
+    Pending,
+    /// <summary>Handed to the device, no result yet.</summary>
+    Sent,
+    Done,
+    /// <summary>Nobody took it in time; it never runs.</summary>
+    Expired,
+}

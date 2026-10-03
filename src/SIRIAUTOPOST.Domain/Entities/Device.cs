@@ -17,6 +17,8 @@ public class Device : Entity
     public string KeyHash { get; private set; } = "";
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? LastSeenAt { get; private set; }
+    /// <summary>Set in the web app: the device takes no posted jobs until it is turned off again.</summary>
+    public bool JobsPaused { get; private set; }
 
     private Device() { } // EF Core
 
@@ -43,6 +45,15 @@ public class Device : Entity
         LastSeenAt = now;
         if (!string.IsNullOrWhiteSpace(version)) Version = Cut(version.Trim(), 40);
     }
+
+    /// <summary>Renamed in the web app; an empty name keeps the old one.</summary>
+    public void Rename(string? name)
+    {
+        var n = (name ?? "").Trim();
+        if (n.Length > 0) Name = Cut(n, MaxNameLength);
+    }
+
+    public void SetJobsPaused(bool paused) => JobsPaused = paused;
 
     private static string Cut(string s, int max) => s.Length > max ? s[..max] : s;
 }

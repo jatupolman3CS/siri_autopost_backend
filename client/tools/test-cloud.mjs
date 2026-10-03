@@ -81,6 +81,7 @@ const contentHandlers = {
 };
 
 let windowId = 1;
+const tabUrls = []; // addresses background.js sent tabs to
 globalThis.chrome = {
   storage: { local, onChanged: event(listeners.changed) },
   runtime: {
@@ -103,7 +104,8 @@ globalThis.chrome = {
     query: async () => [],
     create: async () => ({}),
     get: async (id) => ({ id, windowId }),
-    update: async (id) => {
+    update: async (id, props = {}) => {
+      if (props.url) tabUrls.push(props.url);
       // A navigation: loading, then complete.
       setTimeout(() => {
         for (const fn of [...listeners.updated]) fn(id, { status: 'loading' });
@@ -204,6 +206,15 @@ camp.groups = [{ url: GROUP.url, name: GROUP.name, enabled: true, text: '' }];
 settings.campaigns = [camp];
 await local.set({ settings });
 
+step('the web app\'s "connect this Chrome" address opens the approval page; other addresses do not');
+for (const fn of listeners.updated) fn(5, { url: 'https://evil.example/somewhere#ap-pair=1&code=XXXX-XXXX' });
+for (const fn of listeners.updated) fn(5, { url: `${API}/connect-extension#ap-pair=1&code=ABCD-EFGH&name=${encodeURIComponent('คอมร้าน')}` });
+await sleep(50);
+assert.equal(tabUrls.length, 1, tabUrls.join(' '));
+assert.match(tabUrls[0], /status\.html#pair=/);
+const req = JSON.parse(decodeURIComponent(tabUrls[0].split('#pair=')[1]));
+assert.deepEqual(req, { apiUrl: API, code: 'ABCD-EFGH', name: 'คอมร้าน', workspace: '' });
+
 step('pairing: wrong code, then the code from the web app');
 r = await bg('cloudPair', { apiUrl: API, code: 'ZZZZ-ZZZZ', name: 'คอมทดสอบ' });
 assert.equal(r.ok, false);
@@ -224,6 +235,53 @@ assert.equal(devices[0].online, true);
 const account = (await api('GET', `/api/workspaces/${ws.id}/accounts`)).json.find((a) => a.id === devices[0].accountId);
 assert.equal(account.connected, true);
 assert.deepEqual(account.groups, [GROUP.name]);
+
+step('the web app has this browser\'s campaigns (uploaded on pairing)');
+const devBase = `/api/workspaces/${ws.id}/devices/${devices[0].id}`;
+let webCfg = (await api('GET', `${devBase}/config`)).json;
+assert.equal(webCfg.revision, 1);
+assert.equal(webCfg.hasContent, true);
+assert.equal(webCfg.updatedByDevice, true);
+assert.equal(webCfg.settings.campaigns[0].groups[0].url, GROUP.url);
+assert.equal(data.get('cloud').configRevision, 1);
+
+step('an edit in the web app (with a new image) reaches the browser');
+const dot = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+r = await api('PUT', `/api/workspaces/${ws.id}/extension-images/webimg1`, { name: 'web.png', type: 'image/png', data: dot });
+assert.equal(r.status, 204, r.text);
+const edited = structuredClone(webCfg.settings);
+edited.campaigns[0].name = 'ชุดจากเว็บ';
+edited.campaigns[0].posts = [{ id: 'wp1', text: 'แก้จากเว็บ {{code}}', imageIds: ['webimg1'], groupUrls: [] }];
+r = await api('PUT', `${devBase}/config`, { settings: edited, baseRevision: 1 });
+assert.equal(r.status, 200, r.text);
+r = await bg('cloudConfig', { mode: 'auto' });
+assert.equal(r.ok, true, r.error);
+assert.equal(data.get('settings').campaigns[0].name, 'ชุดจากเว็บ');
+assert.equal(data.get('img:webimg1').data, dot);
+assert.ok(data.get('cloudPulled'), 'dashboard told to reload');
+assert.equal(data.get('cloud').configRevision, 2);
+
+step('an edit in the browser goes up; state, log and a command from the web come back');
+const s2 = data.get('settings');
+s2.campaigns[0].config.groupDelayMin = 4;
+await local.set({ settings: s2 });
+r = await bg('cloudConfig', { mode: 'auto' });
+assert.equal(r.ok, true, r.error);
+webCfg = (await api('GET', `${devBase}/config`)).json;
+assert.equal(webCfg.revision, 3);
+assert.equal(webCfg.settings.campaigns[0].config.groupDelayMin, 4);
+const cmd = (await api('POST', `${devBase}/commands`, { cmd: 'clearLogs' })).json;
+assert.equal(cmd.status, 'pending');
+r = await bg('cloudConfig', { mode: 'auto' });
+assert.equal(r.ok, true, r.error);
+const cmdDone = (await api('GET', `${devBase}/commands/${cmd.id}`)).json;
+assert.equal(cmdDone.status, 'done');
+assert.equal(cmdDone.result.ok, true);
+const live = (await api('GET', `${devBase}/live`)).json;
+assert.equal(live.online, true);
+assert.equal(live.revision, 3);
+assert.ok(live.state && typeof live.state === 'object', 'state reported');
+assert.ok(live.logs.some((l) => l.msg.includes('โหลดการตั้งค่าจากเว็บแล้ว')), 'log lines reported');
 
 step('faster anti-ban for the test: no typing, no browsing, 1-2 minute gap');
 const engine = (await api('GET', `/api/workspaces/${ws.id}/engine`)).json;
@@ -268,20 +326,24 @@ await schedule(ws.id, account.id);
 r = await bg('cloudSync');
 assert.equal(r.posted, false);
 
-step('paused: no posts are taken');
-await bg('cloudPause', { paused: true });
+step('paused in the web app: no posts are taken');
+r = await api('PUT', `/api/workspaces/${ws.id}/devices/${devices[0].id}`, { jobsPaused: true });
+assert.equal(r.status, 200, r.text);
 r = await bg('cloudSync');
 assert.equal(r.posted, false);
-await bg('cloudPause', { paused: false });
+assert.equal(data.get('cloud').paused, true);
+await api('PUT', `/api/workspaces/${ws.id}/devices/${devices[0].id}`, { jobsPaused: false });
+await bg('cloudSync');
+assert.equal(data.get('cloud').paused, false);
 
 step('unbound in the web app: the extension reports it');
 await api('DELETE', `/api/workspaces/${ws.id}/devices/${devices[0].id}`);
 r = await bg('cloudSync');
 assert.equal(r.ok, false);
 assert.match(r.error, /ยกเลิกการผูก/);
-r = await bg('cloudUnpair');
-assert.equal(r.ok, true);
+assert.equal(data.get('cloud').enabled, false, 'back to "not paired" by itself');
 assert.equal(alarms.has('fbap-cloud'), false);
+assert.ok(data.get('settings').campaigns.length, 'the campaigns stay in the browser');
 
 console.log('\nผ่านทุกข้อ ✔');
 process.exit(0);

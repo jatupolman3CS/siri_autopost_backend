@@ -230,6 +230,87 @@ public sealed class DevicePairingRepository(AppDbContext db) : IDevicePairingRep
     public void Add(DevicePairing pairing) => db.DevicePairings.Add(pairing);
 }
 
+public sealed class ExtensionRepository(AppDbContext db) : IExtensionRepository
+{
+    public Task<ExtensionConfig?> GetConfigAsync(Guid deviceId, CancellationToken ct = default) =>
+        db.ExtensionConfigs.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
+
+    public async Task<(int Revision, bool HasContent)?> GetConfigHeadAsync(Guid deviceId, CancellationToken ct = default)
+    {
+        var head = await db.ExtensionConfigs.Where(x => x.DeviceId == deviceId)
+            .Select(x => new { x.Revision, x.HasContent }).FirstOrDefaultAsync(ct);
+        return head is null ? null : (head.Revision, head.HasContent);
+    }
+
+    public async Task<IReadOnlyList<string>> ListSettingsAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.ExtensionConfigs.Where(x => x.WorkspaceId == workspaceId).Select(x => x.Settings).ToListAsync(ct);
+
+    public void Add(ExtensionConfig config) => db.ExtensionConfigs.Add(config);
+
+    public async Task<IReadOnlySet<string>> ExistingImageIdsAsync(
+        Guid workspaceId, IEnumerable<string> imageIds, CancellationToken ct = default)
+    {
+        var ids = imageIds.Distinct().ToList();
+        if (ids.Count == 0) return new HashSet<string>();
+        var found = await db.ExtensionImages
+            .Where(x => x.WorkspaceId == workspaceId && ids.Contains(x.ImageId))
+            .Select(x => x.ImageId)
+            .ToListAsync(ct);
+        return found.ToHashSet();
+    }
+
+    public Task<ExtensionImage?> GetImageAsync(Guid workspaceId, string imageId, CancellationToken ct = default) =>
+        db.ExtensionImages.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.ImageId == imageId, ct);
+
+    public Task<int> DeleteImagesExceptAsync(
+        Guid workspaceId, IReadOnlySet<string> keep, DateTimeOffset before, CancellationToken ct = default)
+    {
+        var ids = keep.ToList();
+        return db.ExtensionImages
+            .Where(x => x.WorkspaceId == workspaceId && x.CreatedAt < before && !ids.Contains(x.ImageId))
+            .ExecuteDeleteAsync(ct);
+    }
+
+    public void Add(ExtensionImage image) => db.ExtensionImages.Add(image);
+
+    public Task<DeviceState?> GetStateAsync(Guid deviceId, CancellationToken ct = default) =>
+        db.DeviceStates.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
+
+    public void Add(DeviceState state) => db.DeviceStates.Add(state);
+
+    public async Task<IReadOnlyList<DeviceLog>> ListLogsAsync(Guid deviceId, int take, CancellationToken ct = default)
+    {
+        var newest = await db.DeviceLogs.Where(x => x.DeviceId == deviceId)
+            .OrderByDescending(x => x.T).Take(take).ToListAsync(ct);
+        newest.Reverse();
+        return newest;
+    }
+
+    public async Task<long> LastLogTAsync(Guid deviceId, CancellationToken ct = default) =>
+        await db.DeviceLogs.Where(x => x.DeviceId == deviceId).MaxAsync(x => (long?)x.T, ct) ?? 0;
+
+    public async Task PruneLogsAsync(Guid deviceId, int keep, CancellationToken ct = default)
+    {
+        var cut = await db.DeviceLogs.Where(x => x.DeviceId == deviceId)
+            .OrderByDescending(x => x.T).Skip(keep).Select(x => (long?)x.T).FirstOrDefaultAsync(ct);
+        if (cut is { } t) await db.DeviceLogs.Where(x => x.DeviceId == deviceId && x.T <= t).ExecuteDeleteAsync(ct);
+    }
+
+    public Task ClearLogsAsync(Guid deviceId, CancellationToken ct = default) =>
+        db.DeviceLogs.Where(x => x.DeviceId == deviceId).ExecuteDeleteAsync(ct);
+
+    public void AddRange(IEnumerable<DeviceLog> logs) => db.DeviceLogs.AddRange(logs);
+
+    public Task<DeviceCommand?> GetCommandAsync(Guid deviceId, Guid commandId, CancellationToken ct = default) =>
+        db.DeviceCommands.FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.Id == commandId, ct);
+
+    public async Task<IReadOnlyList<DeviceCommand>> ListPendingCommandsAsync(Guid deviceId, CancellationToken ct = default) =>
+        await db.DeviceCommands.Where(x => x.DeviceId == deviceId && x.Status == CommandStatus.Pending)
+            .OrderBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public void Add(DeviceCommand command) => db.DeviceCommands.Add(command);
+}
+
 public sealed class MemberRepository(AppDbContext db) : IMemberRepository
 {
     public async Task<IReadOnlyList<WorkspaceMember>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>

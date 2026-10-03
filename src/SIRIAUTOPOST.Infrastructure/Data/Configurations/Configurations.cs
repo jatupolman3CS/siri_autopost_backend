@@ -179,3 +179,66 @@ public sealed class PromoConfiguration : IEntityTypeConfiguration<Promo>
         b.Property(x => x.Discount).HasMaxLength(10).IsRequired();
     }
 }
+
+public sealed class ExtensionConfigConfiguration : IEntityTypeConfiguration<ExtensionConfig>
+{
+    public void Configure(EntityTypeBuilder<ExtensionConfig> b)
+    {
+        b.ToTable("extension_configs");
+        // text, not jsonb: the JSON is compared byte for byte to keep the revision on identical saves.
+        b.Property(x => x.Settings).HasColumnType("text").IsRequired();
+        b.HasIndex(x => x.DeviceId).IsUnique();
+        b.HasIndex(x => x.WorkspaceId);
+        b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ExtensionImageConfiguration : IEntityTypeConfiguration<ExtensionImage>
+{
+    public void Configure(EntityTypeBuilder<ExtensionImage> b)
+    {
+        b.ToTable("extension_images");
+        b.Property(x => x.ImageId).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Name).HasMaxLength(200).IsRequired();
+        b.Property(x => x.ContentType).HasMaxLength(100);
+        b.HasIndex(x => new { x.WorkspaceId, x.ImageId }).IsUnique();
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class DeviceStateConfiguration : IEntityTypeConfiguration<DeviceState>
+{
+    public void Configure(EntityTypeBuilder<DeviceState> b)
+    {
+        b.ToTable("device_states");
+        b.Property(x => x.Json).HasColumnType("text").IsRequired();
+        b.HasIndex(x => x.DeviceId).IsUnique();
+        b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class DeviceLogConfiguration : IEntityTypeConfiguration<DeviceLog>
+{
+    public void Configure(EntityTypeBuilder<DeviceLog> b)
+    {
+        b.ToTable("device_logs");
+        b.Property(x => x.Level).HasMaxLength(20);
+        b.Property(x => x.Message).HasMaxLength(DeviceLog.MaxMessageLength);
+        b.HasIndex(x => new { x.DeviceId, x.T });
+        b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class DeviceCommandConfiguration : IEntityTypeConfiguration<DeviceCommand>
+{
+    public void Configure(EntityTypeBuilder<DeviceCommand> b)
+    {
+        b.ToTable("device_commands");
+        b.Property(x => x.Cmd).HasMaxLength(40).IsRequired();
+        b.Property(x => x.Args).HasColumnType("text").IsRequired();
+        b.Property(x => x.Result).HasColumnType("text");
+        b.HasIndex(x => new { x.DeviceId, x.Status });
+        b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}

@@ -17,7 +17,9 @@ async function inflateRaw(bytes, limit) {
     stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
   } catch {
     // Node before 20.14 has no 'deflate-raw' DecompressionStream.
-    const zlib = await import('node:zlib');
+    // A variable specifier: browser bundlers (Vite, Angular) must not try to resolve a Node module.
+    const zlibModule = 'node:zlib';
+    const zlib = await import(/* @vite-ignore */ zlibModule);
     let out;
     try {
       out = zlib.inflateRawSync(bytes, { maxOutputLength: Math.max(1, limit) });

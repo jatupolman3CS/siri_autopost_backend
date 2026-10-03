@@ -8,6 +8,7 @@ using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
+using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
 using SIRIAUTOPOST.Application.Features.Workspaces;
@@ -70,12 +71,30 @@ public static class DependencyInjection
         services.AddQuery<GetDevicesQuery, IReadOnlyList<DeviceDto>, GetDevicesQueryHandler>();
         services.AddCommand<CreatePairingCodeCommand, PairingCodeDto, CreatePairingCodeCommandHandler>();
         services.AddCommand<RevokeDeviceCommand, Unit, RevokeDeviceCommandHandler>();
+        services.AddCommand<UpdateDeviceCommand, DeviceDto, UpdateDeviceCommandHandler>();
         services.AddCommand<PairDeviceCommand, PairResultDto, PairDeviceCommandHandler>();
         services.AddCommand<DeviceHeartbeatCommand, DeviceStatusDto, DeviceHeartbeatCommandHandler>();
         services.AddCommand<SyncDeviceGroupsCommand, int, SyncDeviceGroupsCommandHandler>();
         services.AddCommand<ClaimJobCommand, JobDto?, ClaimJobCommandHandler>();
         services.AddCommand<ReportJobResultCommand, PostDto, ReportJobResultCommandHandler>();
         services.AddQuery<GetDeviceMediaQuery, MediaContent, GetDeviceMediaQueryHandler>();
+
+        // The extension's own campaigns: edited in the web app, synced by the device
+        services.AddQuery<GetExtensionConfigQuery, ExtensionConfigDto, GetExtensionConfigQueryHandler>();
+        services.AddCommand<SaveExtensionConfigCommand, ConfigSavedDto, SaveExtensionConfigCommandHandler>();
+        services.AddQuery<GetExtensionImageQuery, MediaContent, GetExtensionImageQueryHandler>();
+        services.AddCommand<PutExtensionImageCommand, Unit, PutExtensionImageCommandHandler>();
+        services.AddQuery<GetDeviceLiveQuery, DeviceLiveDto, GetDeviceLiveQueryHandler>();
+        services.AddCommand<SendDeviceCommandCommand, DeviceCommandDto, SendDeviceCommandCommandHandler>();
+        services.AddQuery<GetDeviceCommandQuery, DeviceCommandDto, GetDeviceCommandQueryHandler>();
+        services.AddCommand<ClearDeviceLogsCommand, Unit, ClearDeviceLogsCommandHandler>();
+        services.AddCommand<DeviceSyncCommand, DeviceSyncDto, DeviceSyncCommandHandler>();
+        services.AddQuery<GetOwnExtensionConfigQuery, ExtensionConfigDto, GetOwnExtensionConfigQueryHandler>();
+        services.AddCommand<SaveOwnExtensionConfigCommand, ConfigSavedDto, SaveOwnExtensionConfigCommandHandler>();
+        services.AddQuery<GetMissingImagesQuery, MissingImagesDto, GetMissingImagesQueryHandler>();
+        services.AddQuery<GetOwnExtensionImageQuery, ExtensionImageDto, GetOwnExtensionImageQueryHandler>();
+        services.AddCommand<PutOwnExtensionImageCommand, Unit, PutOwnExtensionImageCommandHandler>();
+        services.AddCommand<ReportCommandResultCommand, Unit, ReportCommandResultCommandHandler>();
 
         // Platform admin
         services.AddScoped<AdminCustomers>();

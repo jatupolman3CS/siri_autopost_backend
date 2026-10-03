@@ -19,6 +19,11 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Promo> Promos => Set<Promo>();
     public DbSet<AuditEntry> Audit => Set<AuditEntry>();
+    public DbSet<ExtensionConfig> ExtensionConfigs => Set<ExtensionConfig>();
+    public DbSet<ExtensionImage> ExtensionImages => Set<ExtensionImage>();
+    public DbSet<DeviceState> DeviceStates => Set<DeviceState>();
+    public DbSet<DeviceLog> DeviceLogs => Set<DeviceLog>();
+    public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
 
     // Picks up every IEntityTypeConfiguration in Data/Configurations.
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>

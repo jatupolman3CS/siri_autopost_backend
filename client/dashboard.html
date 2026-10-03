@@ -235,6 +235,7 @@
           <span id="cloudBadge" class="badge">ไม่ได้จับคู่</span>
         </div>
         <p class="hint">จับคู่เครื่องนี้กับเวิร์กสเปซบนเว็บ AutoPost แล้วโพสต์ที่ตั้งเวลาไว้บนเว็บ (บัญชี "Facebook · ชื่อเครื่อง") จะถูกโพสต์จากเครื่องนี้ด้วยวิธีเดียวกับชุดโพสต์ กลุ่มที่ตั้งไว้ในทุกชุดของเครื่องนี้จะไปเป็นกลุ่มให้เลือกบนเว็บ ทำงานแยกจากปุ่มเริ่ม/หยุด</p>
+        <p class="hint">ชุดโพสต์ทั้งหมดของเครื่องนี้ (กลุ่ม เนื้อหา รูป เวลา Telegram) จะขึ้นไปอยู่ที่หน้าเว็บ "ชุดโพสต์" ด้วย แก้ที่ไหนก็ได้ อีกฝั่งได้ของใหม่ภายใน ~30 วินาที (แก้พร้อมกันทั้งสองฝั่ง ใช้ของเว็บ) และกดเริ่ม/หยุด/ทดสอบโพสต์จากเว็บได้</p>
         <div id="cloudStatus" class="cfg-status none" hidden></div>
         <div id="cloudForm" class="backup-box">
           <label>URL ของ API เว็บ AutoPost
@@ -250,6 +251,8 @@
         </div>
         <div id="cloudActions" class="row wrap" hidden>
           <button id="btnCloudSync" class="btn small" type="button">ซิงก์และรับงานตอนนี้</button>
+          <button id="btnCloudPull" class="btn small" type="button">ดึงการตั้งค่าจากเว็บ</button>
+          <button id="btnCloudPush" class="btn small" type="button">อัปโหลดของเครื่องนี้ขึ้นเว็บ</button>
           <button id="btnCloudPause" class="btn small" type="button">พักรับงาน</button>
           <button id="btnCloudUnpair" class="btn small ghost danger-text" type="button">ยกเลิกการจับคู่</button>
         </div>

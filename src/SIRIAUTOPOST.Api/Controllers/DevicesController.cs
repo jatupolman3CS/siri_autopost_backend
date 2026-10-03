@@ -22,6 +22,15 @@ public sealed class DevicesController : ControllerBase
         Guid wsId, [FromServices] ICommandHandler<CreatePairingCodeCommand, PairingCodeDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new CreatePairingCodeCommand(wsId), ct);
 
+    public sealed record UpdateDeviceRequest(string? Name, bool? JobsPaused);
+
+    /// <summary>Renames the browser (and its Facebook account) or pauses the jobs it takes; null keeps a value.</summary>
+    [HttpPut("{deviceId:guid}")]
+    public Task<DeviceDto> Update(
+        Guid wsId, Guid deviceId, UpdateDeviceRequest r,
+        [FromServices] ICommandHandler<UpdateDeviceCommand, DeviceDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new UpdateDeviceCommand(wsId, deviceId, r.Name, r.JobsPaused), ct);
+
     [HttpDelete("{deviceId:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Revoke(

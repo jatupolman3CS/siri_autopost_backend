@@ -311,6 +311,7 @@
     cloudPair: CLOUD_LOCAL,
     cloudUnpair: CLOUD_LOCAL,
     cloudSync: CLOUD_LOCAL,
+    cloudConfig: CLOUD_LOCAL,
     cloudPause: CLOUD_LOCAL,
   };
 

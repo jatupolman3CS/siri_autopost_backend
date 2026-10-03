@@ -143,3 +143,38 @@ public interface ISnippetRepository
     Task<IReadOnlyList<Snippet>> ListAsync(Guid workspaceId, CancellationToken ct = default);
     void Add(Snippet snippet);
 }
+
+/// <summary>The extension's settings, media, run state, log and web commands of paired devices.</summary>
+public interface IExtensionRepository
+{
+    Task<ExtensionConfig?> GetConfigAsync(Guid deviceId, CancellationToken ct = default);
+    /// <summary>Revision and HasContent of a device's settings without loading the JSON (null: none saved).</summary>
+    Task<(int Revision, bool HasContent)?> GetConfigHeadAsync(Guid deviceId, CancellationToken ct = default);
+    /// <summary>Saved settings JSON of every device of a workspace (to know which images are in use).</summary>
+    Task<IReadOnlyList<string>> ListSettingsAsync(Guid workspaceId, CancellationToken ct = default);
+    void Add(ExtensionConfig config);
+
+    /// <summary>The ids among <paramref name="imageIds"/> the workspace already has.</summary>
+    Task<IReadOnlySet<string>> ExistingImageIdsAsync(Guid workspaceId, IEnumerable<string> imageIds, CancellationToken ct = default);
+    Task<ExtensionImage?> GetImageAsync(Guid workspaceId, string imageId, CancellationToken ct = default);
+    /// <summary>Deletes images created before <paramref name="before"/> that are not in <paramref name="keep"/>.</summary>
+    Task<int> DeleteImagesExceptAsync(Guid workspaceId, IReadOnlySet<string> keep, DateTimeOffset before, CancellationToken ct = default);
+    void Add(ExtensionImage image);
+
+    Task<DeviceState?> GetStateAsync(Guid deviceId, CancellationToken ct = default);
+    void Add(DeviceState state);
+
+    /// <summary>The newest log lines of a device, oldest first.</summary>
+    Task<IReadOnlyList<DeviceLog>> ListLogsAsync(Guid deviceId, int take, CancellationToken ct = default);
+    /// <summary>Timestamp of the newest stored line (0 when none).</summary>
+    Task<long> LastLogTAsync(Guid deviceId, CancellationToken ct = default);
+    /// <summary>Deletes all but the newest <paramref name="keep"/> lines.</summary>
+    Task PruneLogsAsync(Guid deviceId, int keep, CancellationToken ct = default);
+    Task ClearLogsAsync(Guid deviceId, CancellationToken ct = default);
+    void AddRange(IEnumerable<DeviceLog> logs);
+
+    Task<DeviceCommand?> GetCommandAsync(Guid deviceId, Guid commandId, CancellationToken ct = default);
+    /// <summary>Commands not handed to the device yet, oldest first.</summary>
+    Task<IReadOnlyList<DeviceCommand>> ListPendingCommandsAsync(Guid deviceId, CancellationToken ct = default);
+    void Add(DeviceCommand command);
+}

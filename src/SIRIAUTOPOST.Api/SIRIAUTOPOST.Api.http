@@ -1,0 +1,17 @@
+@host = http://localhost:5100
+
+GET {{host}}/api/posts
+Accept: application/json
+
+###
+
+POST {{host}}/api/posts
+Content-Type: application/json
+
+{
+  "content": "{สวัสดี|หวัดดี} ทดสอบโพสต์",
+  "groupUrl": "https://www.facebook.com/groups/123456",
+  "scheduledAt": null
+}
+
+###

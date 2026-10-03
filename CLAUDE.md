@@ -4,16 +4,40 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-FB Group AutoPost: a Chrome extension that posts to Facebook groups while imitating a human, plus an optional .NET server that lets people edit configs and control the extension remotely. The repo holds two parts that depend on each other:
+FB Group AutoPost: a Chrome extension that posts to Facebook groups while imitating a human, plus .NET servers that let people edit configs and control the extension remotely. The repo holds three parts:
 
+- `src/` + `tests/` + `SIRIAUTOPOST.sln`: the **new** Clean Architecture solution (.NET 10, EF Core, PostgreSQL). It's a skeleton with one sample feature (Posts) and is not wired to the extension yet. New backend work goes here.
+- `backend/SIRI.AUTOPOST.Server/`: the **legacy** server, a single-project minimal API that the extension and the legacy web UI talk to today.
 - `client/`: the Chrome extension (Manifest V3, plain ES modules, no build step).
-- `backend/SIRI.AUTOPOST.Server/`: an ASP.NET Core (.NET 10) minimal API with EF Core and PostgreSQL.
 
 User-facing strings (UI text, API error messages, log messages) are in **Thai**. Code comments are in English. Keep both conventions.
 
-The sibling repo `siri_autopost_ui` is a Vite-hosted copy of the web UI. See "Duplicated files" below.
+The sibling repo `siri_autopost_ui` holds the new Angular frontend for `SIRIAUTOPOST.Api` at its root, and a Vite-hosted copy of the legacy web UI in `legacy/`. See "Duplicated files" below.
 
-## Commands
+## New solution (`SIRIAUTOPOST.sln`)
+
+```bash
+dotnet build SIRIAUTOPOST.sln
+dotnet test SIRIAUTOPOST.sln                     # integration tests need PostgreSQL, see below
+dotnet test tests/SIRIAUTOPOST.Domain.Tests      # one project
+dotnet test SIRIAUTOPOST.sln --filter "FullyQualifiedName~GroupUrlTests"   # one class/test
+
+# API on http://localhost:5100 (OpenAPI at /openapi/v1.json in Development)
+cd src/SIRIAUTOPOST.Api && dotnet run
+
+# Migrations live in Infrastructure; the Api is the startup project
+dotnet ef migrations add <Name> -p src/SIRIAUTOPOST.Infrastructure -s src/SIRIAUTOPOST.Api -o Data/Migrations
+```
+
+- Dev connection string is in `src/SIRIAUTOPOST.Api/appsettings.Development.json` (`localhost:5432`, database `siriautopost`). `Database:MigrateOnStartup` is true only in Development.
+- `SIRIAUTOPOST.Api.IntegrationTests` runs the real API through `WebApplicationFactory<Program>` against PostgreSQL. It drops and recreates the database `siriautopost_test` (override the whole connection string with `SIRIAUTOPOST_TEST_DB`).
+- Layer rules. **Domain** references nothing. **Application** references Domain only. **Infrastructure** references Application and Domain. **Api** references Application and Infrastructure. Keep entity invariants in Domain (`Post.Create`, `Post.Schedule`, the `GroupUrl` value object) and input-shape checks in FluentValidation validators (`Application/Validators`).
+- CQRS without a mediator library. Each command or query is a record plus a handler in `Application/Features/<Feature>/{Commands,Queries}`, and it has to be registered in `Application/DependencyInjection.cs`. `AddCommand<,,>` wraps each handler in `ValidationCommandHandlerDecorator`, so validators always run first. Controllers inject `ICommandHandler<,>`/`IQueryHandler<,>` with `[FromServices]`.
+- Errors. `ExceptionHandlingMiddleware` maps `ValidationException` to 400 (`ValidationProblemDetails` with camelCase keys), `NotFoundException` to 404 and `DomainException` to 422. Anything else becomes a 500.
+- EF Core: one `IEntityTypeConfiguration` per entity in `Infrastructure/Data/Configurations`, snake_case naming, and `AppDbContext` doubles as `IUnitOfWork`. Store `DateTimeOffset` values as UTC, because Npgsql rejects non-zero offsets for `timestamptz`.
+- When the API contract changes, refresh `openapi.snapshot.json` in `siri_autopost_ui` (`curl localhost:5100/openapi/v1.json`) and run `npm run gen:api` there.
+
+## Legacy server and extension commands
 
 ```bash
 # Backend: local dev (http://localhost:5080, ASPNETCORE_ENVIRONMENT=Development)
@@ -35,9 +59,9 @@ node client/tools/test-online.mjs http://localhost:5080 admin <admin-password>
 node client/tools/siri-to-config.mjs <export.zip> [options]
 ```
 
-There are no unit test projects and no linter config. `test-online.mjs` is the only automated test, and it needs a live server and database.
+The legacy server has no unit test project. Its only automated test is `test-online.mjs`, which needs a live server and database. Neither part has a linter config.
 
-## Backend configuration quirks
+## Legacy backend configuration quirks
 
 - `Program.cs` reads a `.env` file from the current directory or its parent before startup. Variables already set in the environment win.
 - Connection string: `ConnectionStrings:Default`, falling back to `AppSettings:ConnectionStrings`. Its database name is then **replaced** by `Database:Name`: `SIRIAUTOPOST` in Development and `SIRIAUTOPOST_PRD` otherwise, Docker included. The server creates the database on first start, so the DB user needs CREATEDB.
@@ -46,7 +70,7 @@ There are no unit test projects and no linter config. `test-online.mjs` is the o
 - Use the **root** `docker-compose.yml`. `backend/docker-compose.yml` still points at the old `server/Dockerfile` layout and is broken. `client/README.md` and `client/.dockerignore` also still refer to `server/`.
 - The `<None Include="..\..\dashboard.html" ...>` items in the csproj resolve to the repo root, not `client/`, so a plain `dotnet publish` doesn't copy the extension files. The Dockerfile copies them into `/out/extension` itself.
 
-## Architecture
+## Legacy architecture
 
 ### Three API surfaces (`backend/SIRI.AUTOPOST.Server/Endpoints/`)
 
@@ -88,4 +112,4 @@ So `dashboard.js` must keep talking only through those chrome APIs. A new chrome
 
 ## Duplicated files
 
-`siri_autopost_ui` contains byte-identical copies of `client/dashboard.{css,js}`, `client/lib/*` and `client/icons/`, and near-copies of `client/dashboard.html` and `backend/SIRI.AUTOPOST.Server/wwwroot/{index,login}.html` + `web/*`. The near-copies drop the `/app/` path prefix and load the shim as a module. When you change any of these files, mirror the change in the other repo.
+`siri_autopost_ui/legacy/` contains byte-identical copies of `client/dashboard.{css,js}`, `client/lib/*` and `client/icons/`, and near-copies of `client/dashboard.html` and `backend/SIRI.AUTOPOST.Server/wwwroot/{index,login}.html` + `web/*`. The near-copies drop the `/app/` path prefix and load the shim as a module. When you change any of these files, mirror the change in the other repo.

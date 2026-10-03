@@ -35,7 +35,8 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
      external server instead;
    - `Jwt__Key` (32+ chars), or derived from `AppSettings__Secret`;
    - optional `Admin__Email` / `Admin__Password` to create the platform admin.
-4. **Jenkins jobs** (Pipeline, "Pipeline script": paste `deploy/jenkins/SIRIAUTOPOST-API.groovy` and `SIRIAUTOPOST-WEB.groovy`, same style as SIRISTUDIOPHOT-API; the `Jenkinsfile` in each repo is the same pipeline):
+   - optional `Google__ClientId` to enable "Sign in with Google" (also add the site origin as an Authorized JavaScript origin on that OAuth client).
+4. **Jenkins jobs** (Pipeline, "Pipeline script": paste `deploy/jenkins/SIRIAUTOPOST-API.groovy` and `SIRIAUTOPOST-WEB.groovy`; same shape as SIRIEDUMARKET-API: git checkout with `gitlab-auth-id`, docker build + push, `kubectl set image`, `rollout status`. The `Jenkinsfile` in each repo is the same script. The API secret `api-env` is the `siriautopost-env-file` credential as it is, so it decides the database (`ConnectionStrings__Default`); `deploy/prepare-env.sh` and `deploy/k8s/postgres` are no longer used by the pipeline):
    - `SIRIAUTOPOST-API` → https://github.com/jatupolman3CS/siri_autopost_backend.git
    - `SIRIAUTOPOST-WEB` → https://github.com/jatupolman3CS/siri_autopost_ui.git
 5. Build `SIRIAUTOPOST-API` first (it creates Service `api`, which the dashboard's nginx needs), then

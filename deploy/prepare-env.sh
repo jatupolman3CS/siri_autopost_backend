@@ -20,7 +20,7 @@ getv() { grep -E "^$1=" "$TMP" | tail -n 1 | cut -d= -f2- || true; }
 
 : > "$API_OUT"
 : > "$PG_OUT"
-grep -E '^(ConnectionStrings|Jwt|Admin|Cors|Database)__[A-Za-z0-9_]+=' "$TMP" >> "$API_OUT" || true
+grep -E '^(ConnectionStrings|Jwt|Admin|Cors|Database|Google)__[A-Za-z0-9_]+=' "$TMP" >> "$API_OUT" || true
 
 db_name="$(getv SIRIAUTOPOST_DB_NAME)"
 db_name="${db_name:-$DB_NAME_DEFAULT}"

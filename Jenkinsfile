@@ -73,7 +73,7 @@ pipeline {
                                 # Key names and encoding only, never values.
                                 echo "encoding: $(file -b "$ENV_FILE" 2>/dev/null || echo unknown)" >&2
                                 echo "keys found:" >&2
-                                cut -d= -f1 "$ENV_FILE" | sed -n '1,20l' >&2
+                                grep -oE '^[^=#]+=' "$ENV_FILE" | sed 's/=$//' | sed -n '1,30l' >&2 || true
                                 exit 1
                             fi
                         done

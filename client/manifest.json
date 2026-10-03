@@ -1,0 +1,42 @@
+{
+  "manifest_version": 3,
+  "name": "FB Group Auto Poster (Human-like)",
+  "short_name": "FB AutoPost",
+  "version": "2.0.0",
+  "description": "โพสต์ลงกลุ่ม Facebook อัตโนมัติ แบบเลียนพฤติกรรมมนุษย์: ชุดโพสต์ สุ่มลำดับ สุ่มเวลา พิมพ์ทีละตัว แนบรูป แจ้งเตือน Telegram พร้อมภาพหน้าจอ",
+  "permissions": [
+    "storage",
+    "unlimitedStorage",
+    "alarms",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.facebook.com/*",
+    "https://web.facebook.com/*",
+    "https://api.telegram.org/*"
+  ],
+  "optional_host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "FB AutoPost - เปิดหน้าตั้งค่า",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "minimum_chrome_version": "116"
+}

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>เข้าสู่ระบบ · FB AutoPost</title>
+  <link rel="icon" href="/app/icons/icon32.png">
+  <link rel="stylesheet" href="/app/dashboard.css">
+  <link rel="stylesheet" href="/web/admin.css">
+</head>
+<body>
+  <main class="login">
+    <form id="form" class="card">
+      <div class="brand">
+        <img src="/app/icons/icon48.png" alt="" width="32" height="32">
+        <div>
+          <h1>FB AutoPost Online</h1>
+          <p class="sub">ตั้งค่าจากที่ไหนก็ได้ เครื่องรันดึง config เอง</p>
+        </div>
+      </div>
+      <label>ชื่อผู้ใช้
+        <input type="text" id="username" autocomplete="username" required>
+      </label>
+      <label>รหัสผ่าน
+        <input id="password" type="password" autocomplete="current-password" required>
+      </label>
+      <p id="error" class="error" hidden></p>
+      <button class="btn primary" type="submit">เข้าสู่ระบบ</button>
+    </form>
+  </main>
+  <script>
+    const form = document.getElementById('form');
+    const err = document.getElementById('error');
+    form.addEventListener('submit', async (ev) => {
+      ev.preventDefault();
+      err.hidden = true;
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: form.username.value, password: form.password.value }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        err.textContent = d.error || 'เข้าสู่ระบบไม่สำเร็จ';
+        err.hidden = false;
+        return;
+      }
+      const next = new URLSearchParams(location.search).get('next') || '/';
+      location.href = next.startsWith('/') && !next.startsWith('//') ? next : '/';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,452 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FB AutoPost</title>
+  <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon48.png" alt="" width="32" height="32">
+      <div>
+        <h1>FB Group AutoPost</h1>
+        <p class="sub">โพสต์ลงกลุ่มอัตโนมัติ แบบสุ่มพฤติกรรมเหมือนคนโพสต์เอง</p>
+      </div>
+    </div>
+    <div class="actions">
+      <span id="saveState" class="save-state"></span>
+      <span id="statusBadge" class="badge">หยุด</span>
+      <button id="btnStart" class="btn primary">เริ่มทำงาน</button>
+      <button id="btnStop" class="btn danger">หยุด</button>
+    </div>
+  </header>
+
+  <main class="layout">
+    <div class="col">
+      <!-- Campaign tabs -->
+      <nav class="tabs" id="tabs" aria-label="ชุดโพสต์"></nav>
+
+      <div id="emptyCampaign" class="card empty" hidden>
+        <p>ยังไม่มีชุดโพสต์ กด "+ เพิ่มชุด" เพื่อเริ่ม</p>
+      </div>
+
+      <div id="campaignEditor">
+        <!-- Campaign header -->
+        <section class="card">
+          <div class="card-head">
+            <label class="grow">ชื่อชุดโพสต์
+              <input type="text" id="campName" maxlength="60">
+            </label>
+            <label class="check switch"><input type="checkbox" id="campEnabled"> เปิดใช้ชุดนี้</label>
+          </div>
+          <div id="campStatus" class="camp-status"></div>
+          <div class="row wrap">
+            <button id="btnRunNow" class="btn small">โพสต์กลุ่มถัดไปของชุดนี้ทันที</button>
+            <button id="btnDupCamp" class="btn ghost small">ทำสำเนาชุด</button>
+            <button id="btnDelCamp" class="btn ghost small danger-text">ลบชุด</button>
+          </div>
+        </section>
+
+        <!-- 1. Groups -->
+        <section class="card">
+          <h2><span class="num">1</span> กลุ่มในชุดนี้</h2>
+          <p class="hint">
+            ช่อง <b>ข้อความเฉพาะกลุ่ม</b> ใช้ใส่ข้อความที่ต่างกันแต่ละกลุ่ม เช่น รหัสการซื้อการเข้ากลุ่ม
+            ระบบจะใส่ไว้ <b>บรรทัดแรก</b> ของโพสต์ (หรือตรงตำแหน่ง <code>{{code}}</code> ถ้าใส่ไว้ในเนื้อหา) ปล่อยว่างได้
+          </p>
+          <p class="hint">
+            ช่อง <b>โพสต์ได้ … /วัน</b> = กฎของกลุ่มว่าโพสต์ได้กี่ครั้งใน 24 ชม. (เช่น 1 หรือ 3, <b>0 = ไม่จำกัด</b>)
+            ครบแล้วระบบข้ามกลุ่มนั้นไปก่อน กลุ่มอื่นโพสต์ต่อตามปกติ พ้น 24 ชม. นับจากโพสต์แรกค่อยโพสต์ได้อีก (ตัวเลขเป็นสีแดง = วันนี้ครบแล้ว)
+          </p>
+          <div class="groups-table" id="groupsTable"></div>
+          <div id="groupsInfo" class="info"></div>
+          <details class="bulk">
+            <summary>เพิ่มหลายกลุ่มพร้อมกัน</summary>
+            <p class="hint">
+              วางบรรทัดละ 1 กลุ่ม
+              · ใส่ข้อความเฉพาะกลุ่มหลัง <code>|</code> เช่น <code>https://www.facebook.com/groups/123 | รหัส: ABC123</code>
+              · บรรทัดที่ไม่ใช่ลิงก์ = ชื่อหมวด ใช้ตั้งชื่อกลุ่มด้านล่าง (เช่น "ชุดครุย 1", "ชุดครุย 2")
+              · มีหมายเหตุในวงเล็บ เช่น <code>(รอแอดมินอนุมัติ)</code> = เพิ่มแบบปิดไว้ก่อน เปิดเองเมื่อพร้อม
+              · จำนวนโพสต์ต่อวันตามกฎกลุ่ม ใส่ในวงเล็บเหลี่ยม เช่น <code>https://www.facebook.com/groups/123 [1/วัน]</code> หรือ <code>[วันละ 3]</code>
+            </p>
+            <textarea id="bulkGroups" rows="6" spellcheck="false" placeholder="ชุดครุย&#10;https://www.facebook.com/groups/111/&#10;https://www.facebook.com/groups/222/ (รอแอดมินอนุมัติ)"></textarea>
+            <button id="btnBulkAdd" class="btn small">เพิ่มเข้าตาราง</button>
+          </details>
+          <button id="btnAddGroup" class="btn ghost small">+ เพิ่มกลุ่ม</button>
+        </section>
+
+        <!-- 2. Posts -->
+        <section class="card">
+          <div class="card-head">
+            <h2><span class="num">2</span> เนื้อหาโพสต์</h2>
+            <label class="inline">
+              เลือกโพสต์
+              <select data-cfg="postMode">
+                <option value="random">สุ่ม (ไม่ซ้ำติดกัน)</option>
+                <option value="sequence">เรียงตามลำดับ</option>
+              </select>
+            </label>
+          </div>
+          <p class="hint">
+            ใส่ได้หลายแบบ รองรับคำสุ่ม <code>{สวัสดีครับ|หวัดดีครับ}</code>
+            และ <code>{{code}}</code> = ข้อความเฉพาะกลุ่ม (ไม่ใส่ = ขึ้นบรรทัดแรกอัตโนมัติ)
+            ระบบไม่กด Enter ระหว่างพิมพ์ จึงไม่เลือกคำที่ Facebook แนะนำ (แท็กคน/แฮชแท็ก)
+            ทุกโพสต์ใช้ได้กับทุกกลุ่ม แต่ละกลุ่มสุ่มหยิบโพสต์เอง (ไม่ซ้ำโพสต์ล่าสุดของกลุ่มนั้น)
+          </p>
+          <div class="lead-box">
+            <div class="card-head">
+              <strong>สื่อนำหน้าทุกโพสต์ในชุดนี้</strong>
+              <label class="btn ghost small file-btn">
+                + เพิ่มรูป/วิดีโอ
+                <input type="file" id="leadInput" accept="image/*,video/*" multiple hidden>
+              </label>
+            </div>
+            <p class="hint">รูป/วิดีโอในช่องนี้จะถูกแนบเป็นไฟล์แรก ๆ ของทุกโพสต์ในชุด (เรียงซ้ายไปขวา กด ◀ เพื่อเลื่อนขึ้นก่อน) แล้วตามด้วยรูปของแต่ละโพสต์</p>
+            <div id="leadMedia" class="images"></div>
+          </div>
+          <label>ข้อความเพิ่มในทุกโพสต์ของชุดนี้ (เช่น ลิงก์เว็บไซต์ / ช่องทางติดต่อ ไม่ใส่ก็ได้)
+            <textarea data-cfg="footer" rows="4" spellcheck="false" placeholder="สั่งทำรูปผ่านเว็บไซต์ : https://...&#10;ผลงาน : https://..."></textarea>
+          </label>
+          <label class="inline">ตำแหน่ง
+            <select data-cfg="footerPosition">
+              <option value="top">บนสุด: รหัสกลุ่ม → ข้อความนี้ → เนื้อหา</option>
+              <option value="afterGreeting">ต่อจากบรรทัดทักทาย (ขออนุญาต… / สวัสดี…) ก่อนเนื้อหา</option>
+              <option value="end">ท้ายโพสต์</option>
+            </select>
+          </label>
+          <p class="hint">"บนสุด": ใต้รหัสกลุ่ม (ถ้ามี) ก่อนเนื้อหาทั้งหมด "ต่อจากบรรทัดทักทาย": ถ้าโพสต์ไม่มีบรรทัดทักทาย จะขึ้นเป็นบรรทัดแรกแทน ใส่ให้ทุกโพสต์ (รวมโพสต์ที่มีแต่รูป) ถ้าโพสต์ไหนมีข้อความนี้อยู่แล้วจะไม่ใส่ซ้ำ ใส่อีโมจิหรือเส้นคั่นเพื่อให้เด่นได้</p>
+          <label>แท็กเพจในโพสต์ (บรรทัดละ 1 เพจ: ชื่อเพจตรงตาม Facebook | ลิงก์เพจ)
+            <textarea data-cfg="pageTags" rows="2" spellcheck="false" placeholder="ชื่อเพจ | https://www.facebook.com/..."></textarea>
+          </label>
+          <p class="hint">ถ้าในโพสต์มีชื่อเพจนี้ ตอนโพสต์จะพิมพ์ @ แล้วเลือกเพจจากรายการของ Facebook ชื่อเพจจะขึ้นเป็นตัวหนา กดแล้วไปที่เพจ (แท็กเฉพาะจุดแรกที่เจอ) ถ้า Facebook ไม่เสนอเพจนี้ จะใส่ชื่อเป็นข้อความธรรมดาแทน ลิงก์เพจเป็นแค่บันทึกไว้ดู</p>
+          <details class="bulk">
+            <summary>ค้นหา / แทนที่ข้อความในทุกโพสต์ (เช่น เปลี่ยนไลน์แอด)</summary>
+            <div class="grid2">
+              <label>ค้นหา
+                <input type="text" id="findText" spellcheck="false" placeholder="เช่น ไลน์ไอดีเก่า หรือลิงก์เก่า">
+              </label>
+              <label>แทนที่ด้วย
+                <input type="text" id="replaceText" spellcheck="false" placeholder="เช่น @siristudiophoto">
+              </label>
+            </div>
+            <div class="row wrap">
+              <select id="replaceScope">
+                <option value="current">เฉพาะชุดนี้</option>
+                <option value="all">ทุกชุด</option>
+              </select>
+              <button id="btnReplace" class="btn small" type="button">แทนที่ทั้งหมด</button>
+            </div>
+            <p class="hint">แทนที่ตรงตัวอักษร (ตัวพิมพ์เล็ก/ใหญ่ต้องตรง) ทั้งในข้อความโพสต์และข้อความต่อท้าย</p>
+          </details>
+          <div class="row wrap">
+            <label class="inline" hidden>แสดงโพสต์
+              <select id="postFilter"></select>
+            </label>
+            <span id="postCount" class="hint"></span>
+          </div>
+          <div id="posts"></div>
+          <button id="btnAddPost" class="btn ghost">+ เพิ่มแบบโพสต์</button>
+        </section>
+
+        <!-- 3. Timing -->
+        <section class="card">
+          <h2><span class="num">3</span> หน่วงเวลา และรอบ (ของชุดนี้)</h2>
+          <div class="grid2">
+            <label>หน่วงระหว่างกลุ่ม ต่ำสุด (นาที)
+              <input type="number" data-cfg="groupDelayMin" min="0.5" step="0.5">
+            </label>
+            <label>หน่วงระหว่างกลุ่ม สูงสุด (นาที)
+              <input type="number" data-cfg="groupDelayMax" min="0.5" step="0.5">
+            </label>
+            <label>เว้นระหว่างรอบ (ชั่วโมง)
+              <input type="number" data-cfg="roundIntervalHours" min="0.1" step="0.5">
+            </label>
+            <label>สุ่มบวกเวลาเพิ่ม 0 ถึง (นาที)
+              <input type="number" data-cfg="roundJitterMin" min="0" step="1">
+            </label>
+            <label>จำนวนรอบสูงสุด (0 = ไม่จำกัด)
+              <input type="number" data-cfg="maxRounds" min="0" step="1">
+            </label>
+            <label>พักกลุ่มเดิมอย่างน้อย (ชั่วโมง, 0 = ปิด)
+              <input type="number" data-cfg="groupCooldownHours" min="0" step="1">
+            </label>
+          </div>
+          <p class="hint">"พักกลุ่มเดิม" = กลุ่มที่เพิ่งโพสต์ไปจะไม่ถูกโพสต์ซ้ำจนกว่าจะครบชั่วโมงที่ตั้ง (ข้ามไปรอบหลัง) ช่วยไม่ให้แอดมินกลุ่มมองว่าสแปม</p>
+          <p class="hint">สุ่มเวลาในช่วง ต่ำสุด–สูงสุด ทุกกลุ่ม เมื่อโพสต์ครบทุกกลุ่มในชุด (1 รอบ) จะพักตามชั่วโมงที่ตั้ง + เวลาสุ่ม แล้วเริ่มรอบใหม่</p>
+          <div class="row wrap">
+            <label class="check"><input type="checkbox" data-cfg="activeHoursEnabled"> โพสต์เฉพาะช่วงเวลา</label>
+            <input type="time" data-cfg="activeStart"> ถึง <input type="time" data-cfg="activeEnd">
+          </div>
+        </section>
+
+        <!-- 4. Human-like -->
+        <section class="card">
+          <h2><span class="num">4</span> พฤติกรรมแบบสุ่ม (ของชุดนี้)</h2>
+          <div class="checks">
+            <label class="check"><input type="checkbox" data-cfg="shuffleGroups"> สุ่มลำดับกลุ่มใหม่ทุกรอบ</label>
+            <label class="check"><input type="checkbox" data-cfg="browseBeforePost"> เลื่อนดูฟีดกลุ่มก่อนโพสต์ (สุ่มจำนวนครั้ง/ระยะ)</label>
+            <label class="check"><input type="checkbox" data-cfg="typos"> พิมพ์ผิดบ้างแล้วลบแก้ (สุ่ม)</label>
+            <label class="check"><input type="checkbox" data-cfg="shuffleImages"> สลับลำดับรูปของโพสต์แบบสุ่มทุกครั้ง (สื่อนำหน้ายังอยู่ก่อน)</label>
+          </div>
+          <div class="grid2">
+            <label>ไม่ใช้โพสต์ซ้ำในกลุ่มเดิม ภายใน N ครั้งล่าสุด
+              <input type="number" data-cfg="recentAvoid" min="0" step="1">
+            </label>
+            <label>โอกาสแนบสื่อนำหน้า (%)
+              <input type="number" data-cfg="leadChancePct" min="0" max="100" step="5">
+            </label>
+          </div>
+          <p class="hint">เนื้อหาแต่ละกลุ่มสุ่มหมุนเวียน: ไม่ซ้ำกับ N โพสต์ล่าสุดของกลุ่มนั้น และพยายามไม่ซ้ำกับกลุ่มก่อนหน้า ๆ ด้วย ลด "โอกาสแนบสื่อนำหน้า" (เช่น 60%) ถ้าไม่อยากให้ทุกโพสต์มีวิดีโอเดียวกัน</p>
+          <div class="grid2">
+            <label>ความเร็วพิมพ์
+              <select data-cfg="typingSpeed">
+                <option value="slow">ช้า</option>
+                <option value="normal">ปกติ</option>
+                <option value="fast">เร็ว</option>
+              </select>
+            </label>
+            <label>ข้อความยาวเกิน (ตัวอักษร) ให้วางทีเดียว
+              <input type="number" data-cfg="maxTypeChars" min="0" step="50">
+            </label>
+            <label>สุ่มข้ามกลุ่มในแต่ละรอบ (%)
+              <input type="number" data-cfg="skipChancePct" min="0" max="90" step="1">
+            </label>
+            <label>สุ่มพักยาว เฉลี่ยทุก N โพสต์ (0 = ปิด)
+              <input type="number" data-cfg="longBreakEvery" min="0" step="1">
+            </label>
+            <label>พักยาว ต่ำสุด (นาที)
+              <input type="number" data-cfg="longBreakMin" min="1" step="1">
+            </label>
+            <label>พักยาว สูงสุด (นาที)
+              <input type="number" data-cfg="longBreakMax" min="1" step="1">
+            </label>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="col">
+      <!-- Online: config from the server -->
+      <section class="card ext-only" id="onlineCard">
+        <div class="card-head">
+          <h2>เชื่อมต่อ server (ตั้งค่าออนไลน์)</h2>
+          <span id="onlineBadge" class="badge">ไม่ได้เชื่อมต่อ</span>
+        </div>
+        <p class="hint">ตั้งค่าจากหน้าเว็บของ server ได้จากทุกที่ เครื่องนี้ดึง config, ส่งสถานะ/บันทึก และรับคำสั่ง เริ่ม/หยุด ทุก 30 วินาที แก้ในเครื่องนี้ก็ส่งขึ้น server ให้เอง</p>
+        <div id="onlineStatus" class="cfg-status none" hidden></div>
+        <div id="onlineForm" class="backup-box">
+          <label>URL server
+            <input type="url" id="onlineUrl" placeholder="https://autopost.example.com" spellcheck="false" autocomplete="off">
+          </label>
+          <label>คีย์เครื่อง (จากหน้าเว็บ server &gt; เครื่องรัน &gt; เพิ่มเครื่อง)
+            <input type="password" id="onlineKey" placeholder="dk_..." spellcheck="false" autocomplete="off">
+          </label>
+          <button id="btnOnlineConnect" class="btn small primary" type="button">เชื่อมต่อ</button>
+          <p class="hint">ถ้า config บน server ยังว่าง ระบบจะอัปโหลดการตั้งค่าของเครื่องนี้ขึ้นไป ถ้ามีแล้ว เครื่องนี้จะใช้ config จาก server แทน</p>
+        </div>
+        <div id="onlineActions" class="row wrap" hidden>
+          <button id="btnOnlineSync" class="btn small" type="button">ซิงก์ตอนนี้</button>
+          <button id="btnOnlinePull" class="btn small" type="button">ดึง config จาก server</button>
+          <button id="btnOnlinePush" class="btn small" type="button">อัปโหลดของเครื่องนี้ขึ้น server</button>
+          <a id="onlineOpen" class="btn small ghost" target="_blank" rel="noopener">เปิดหน้าเว็บ server</a>
+          <button id="btnOnlineDisconnect" class="btn small ghost danger-text" type="button">ยกเลิกการเชื่อมต่อ</button>
+        </div>
+      </section>
+
+      <!-- Overview -->
+      <section class="card">
+        <h2>ภาพรวมทุกชุด</h2>
+        <div id="overview" class="overview"></div>
+        <p id="currentLine" class="hint"></p>
+      </section>
+
+      <!-- Global -->
+      <section class="card">
+        <h2>ตั้งค่ารวม</h2>
+        <label class="check"><input type="checkbox" data-global="focusWindow"> ดึงหน้าต่างโพสต์ขึ้นมาด้านหน้าขณะโพสต์ (เสถียรกว่า)</label>
+        <label>เว้นห่างขั้นต่ำระหว่างโพสต์ทุกชุด (นาที)
+          <input type="number" data-global="minGapMin" min="0" step="0.5">
+        </label>
+        <p class="hint">กันไม่ให้หลายชุดโพสต์ติด ๆ กัน ระบบโพสต์ทีละ 1 โพสต์เสมอ</p>
+        <h3>กันโดนบล็อก</h3>
+        <div class="grid2">
+          <label>โพสต์สูงสุดต่อวัน ทุกชุดรวมกัน (0 = ไม่จำกัด)
+            <input type="number" data-global="dailyMaxPosts" min="0" step="1">
+          </label>
+          <label>โพสต์ไม่สำเร็จติดกันกี่ครั้งให้พัก 2–4 ชม. (0 = ปิด)
+            <input type="number" data-global="failStreakPause" min="0" step="1">
+          </label>
+          <label>Facebook เตือน: พักอย่างน้อย (ชั่วโมง)
+            <input type="number" data-global="blockPauseHoursMin" min="1" step="1">
+          </label>
+          <label>Facebook เตือน: พักนานสุด (ชั่วโมง)
+            <input type="number" data-global="blockPauseHoursMax" min="1" step="1">
+          </label>
+        </div>
+        <p class="hint">โควตาต่อวันสุ่มลดลงเล็กน้อยทุกวัน (85–100%) ครบแล้วรอถึงเช้าวันถัดไป ถ้าเจอข้อความเตือนของ Facebook (บล็อกชั่วคราว / ใช้ฟีเจอร์เร็วเกินไป / จำกัดการโพสต์) ระบบพักทุกชุดเองแล้วทำต่ออัตโนมัติ ถ้าต้องการยกเลิกการพักเอง กด "หยุด" แล้ว "เริ่มทำงาน" ใหม่</p>
+        <div id="guardStatus" class="hint"></div>
+      </section>
+
+      <!-- Telegram -->
+      <section class="card">
+        <div class="card-head">
+          <h2>แจ้งเตือน Telegram</h2>
+          <label class="check switch"><input type="checkbox" data-tg="enabled"> เปิดใช้</label>
+        </div>
+        <label>Bot Token
+          <input type="password" data-tg="botToken" autocomplete="off" spellcheck="false" placeholder="123456789:AA...">
+        </label>
+        <label>Chat ID
+          <span class="row">
+            <input type="text" data-tg="chatId" autocomplete="off" spellcheck="false" placeholder="เช่น 123456789 หรือ -100...">
+            <button id="btnTgFind" class="btn small" type="button">ดึง Chat ID</button>
+          </span>
+        </label>
+        <div class="checks">
+          <label class="check"><input type="checkbox" data-tg="onSuccess"> แจ้งทุกครั้งที่โพสต์สำเร็จ</label>
+          <label class="check"><input type="checkbox" data-tg="onFail"> แจ้งเมื่อโพสต์ไม่สำเร็จ (แล้วข้ามไปกลุ่มถัดไป)</label>
+          <label class="check"><input type="checkbox" data-tg="screenshot"> แนบภาพหน้าจอ</label>
+          <label class="check"><input type="checkbox" data-tg="roundSummary"> สรุปเมื่อจบรอบ (กลุ่มไหนโพสต์แล้ว / ไม่ได้)</label>
+          <label class="check"><input type="checkbox" data-tg="onStartStop"> แจ้งเมื่อเริ่ม / หยุด / ชุดครบรอบ</label>
+        </div>
+        <div id="capturePerm" class="perm-warn" hidden>
+          ยังไม่ได้อนุญาตให้จับภาพหน้าจอ
+          <button id="btnCapturePerm" class="btn small" type="button">อนุญาตจับภาพหน้าจอ</button>
+        </div>
+        <div class="row wrap">
+          <button id="btnTgTest" class="btn small" type="button">ส่งข้อความทดสอบ</button>
+        </div>
+        <details>
+          <summary class="hint">วิธีตั้งค่า</summary>
+          <ol class="hint steps">
+            <li>ใน Telegram คุยกับ <b>@BotFather</b> พิมพ์ <code>/newbot</code> ตั้งชื่อ จะได้ Bot Token มาวางด้านบน</li>
+            <li>ส่งข้อความอะไรก็ได้หา bot ของเรา (หรือเพิ่ม bot เข้ากลุ่ม Telegram แล้วพิมพ์ในกลุ่ม)</li>
+            <li>กด "ดึง Chat ID" แล้วกด "ส่งข้อความทดสอบ"</li>
+          </ol>
+          <p class="hint">ภาพหน้าจอถ่ายจากหน้าต่างโพสต์ แนะนำเปิด "ดึงหน้าต่างโพสต์ขึ้นมาด้านหน้า" เพื่อให้ถ่ายได้ทุกครั้ง</p>
+        </details>
+      </section>
+
+      <!-- Test -->
+      <section class="card">
+        <h2>ทดสอบโพสต์ 1 กลุ่ม (ชุดที่เลือกอยู่)</h2>
+        <div class="row wrap">
+          <select id="testGroup"></select>
+          <select id="testPost"></select>
+        </div>
+        <div id="testPreview" class="preview" hidden></div>
+        <div class="row wrap">
+          <button id="btnPreviewTest" class="btn ghost small">ดูข้อความที่จะโพสต์</button>
+          <button id="btnTest" class="btn">ทดสอบเลย</button>
+        </div>
+      </section>
+
+      <!-- Backup -->
+      <section class="card">
+        <h2>สำรอง / ย้ายการตั้งค่า</h2>
+        <div class="backup-box config-box ext-only">
+          <h3>ไฟล์ config สำหรับย้ายเครื่อง (ใช้งานได้ทันที)</h3>
+          <p class="hint">
+            เก็บทุกอย่าง (ชุด, กลุ่ม, ข้อความเฉพาะกลุ่ม, โพสต์, รูป, เวลา, พฤติกรรมสุ่ม, Telegram) ไว้ในไฟล์
+            <code>config/autopost-config.json</code> ในโฟลเดอร์ส่วนขยาย
+            คัดลอกทั้งโฟลเดอร์ไปเครื่องอื่น แล้วกด Load unpacked ระบบจะโหลด config ให้เอง
+          </p>
+          <div id="cfgStatus" class="cfg-status">กำลังตรวจไฟล์ config...</div>
+          <label class="check"><input type="checkbox" id="cfgToken" checked> รวม Telegram Bot Token (อย่าแชร์โฟลเดอร์นี้ให้คนอื่น)</label>
+          <label class="check"><input type="checkbox" id="cfgAutoStart"> กด "เริ่มทำงาน" ให้อัตโนมัติเมื่อเปิดบนเครื่องใหม่</label>
+          <div class="row wrap">
+            <button id="btnSaveConfig" class="btn small primary" type="button">บันทึก config ลงโฟลเดอร์ส่วนขยาย</button>
+            <button id="btnLoadConfig" class="btn small" type="button">โหลด config จากโฟลเดอร์</button>
+          </div>
+          <p class="hint">กด "บันทึก" แล้วเลือกโฟลเดอร์ส่วนขยาย (โฟลเดอร์ที่กด Load unpacked เช่น <code>C:\ProjectAutoPost</code>) → โฟลเดอร์ <code>config</code> → บันทึกทับไฟล์ <code>autopost-config.json</code></p>
+        </div>
+        <div class="backup-box">
+          <h3>ดาวน์โหลดการตั้งค่า</h3>
+          <label>ส่วนที่จะดาวน์โหลด
+            <select id="exportScope">
+              <option value="all">ทุกชุด + ตั้งค่ารวม</option>
+              <option value="current">เฉพาะชุดที่เลือกอยู่</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="exportImages" checked> รวมรูปภาพในไฟล์</label>
+          <label class="check"><input type="checkbox" id="exportToken"> รวม Telegram Bot Token (ไฟล์นี้ห้ามส่งให้คนอื่น)</label>
+          <button id="btnExport" class="btn small" type="button">ดาวน์โหลดไฟล์ .json</button>
+        </div>
+        <div class="backup-box">
+          <h3>อัปโหลดการตั้งค่า</h3>
+          <label>วิธีนำเข้า
+            <select id="importMode">
+              <option value="replace">แทนที่การตั้งค่าทั้งหมด</option>
+              <option value="merge">เพิ่มเป็นชุดใหม่ (เก็บของเดิมไว้)</option>
+            </select>
+          </label>
+          <div class="row wrap">
+            <label class="btn small file-btn">
+              เลือกไฟล์ .json แล้วนำเข้า
+              <input type="file" id="importFile" accept=".json,application/json" hidden>
+            </label>
+            <label class="btn small file-btn">
+              นำเข้าไฟล์ SIRI export (.zip)
+              <input type="file" id="importSiri" accept=".zip,application/zip" hidden>
+            </label>
+          </div>
+          <p class="hint">ไฟล์ SIRI export (.zip ที่มี data.json + images) จะได้ชุด "โพสต์ในกลุ่ม" (แต่ละโพสต์ผูกกับกลุ่มเดิมของมัน) และชุด "โพสต์ในเพจ" (ปิดไว้ ยังไม่ผูกกลุ่ม) ตั้งค่ารวมและ Telegram เดิมไม่เปลี่ยน</p>
+          <p class="hint">ต้องกด "หยุด" ก่อนนำเข้า ไฟล์ที่ไม่มี Bot Token จะใช้การตั้งค่า Telegram เดิมของเครื่องนี้ทั้งหมด</p>
+        </div>
+      </section>
+
+      <!-- Log -->
+      <section class="card">
+        <div class="card-head">
+          <h2>บันทึกการทำงาน</h2>
+          <button id="btnClearLog" class="btn ghost small">ล้าง</button>
+        </div>
+        <ol id="logs" class="logs"></ol>
+      </section>
+    </div>
+  </main>
+
+  <template id="postTpl">
+    <div class="post">
+      <div class="post-head">
+        <strong class="post-title"></strong>
+        <div class="row">
+          <button class="btn ghost small btn-preview">ดูตัวอย่างสุ่ม</button>
+          <button class="btn ghost small danger-text btn-del">ลบ</button>
+        </div>
+      </div>
+      <details class="post-groups" hidden>
+        <summary>ใช้กับ: <span class="pg-label"></span></summary>
+        <p class="hint">ไม่ติ๊กเลย = ใช้ได้ทุกกลุ่มในชุดนี้ ติ๊กบางกลุ่ม = โพสต์นี้จะถูกใช้เฉพาะกลุ่มที่ติ๊ก</p>
+        <div class="pg-list"></div>
+      </details>
+      <textarea class="post-text" rows="6" placeholder="พิมพ์ข้อความที่ต้องการโพสต์..."></textarea>
+      <div class="preview" hidden></div>
+      <div class="images"></div>
+      <label class="btn ghost small file-btn">
+        + แนบรูป/วิดีโอ
+        <input type="file" accept="image/*,video/*" multiple hidden>
+      </label>
+    </div>
+  </template>
+
+  <template id="groupTpl">
+    <div class="group-row">
+      <input type="checkbox" class="g-enabled" title="เปิด/ปิดกลุ่มนี้">
+      <input type="text" class="g-name" placeholder="ชื่อกลุ่ม (ไม่ใส่ก็ได้)">
+      <input type="text" class="g-url" placeholder="https://www.facebook.com/groups/..." spellcheck="false">
+      <input type="text" class="g-text" placeholder="ข้อความเฉพาะกลุ่ม / รหัส (ไม่ใส่ก็ได้)">
+      <label class="g-limit" title="กฎของกลุ่ม: โพสต์ได้กี่ครั้งใน 24 ชม. (0 = ไม่จำกัด) ครบแล้วระบบข้ามกลุ่มนี้จนพ้น 24 ชม.">
+        โพสต์ได้ <input type="number" class="g-max" min="0" max="50" step="1" inputmode="numeric"> /วัน
+      </label>
+      <span class="g-count" title="จำนวนแบบโพสต์ที่ใช้กับกลุ่มนี้"></span>
+      <button class="btn ghost small danger-text g-del" title="ลบกลุ่ม">ลบ</button>
+    </div>
+  </template>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="dashboard.js"></script>
+</body>
+</html>

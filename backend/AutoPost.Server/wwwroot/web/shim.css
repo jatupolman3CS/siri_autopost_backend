@@ -1,0 +1,24 @@
+/* Extra styles for the extension dashboard when it runs on the web. */
+.web-mode .ext-only { display: none !important; }
+
+.web-bar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 8px 20px;
+  background: var(--input);
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.web-back { color: var(--primary); text-decoration: none; font-weight: 600; }
+.web-device { display: inline-flex; align-items: center; gap: 6px; flex-direction: row; }
+.web-device select { max-width: 260px; }
+.web-dev-status { color: var(--muted); font-size: 12px; }
+.web-dev-status.on { color: var(--ok); }
+.web-dev-status.off { color: var(--warn); }
+.web-msg { flex-basis: 100%; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); }
+.web-msg.warn { border-color: var(--warn); }
+.web-msg.bad { border-color: var(--err); color: var(--err); }
+.web-msg.info { border-color: var(--primary); }
+.web-mode .topbar { top: 0; }

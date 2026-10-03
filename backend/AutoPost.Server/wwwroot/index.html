@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FB AutoPost Online</title>
+  <link rel="icon" href="/app/icons/icon32.png">
+  <link rel="stylesheet" href="/app/dashboard.css">
+  <link rel="stylesheet" href="/web/admin.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="/app/icons/icon48.png" alt="" width="32" height="32">
+      <div>
+        <h1>FB AutoPost Online</h1>
+        <p class="sub">ตั้งค่าจากที่ไหนก็ได้ เครื่องรันดึง config จาก server เอง</p>
+      </div>
+    </div>
+    <div class="actions">
+      <span id="me" class="save-state"></span>
+      <button id="btnPassword" class="btn small ghost" type="button">เปลี่ยนรหัสผ่าน</button>
+      <button id="btnLogout" class="btn small" type="button">ออกจากระบบ</button>
+    </div>
+  </header>
+
+  <main class="admin">
+    <section class="card">
+      <div class="card-head">
+        <h2>Config (ชุดตั้งค่า)</h2>
+      </div>
+      <p class="hint">1 config = ชุดโพสต์ กลุ่ม ข้อความ รูป เวลา Telegram ทั้งหมด กด "แก้ไข" เพื่อเปิดหน้าตั้งค่าแบบเดียวกับในส่วนขยาย หลายเครื่องใช้ config เดียวกันได้</p>
+      <div id="profiles" class="list"></div>
+      <form id="newProfile" class="row wrap">
+        <input type="text" name="name" class="grow" placeholder="ชื่อ config ใหม่ เช่น SIRI เพจหลัก" required maxlength="200">
+        <select name="copyFrom"><option value="">เริ่มจากว่าง</option></select>
+        <button class="btn primary small" type="submit">+ สร้าง config</button>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head">
+        <h2>เครื่องรัน (คอมที่ติดตั้งส่วนขยาย)</h2>
+      </div>
+      <p class="hint">แต่ละเครื่องมี "คีย์เครื่อง" ของตัวเอง ใส่คีย์ในหน้าตั้งค่าส่วนขยายของเครื่องนั้น (การ์ด "เชื่อมต่อ server") แล้วเครื่องจะดึง config ที่เลือกไว้ทุก 30 วินาที</p>
+      <div id="devices" class="list"></div>
+      <form id="newDevice" class="row wrap">
+        <input type="text" name="name" class="grow" placeholder="ชื่อเครื่อง เช่น คอมออฟฟิศ" required maxlength="200">
+        <select name="profileId"></select>
+        <button class="btn primary small" type="submit">+ เพิ่มเครื่อง</button>
+      </form>
+      <div id="keyBox" class="key-box" hidden>
+        <h3>คีย์ของเครื่อง <span id="keyDevice"></span></h3>
+        <p class="hint">คีย์แสดงครั้งเดียว คัดลอกไปใส่ในเครื่องนั้นเลย (ถ้าหาย กด "ออกคีย์ใหม่")</p>
+        <div class="row wrap">
+          <code id="keyServer" class="key"></code>
+          <button class="btn small" type="button" data-copy="keyServer">คัดลอก URL server</button>
+        </div>
+        <div class="row wrap">
+          <code id="keyValue" class="key"></code>
+          <button class="btn small primary" type="button" data-copy="keyValue">คัดลอกคีย์</button>
+        </div>
+        <ol class="hint steps">
+          <li>เปิดหน้าตั้งค่าส่วนขยายบนเครื่องนั้น (คลิกไอคอน FB AutoPost)</li>
+          <li>การ์ด "เชื่อมต่อ server (ตั้งค่าออนไลน์)" ใส่ URL server และคีย์ แล้วกด "เชื่อมต่อ"</li>
+          <li>ถ้า config บน server ยังว่าง เครื่องจะอัปโหลดการตั้งค่าที่มีอยู่ขึ้นมาให้ ถ้ามีแล้ว เครื่องจะใช้ config จาก server</li>
+        </ol>
+        <button class="btn small ghost" type="button" id="keyClose">ปิด</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="/web/admin.js"></script>
+</body>
+</html>

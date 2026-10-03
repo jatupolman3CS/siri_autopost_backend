@@ -1,0 +1,21 @@
+# .NET
+bin/
+obj/
+keys/
+publish/
+*.user
+*.suo
+
+# Environment & Secrets
+.env
+.env.*
+!.env.example
+appsettings.*.local.json
+
+# Node
+node_modules/
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db

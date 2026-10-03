@@ -1,0 +1,12 @@
+{
+  "name": "fb-group-autopost",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "description": "Chrome extension files. Node is only used for tools/siri-to-config.mjs.",
+  "scripts": {
+    "siri-to-config": "node tools/siri-to-config.mjs"
+  }
+}

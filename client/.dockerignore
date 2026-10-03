@@ -1,0 +1,9 @@
+**/bin
+**/obj
+**/keys
+config
+tools
+*.json
+!server/AutoPost.Server/*.json
+!server/AutoPost.Server/Properties/*.json
+server/.env

@@ -1733,6 +1733,7 @@ const DEFAULT_CLOUD = {
   paused: false,      // paused in the web app: take no posts (heartbeats and settings go on)
   pausedUntil: 0,     // Facebook showed a warning: take no posts until then
   groupsHash: '',     // groups last sent to the web app
+  groupNames: {},     // url -> name as last sent (a name the web app knows is kept: queued posts use it)
   groups: 0,
   lastSyncAt: 0,
   lastError: '',
@@ -1797,7 +1798,12 @@ async function cloudApi(c, method, path, body, { blob = false, signal = null } =
     /* empty body */
   }
   if (!res.ok) {
-    const msg = res.status === 401 ? 'เครื่องนี้ถูกยกเลิกการผูกแล้ว จับคู่ใหม่ด้วยรหัสจากหน้าเว็บ' : (data && (data.title || data.error)) || `เว็บ AutoPost ตอบกลับ ${res.status}`;
+    // A 400 carries the per-field messages in `errors`; the title alone is only "invalid data".
+    const first = data && data.errors && Object.values(data.errors).flat().find((m) => typeof m === 'string');
+    const title = data && (data.title || data.error);
+    const msg = res.status === 401
+      ? 'เครื่องนี้ถูกยกเลิกการผูกแล้ว จับคู่ใหม่ด้วยรหัสจากหน้าเว็บ'
+      : (title && first && first !== title ? `${title}: ${first}` : title || first) || `เว็บ AutoPost ตอบกลับ ${res.status}`;
     const err = new Error(msg);
     err.status = res.status;
     throw err;
@@ -1805,9 +1811,14 @@ async function cloudApi(c, method, path, body, { blob = false, signal = null } =
   return data;
 }
 
-// Groups of every campaign (enabled ones), named as in the campaign or as seen on Facebook.
-// Names must be unique in the web app, so a repeated name gets the group's address added.
-async function cloudGroupList() {
+// Most groups one browser can send (the web app's limit, MaxGroups in the API).
+const CLOUD_MAX_GROUPS = 5000;
+
+// Groups of every campaign (enabled ones). A name is the one written in the campaign, else the one the
+// web app already has for that address (queued posts name their group, so a name must not change under
+// them when Facebook's own name is learned after the first post), else the one seen on Facebook, else
+// the address. Names must be unique in the web app, so a repeated name gets the group's address added.
+async function cloudGroupList(known = {}) {
   const settings = await getSettings();
   const state = await getState();
   const out = [];
@@ -1817,11 +1828,15 @@ async function cloudGroupList() {
     for (const g of activeGroups(camp)) {
       if (urls.has(g.url)) continue;
       urls.add(g.url);
-      let name = (g.name || (state.groupNames || {})[g.url] || '').trim() || shortUrl(g.url);
+      let name = ((g.name || '').trim() || known[g.url] || (state.groupNames || {})[g.url] || '').trim() || shortUrl(g.url);
       if (names.has(name)) name = `${name} (${shortUrl(g.url)})`;
       names.add(name);
       out.push({ name, url: g.url });
     }
+  }
+  if (out.length > CLOUD_MAX_GROUPS) {
+    await log('warn', `[เว็บ AutoPost] มี ${out.length} กลุ่ม ส่งให้เว็บได้สูงสุด ${CLOUD_MAX_GROUPS} กลุ่ม ส่วนที่เกินจะไม่ถูกส่ง`);
+    out.length = CLOUD_MAX_GROUPS;
   }
   return out;
 }
@@ -1921,11 +1936,13 @@ async function cloudTick({ claim = true } = {}) {
   if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
   try {
     const hb = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version });
-    const groups = await cloudGroupList();
+    const groups = await cloudGroupList(c.groupNames || {});
     const hash = await sha256(JSON.stringify(groups));
     let count = hb.groups;
+    let groupNames = c.groupNames || {};
     if (hash !== c.groupsHash || count !== groups.length) {
       count = await cloudApi(c, 'PUT', '/api/device/groups', { groups });
+      groupNames = Object.fromEntries(groups.map((g) => [g.url, g.name]));
       await log('info', `[เว็บ AutoPost] ส่งรายชื่อกลุ่ม ${count} กลุ่มไปที่เว็บแล้ว`);
     }
     c = await setCloud({
@@ -1933,6 +1950,7 @@ async function cloudTick({ claim = true } = {}) {
       workspaceName: hb.workspaceName,
       paused: !!hb.jobsPaused,
       groupsHash: hash,
+      groupNames,
       groups: count,
       lastSyncAt: Date.now(),
       lastError: '',

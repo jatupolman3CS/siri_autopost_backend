@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 const API = (process.argv[2] || 'http://localhost:5100').replace(/\/+$/, '');
 const ADMIN = { email: process.env.ADMIN_EMAIL || 'admin@autopost.local', password: process.env.ADMIN_PASSWORD || 'admin1234' };
 const GROUP = { url: 'https://www.facebook.com/groups/plantlovers', name: 'คนรักต้นไม้ (ทดสอบ)' };
+const BARE = { url: 'https://www.facebook.com/groups/bareaddress', name: '' }; // added by address only
 
 // ---------- fake chrome ----------
 
@@ -210,10 +211,10 @@ assert.equal(r.status, 200, r.text);
 token = ownerToken;
 const ws = (await api('GET', '/api/workspaces')).json[0];
 
-step('extension has one campaign with one group');
+step('extension has one campaign with two groups (one added by its address only)');
 const settings = migrateSettings(undefined);
 const camp = settings.campaigns[0] || newCampaign(1);
-camp.groups = [{ url: GROUP.url, name: GROUP.name, enabled: true, text: '' }];
+camp.groups = [GROUP, BARE].map((g) => ({ url: g.url, name: g.name, enabled: true, text: '' }));
 settings.campaigns = [camp];
 await local.set({ settings });
 
@@ -236,7 +237,7 @@ assert.equal(r.ok, true, r.error);
 assert.ok(alarms.has('fbap-cloud'), 'cloud alarm set');
 const cloud = data.get('cloud');
 assert.equal(cloud.workspaceName, ws.name);
-assert.equal(cloud.groups, 1);
+assert.equal(cloud.groups, 2);
 
 step('the web app sees the device and its Facebook account with the group');
 const devices = (await api('GET', `/api/workspaces/${ws.id}/devices`)).json;
@@ -245,7 +246,7 @@ assert.equal(devices[0].name, 'คอมทดสอบ');
 assert.equal(devices[0].online, true);
 const account = (await api('GET', `/api/workspaces/${ws.id}/accounts`)).json.find((a) => a.id === devices[0].accountId);
 assert.equal(account.connected, true);
-assert.deepEqual(account.groups, [GROUP.name]);
+assert.deepEqual(account.groups, [GROUP.name, 'groups/bareaddress']);
 
 step('the web app has this browser\'s campaigns (uploaded on pairing)');
 const devBase = `/api/workspaces/${ws.id}/devices/${devices[0].id}`;
@@ -381,6 +382,18 @@ assert.equal([...data.keys()].filter((k) => k.startsWith('cloudimg:')).length, 0
 mine = await postsOf(ws.id, account.id);
 assert.ok(mine.some((p) => p.status === 'success'));
 assert.equal(data.get('cloud').lastJob.ok, true);
+
+step('a name Facebook shows later does not rename a group the web app already has');
+{
+  // Queued posts name their group, so the name the web app knows stays until the campaign itself names it.
+  const st = data.get('state');
+  st.groupNames = { ...(st.groupNames || {}), [BARE.url + '/']: 'ชื่อที่เห็นบน Facebook' };
+  await local.set({ state: st });
+  r = await bg('cloudSync');
+  assert.equal(r.ok, true, r.error);
+  const names = (await api('GET', `/api/workspaces/${ws.id}/accounts`)).json.find((a) => a.id === account.id).groups;
+  assert.deepEqual(names, [GROUP.name, 'groups/bareaddress']);
+}
 
 step('the anti-ban gap holds the next post back');
 await schedule(ws.id, account.id);

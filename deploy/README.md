@@ -54,6 +54,8 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
      `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `refund.created`, `refund.updated`;
      copy its signing secret into `Stripe__WebhookSecret`. The dashboard's nginx passes `/api/` through, so the endpoint
      needs no tunnel route of its own.
+   - Settings → Billing → Subscriptions and emails: keep "retry failed payments" on (a failed card then shows as past due and
+     Stripe retries it; the dashboard says so), and the customer emails you want Stripe to send (receipts, failed payment).
    - Settings → Billing → Customer portal: switch it on (payment methods and invoices; plan changes are made in the
      dashboard, not in the portal). To use a specific portal configuration, put its id in `Stripe__PortalConfigurationId`.
    - Prices come from the plan settings in the admin area (baht, whole units; `Stripe__Currency` defaults to `thb`). The API
@@ -86,3 +88,4 @@ shows up under Developers → Webhooks → the endpoint → recent deliveries, a
 | UI nginx `client_max_body_size` | 300m for the upload paths | campaign videos go up as base64 JSON (200 MB video ≈ 270 MB); the API accepts 300 MB there |
 | API pod memory limit | 2Gi | the same upload is held as text and as bytes |
 | nginx `proxy_read_timeout` | 120s (3600s for the event stream) | the extension's sync is held up to 25 s; the event stream lives up to 30 minutes |
+| Cloudflare (in front of the tunnel) | request bodies of at most 100 MB on the Free and Pro plans (more on higher plans) | a video over about 75 MB (base64 makes it a third larger) is refused before it reaches nginx, whatever the limits behind it say. The web app accepts videos up to 200 MB, so on those plans keep campaign videos smaller |

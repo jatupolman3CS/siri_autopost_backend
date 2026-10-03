@@ -7,6 +7,9 @@ public interface ICurrentUser
 {
     /// <summary>Throws AuthenticationException when nobody is signed in.</summary>
     Guid UserId { get; }
+
+    /// <summary>The platform admin acting as this user (the token's "act" claim), or null.</summary>
+    Guid? ImpersonatorId { get; }
 }
 
 public interface IPasswordHasher
@@ -20,6 +23,9 @@ public sealed record AuthToken(string Token, DateTimeOffset ExpiresAt);
 public interface ITokenService
 {
     AuthToken Create(User user);
+
+    /// <summary>A short-lived token for <paramref name="user"/> that names the admin acting as them.</summary>
+    AuthToken CreateImpersonation(User user, Guid adminId, TimeSpan lifetime);
 }
 
 /// <summary>Randomness behind the smart delay; swapped for a fixed source in tests.</summary>
@@ -49,4 +55,18 @@ public interface IDeviceSecrets
     string NewPairingCode();
     string NewDeviceKey();
     string Hash(string deviceKey);
+}
+
+/// <summary>Durations of recent API requests (recorded by the API's request pipeline).</summary>
+public interface IRequestTimings
+{
+    void Record(TimeSpan duration);
+    /// <summary>95th percentile in milliseconds over the recent window, and how many requests it covers.</summary>
+    (int? P95Ms, int Samples) Snapshot();
+}
+
+public interface IDatabaseProbe
+{
+    /// <summary>Round trip of a trivial query.</summary>
+    Task<TimeSpan> PingAsync(CancellationToken ct = default);
 }

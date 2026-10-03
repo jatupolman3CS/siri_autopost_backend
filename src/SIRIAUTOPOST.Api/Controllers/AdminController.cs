@@ -27,6 +27,22 @@ public sealed class AdminController : ControllerBase
     public Task<AdminSummaryDto> Summary([FromServices] IQueryHandler<GetAdminSummaryQuery, AdminSummaryDto> h, CancellationToken ct) =>
         h.HandleAsync(new GetAdminSummaryQuery(), ct);
 
+    [HttpGet("health")]
+    public Task<PlatformHealthDto> Health([FromServices] IQueryHandler<GetPlatformHealthQuery, PlatformHealthDto> h, CancellationToken ct) =>
+        h.HandleAsync(new GetPlatformHealthQuery(), ct);
+
+    /// <summary>The activity log, newest first (?customerId= for one customer).</summary>
+    [HttpGet("audit")]
+    public Task<IReadOnlyList<AuditEntryDto>> Audit(
+        [FromQuery] Guid? customerId, [FromQuery] int? take,
+        [FromServices] IQueryHandler<GetAuditQuery, IReadOnlyList<AuditEntryDto>> h, CancellationToken ct) =>
+        h.HandleAsync(new GetAuditQuery(customerId, take ?? 50), ct);
+
+    /// <summary>A one-hour, read-only token to see the app as the customer ("assist").</summary>
+    [HttpPost("customers/{id:guid}/impersonate")]
+    public Task<AuthResultDto> Impersonate(Guid id, [FromServices] ICommandHandler<ImpersonateCommand, AuthResultDto> h, CancellationToken ct) =>
+        h.HandleAsync(new ImpersonateCommand(id), ct);
+
     [HttpGet("customers")]
     public Task<IReadOnlyList<CustomerDto>> Customers(
         [FromServices] IQueryHandler<GetCustomersQuery, IReadOnlyList<CustomerDto>> h, CancellationToken ct) =>

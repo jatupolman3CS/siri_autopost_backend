@@ -66,8 +66,11 @@ public sealed class GetMeQueryHandler(IUserRepository users, ICurrentUser curren
     public async Task<UserDto> HandleAsync(GetMeQuery q, CancellationToken ct = default)
     {
         var user = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
-        user.Seen(clock.GetUtcNow()); // "last active" for the team and admin pages
-        await uow.SaveChangesAsync(ct);
+        if (current.ImpersonatorId is null) // "last active" for the team and admin pages
+        {
+            user.Seen(clock.GetUtcNow());
+            await uow.SaveChangesAsync(ct);
+        }
         return UserDto.From(user);
     }
 }

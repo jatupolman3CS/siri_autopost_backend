@@ -103,3 +103,21 @@ public enum WorkspaceRole
     Admin,
     Owner,
 }
+
+/// <summary>What an <c>AuditEntry</c> records.</summary>
+public enum AuditAction
+{
+    PlanChanged,
+    StatusChanged,
+    PauseChanged,
+    LimitsChanged,
+    NoteChanged,
+    DeviceRevoked,
+    FailedRetried,
+    Refunded,
+    PaymentRecorded,
+    PlanSettingsChanged,
+    PromoCreated,
+    PromoToggled,
+    Impersonated,
+}

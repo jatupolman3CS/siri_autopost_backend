@@ -79,6 +79,10 @@ public static class DependencyInjection
 
         // Platform admin
         services.AddScoped<AdminCustomers>();
+        services.AddScoped<AdminAudit>();
+        services.AddQuery<GetPlatformHealthQuery, PlatformHealthDto, GetPlatformHealthQueryHandler>();
+        services.AddCommand<ImpersonateCommand, AuthResultDto, ImpersonateCommandHandler>();
+        services.AddQuery<GetAuditQuery, IReadOnlyList<AuditEntryDto>, GetAuditQueryHandler>();
         services.AddQuery<GetCustomersQuery, IReadOnlyList<CustomerDto>, GetCustomersQueryHandler>();
         services.AddQuery<GetAdminSummaryQuery, AdminSummaryDto, GetAdminSummaryQueryHandler>();
         services.AddQuery<GetAdminJobsQuery, IReadOnlyList<AdminJobDto>, GetAdminJobsQueryHandler>();

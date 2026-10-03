@@ -9,9 +9,11 @@ public static class WebApplicationExtensions
 {
     public static WebApplication UseApi(this WebApplication app)
     {
+        app.UseMiddleware<RequestTimingMiddleware>();
         app.UseMiddleware<ExceptionHandlingMiddleware>();
         app.UseCors(ServiceCollectionExtensions.FrontendCors);
         app.UseAuthentication();
+        app.UseMiddleware<ReadOnlyImpersonationMiddleware>();
         app.UseAuthorization();
 
         if (app.Environment.IsDevelopment()) app.MapOpenApi().AllowAnonymous(); // /openapi/v1.json

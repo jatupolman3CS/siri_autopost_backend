@@ -2,7 +2,10 @@
 # this repo or at UI_PATH) + PostgreSQL. Copy .env.example to .env, set the SaaS values, then:
 #   docker compose -f docker-compose.saas.yml up -d --build
 # The dashboard serves on ${WEB_PORT:-8090} and proxies /api to the API, so the extension pairs
-# with that same origin. Put HTTPS in front before using it over the internet.
+# with that same origin. For the internet, turn on HTTPS: point DOMAIN's DNS at this machine,
+# open ports 80 and 443, set DOMAIN in .env and add the "https" profile:
+#   docker compose -f docker-compose.saas.yml --profile https up -d --build
+# Caddy then gets and renews a Let's Encrypt certificate (DOMAIN=localhost uses a local test CA).
 services:
   db:
     image: postgres:18
@@ -42,5 +45,22 @@ services:
       - api
     restart: unless-stopped
 
+  caddy:
+    image: caddy:2
+    profiles: [https]
+    command: caddy reverse-proxy --from ${DOMAIN:-localhost} --to web:80
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - web
+    restart: unless-stopped
+
 volumes:
   saas-pgdata:
+  caddy-data:
+  caddy-config:

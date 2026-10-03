@@ -18,6 +18,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<PlanSetting> Plans => Set<PlanSetting>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Promo> Promos => Set<Promo>();
+    public DbSet<AuditEntry> Audit => Set<AuditEntry>();
 
     // Picks up every IEntityTypeConfiguration in Data/Configurations.
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>

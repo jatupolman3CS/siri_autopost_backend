@@ -170,6 +170,26 @@ public sealed record RevenueMonthDto(int Year, int Month, int Amount);
 
 /// <param name="Basic">Paying customers per plan (active or past due).</param>
 /// <param name="Revenue">Charges minus refunds, the last 12 months, oldest first.</param>
+/// <summary>
+/// The admin overview's live figures. Changes compare with 30 days earlier (MRR, churn) or the 7 days
+/// before (success rate). Rates are percentages; null when there is nothing to measure yet.
+/// </summary>
+public sealed record PlatformHealthDto(
+    int Mrr, int MrrPrev,
+    double Churn, double ChurnPrev,
+    int DevicesActive, int Devices,
+    double? SuccessRate, double? SuccessRatePrev,
+    int? ApiP95Ms, int ApiSamples, int DbMs,
+    int QueueDue, int QueueNext24h,
+    string? LatestExtension, int OnLatestExtension,
+    double? ErrorRate24h,
+    bool PaymentsConnected);
+
+/// <summary>One activity-log line. From/To are values (plan keys, statuses, amounts), not display text.</summary>
+public sealed record AuditEntryDto(
+    Guid Id, DateTimeOffset At, AuditAction Action, Guid ActorId, string ActorEmail, Guid? CustomerId, string? CustomerEmail,
+    string? From, string? To);
+
 public sealed record AdminSummaryDto(int Basic, int Pro, int Agency, IReadOnlyList<RevenueMonthDto> Revenue);
 
 public sealed record AdminJobDto(

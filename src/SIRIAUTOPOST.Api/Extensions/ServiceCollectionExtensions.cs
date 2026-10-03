@@ -5,8 +5,10 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using SIRIAUTOPOST.Api.Auth;
+using SIRIAUTOPOST.Api.Middlewares;
 using SIRIAUTOPOST.Application;
 using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Infrastructure;
 using SIRIAUTOPOST.Infrastructure.Auth;
@@ -27,6 +29,7 @@ public static class ServiceCollectionExtensions
 
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
+        services.AddSingleton<IRequestTimings, RequestTimings>();
         services.AddScoped<ICurrentDevice, CurrentDevice>();
         services.AddJwtAuth(config);
 
@@ -85,7 +88,14 @@ public static class ServiceCollectionExtensions
                         var users = ctx.HttpContext.RequestServices.GetRequiredService<IUserRepository>();
                         var id = Guid.TryParse(ctx.Principal?.FindFirst("sub")?.Value, out var g) ? g : Guid.Empty;
                         var user = await users.GetByIdAsync(id, ctx.HttpContext.RequestAborted);
-                        if (user is null || user.IsBlocked) ctx.Fail("account blocked or deleted");
+                        // An admin acting as a customer may look into a suspended account; the admin must still be one.
+                        var actor = ctx.Principal?.FindFirst(JwtTokenService.ActorClaim)?.Value;
+                        if (actor is not null)
+                        {
+                            var admin = Guid.TryParse(actor, out var a) ? await users.GetByIdAsync(a, ctx.HttpContext.RequestAborted) : null;
+                            if (user is null || admin is not { Role: UserRole.Admin }) ctx.Fail("impersonation no longer allowed");
+                        }
+                        else if (user is null || user.IsBlocked) ctx.Fail("account blocked or deleted");
                     },
                 };
             });

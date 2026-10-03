@@ -36,7 +36,7 @@ public sealed record ChangePlanCommand(PlanKey Plan, BillingCycle? Cycle, string
 
 public sealed class ChangePlanCommandHandler(
     IUserRepository users, IPlanRepository plans, IPromoRepository promos, ITransactionRepository transactions,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IAuditRepository audit, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ChangePlanCommand, UserDto>
 {
     public async Task<UserDto> HandleAsync(ChangePlanCommand c, CancellationToken ct = default)
@@ -44,6 +44,7 @@ public sealed class ChangePlanCommandHandler(
         var now = clock.GetUtcNow();
         var user = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
         var cycle = c.Cycle ?? user.Cycle;
+        var from = user.Plan;
         var plan = await plans.GetAsync(c.Plan, ct);
         Promo? promo = null;
         if (!string.IsNullOrWhiteSpace(c.PromoCode))
@@ -56,6 +57,7 @@ public sealed class ChangePlanCommandHandler(
         var paid = plan.Price > 0;
         if (paid) transactions.Add(Transaction.Charge(user.Id, amount, plan.Key, cycle, promo?.Code, now));
         user.ChangePlan(plan.Key, cycle, paid);
+        if (from != plan.Key) audit.Add(AuditEntry.PlanChange(user.Id, user, from, now));
         await uow.SaveChangesAsync(ct);
         return UserDto.From(user);
     }

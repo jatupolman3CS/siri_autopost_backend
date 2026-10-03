@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: SIRIAUTOPOST.sln build and tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      SIRIAUTOPOST_TEST_DB: Host=localhost;Port=5432;Database=siriautopost_test;Username=postgres;Password=postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet restore SIRIAUTOPOST.sln
+      - run: dotnet build SIRIAUTOPOST.sln --no-restore -c Release -warnaserror
+      - run: dotnet test SIRIAUTOPOST.sln --no-build -c Release --logger "console;verbosity=normal"
+
+  legacy-server:
+    name: Legacy server build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet build backend/SIRI.AUTOPOST.Server/SIRI.AUTOPOST.Server.csproj -c Release
+
+  extension-cloud:
+    name: Extension cloud mode against the API
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Check the extension's scripts parse
+        run: for f in client/*.js client/lib/*.js client/tools/*.mjs; do node --check "$f"; done
+      - name: Start the API (Development settings, fresh database)
+        working-directory: src/SIRIAUTOPOST.Api
+        env:
+          ConnectionStrings__Default: Host=localhost;Port=5432;Database=siriautopost;Username=postgres;Password=postgres
+        run: |
+          dotnet run --launch-profile http > "$RUNNER_TEMP/api.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://localhost:5100/healthz && exit 0; sleep 2; done
+          cat "$RUNNER_TEMP/api.log"; exit 1
+      - name: Pair, sync groups, claim and post (faked Chrome and Facebook)
+        run: node client/tools/test-cloud.mjs http://localhost:5100
+      - name: API log
+        if: failure()
+        run: cat "$RUNNER_TEMP/api.log"
+
+  docker:
+    name: API image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f src/SIRIAUTOPOST.Api/Dockerfile -t siriautopost-api .

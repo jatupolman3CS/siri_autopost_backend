@@ -1,4 +1,5 @@
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
@@ -49,6 +50,55 @@ public sealed class GetAdminSummaryQueryHandler(IUserRepository users, ITransact
     }
 }
 
+/// <summary>Live platform figures for the admin overview (see <see cref="PlatformHealthDto"/>).</summary>
+public sealed record GetPlatformHealthQuery : IQuery<PlatformHealthDto>;
+
+public sealed class GetPlatformHealthQueryHandler(
+    IUserRepository users, IAuditRepository audit, IPlanRepository plans, IWorkspaceRepository workspaces,
+    IDeviceRepository devices, IPostRepository posts, IRequestTimings timings, IDatabaseProbe database, TimeProvider clock)
+    : IQueryHandler<GetPlatformHealthQuery, PlatformHealthDto>
+{
+    public async Task<PlatformHealthDto> HandleAsync(GetPlatformHealthQuery q, CancellationToken ct = default)
+    {
+        var now = clock.GetUtcNow();
+        var month = TimeSpan.FromDays(30);
+        var customers = (await users.ListAsync(ct)).Where(u => u.Role == UserRole.User).ToList();
+        var changes = await audit.ListPlanChangesAsync(now - 2 * month, ct);
+        var prices = (await plans.ListAsync(ct)).ToDictionary(p => p.Key, p => p.Price);
+
+        var wsIds = (await workspaces.ListAllAsync(ct)).Select(w => w.Id).ToList();
+        var devs = await devices.ListByWorkspacesAsync(wsIds, ct);
+        var latest = devs.Select(d => d.Version).Where(v => Version.TryParse(v, out _)).MaxBy(Version.Parse);
+
+        // Finished posts per window: success and "pending approval" went out, failed did not.
+        async Task<(int Ok, int Failed)> Finished(DateTimeOffset from, DateTimeOffset to)
+        {
+            var rows = await posts.CountByStatusAsync(wsIds, from, to, ct);
+            return (rows.Where(r => r.Status is PostStatus.Success or PostStatus.Pending).Sum(r => r.Count),
+                rows.Where(r => r.Status == PostStatus.Failed).Sum(r => r.Count));
+        }
+        var week = await Finished(now.AddDays(-7), now);
+        var weekBefore = await Finished(now.AddDays(-14), now.AddDays(-7));
+        var day = await Finished(now.AddDays(-1), now);
+        var due = (await posts.CountByStatusAsync(wsIds, DateTimeOffset.UnixEpoch, now, ct)).Where(r => r.Status == PostStatus.Queued).Sum(r => r.Count);
+        var next = (await posts.CountByStatusAsync(wsIds, now, now.AddDays(1), ct)).Where(r => r.Status == PostStatus.Queued).Sum(r => r.Count);
+
+        var (p95, samples) = timings.Snapshot();
+        var db = await database.PingAsync(ct);
+        return new PlatformHealthDto(
+            PlatformMetrics.Mrr(customers, changes, prices, now), PlatformMetrics.Mrr(customers, changes, prices, now - month),
+            PlatformMetrics.Churn(customers, changes, now - month, now, now),
+            PlatformMetrics.Churn(customers, changes, now - 2 * month, now - month, now),
+            devs.Count(d => d.LastSeenAt >= now.AddDays(-1)), devs.Count,
+            PlatformMetrics.SuccessRate(week.Ok, week.Failed), PlatformMetrics.SuccessRate(weekBefore.Ok, weekBefore.Failed),
+            p95, samples, (int)Math.Ceiling(db.TotalMilliseconds),
+            due, next,
+            latest, latest is null ? 0 : devs.Count(d => d.Version == latest),
+            day.Ok + day.Failed == 0 ? null : Math.Round(100.0 * day.Failed / (day.Ok + day.Failed), 1),
+            PaymentsConnected: false);
+    }
+}
+
 /// <summary>Newest posts across the platform (or of one customer), for the jobs page.</summary>
 public sealed record GetAdminJobsQuery(Guid? CustomerId, int Take) : IQuery<IReadOnlyList<AdminJobDto>>;
 
@@ -73,13 +123,15 @@ public sealed class GetAdminJobsQueryHandler(
 
 public sealed record SetCustomerStatusCommand(Guid CustomerId, CustomerStatus Status) : ICommand<CustomerDto>;
 
-public sealed class SetCustomerStatusCommandHandler(IUserRepository users, AdminCustomers customers, IUnitOfWork uow)
+public sealed class SetCustomerStatusCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
     : ICommandHandler<SetCustomerStatusCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(SetCustomerStatusCommand c, CancellationToken ct = default)
     {
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
+        var from = user.Status;
         user.SetStatus(c.Status);
+        audit.Record(AuditAction.StatusChanged, user.Id, AdminAudit.Key(from), AdminAudit.Key(c.Status));
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -87,7 +139,7 @@ public sealed class SetCustomerStatusCommandHandler(IUserRepository users, Admin
 
 public sealed record SetCustomerPausedCommand(Guid CustomerId, bool Paused) : ICommand<CustomerDto>;
 
-public sealed class SetCustomerPausedCommandHandler(IUserRepository users, AdminCustomers customers, IUnitOfWork uow)
+public sealed class SetCustomerPausedCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
     : ICommandHandler<SetCustomerPausedCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(SetCustomerPausedCommand c, CancellationToken ct = default)
@@ -95,6 +147,7 @@ public sealed class SetCustomerPausedCommandHandler(IUserRepository users, Admin
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
         if (!c.Paused && user.IsBlocked) throw new DomainException("ลูกค้าถูกระงับอยู่ คืนสถานะก่อน");
         user.SetPaused(c.Paused);
+        audit.Record(AuditAction.PauseChanged, user.Id, to: c.Paused ? "paused" : "running");
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -103,13 +156,15 @@ public sealed class SetCustomerPausedCommandHandler(IUserRepository users, Admin
 /// <summary>Moves the customer to another plan without a charge, and clears their limit overrides.</summary>
 public sealed record SetCustomerPlanCommand(Guid CustomerId, PlanKey Plan) : ICommand<CustomerDto>;
 
-public sealed class SetCustomerPlanCommandHandler(IUserRepository users, AdminCustomers customers, IUnitOfWork uow)
+public sealed class SetCustomerPlanCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
     : ICommandHandler<SetCustomerPlanCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(SetCustomerPlanCommand c, CancellationToken ct = default)
     {
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
+        var from = user.Plan;
         user.SetPlanByAdmin(c.Plan);
+        if (from != c.Plan) audit.PlanChange(user, from);
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -118,13 +173,14 @@ public sealed class SetCustomerPlanCommandHandler(IUserRepository users, AdminCu
 /// <summary>Per-customer limits: null keeps the plan's value, 0 = unlimited.</summary>
 public sealed record SetCustomerLimitsCommand(Guid CustomerId, int? Accounts, int? Posts, int? Devices, int? Seats) : ICommand<CustomerDto>;
 
-public sealed class SetCustomerLimitsCommandHandler(IUserRepository users, AdminCustomers customers, IUnitOfWork uow)
+public sealed class SetCustomerLimitsCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
     : ICommandHandler<SetCustomerLimitsCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(SetCustomerLimitsCommand c, CancellationToken ct = default)
     {
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
         user.SetLimits(new LimitOverrides { Accounts = c.Accounts, Posts = c.Posts, Devices = c.Devices, Seats = c.Seats });
+        audit.Record(AuditAction.LimitsChanged, user.Id, to: AdminAudit.Limits(user.Limits));
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -132,13 +188,14 @@ public sealed class SetCustomerLimitsCommandHandler(IUserRepository users, Admin
 
 public sealed record SetCustomerNoteCommand(Guid CustomerId, string? Note) : ICommand<CustomerDto>;
 
-public sealed class SetCustomerNoteCommandHandler(IUserRepository users, AdminCustomers customers, IUnitOfWork uow)
+public sealed class SetCustomerNoteCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
     : ICommandHandler<SetCustomerNoteCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(SetCustomerNoteCommand c, CancellationToken ct = default)
     {
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
         user.SetNote(c.Note);
+        audit.Record(AuditAction.NoteChanged, user.Id, to: AdminAudit.Clip(user.Note));
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -149,7 +206,7 @@ public sealed record AdminRevokeDeviceCommand(Guid CustomerId, Guid DeviceId) : 
 
 public sealed class AdminRevokeDeviceCommandHandler(
     IUserRepository users, IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts,
-    IPostRepository posts, AdminCustomers customers, IUnitOfWork uow, TimeProvider clock)
+    IPostRepository posts, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AdminRevokeDeviceCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(AdminRevokeDeviceCommand c, CancellationToken ct = default)
@@ -163,6 +220,7 @@ public sealed class AdminRevokeDeviceCommandHandler(
         foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
             p.Fail(FailureCode.Network, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", now);
         devices.Remove(device);
+        audit.Record(AuditAction.DeviceRevoked, user.Id, to: AdminAudit.Clip(device.Name));
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -172,7 +230,7 @@ public sealed class AdminRevokeDeviceCommandHandler(
 public sealed record RetryCustomerFailedCommand(Guid CustomerId) : ICommand<int>;
 
 public sealed class RetryCustomerFailedCommandHandler(
-    IUserRepository users, IWorkspaceRepository workspaces, IPostRepository posts, IUnitOfWork uow, TimeProvider clock)
+    IUserRepository users, IWorkspaceRepository workspaces, IPostRepository posts, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RetryCustomerFailedCommand, int>
 {
     public async Task<int> HandleAsync(RetryCustomerFailedCommand c, CancellationToken ct = default)
@@ -182,6 +240,7 @@ public sealed class RetryCustomerFailedCommandHandler(
         var failed = await posts.ListFailedAsync(ids, ct);
         var now = clock.GetUtcNow();
         foreach (var p in failed) p.Retry(now);
+        audit.Record(AuditAction.FailedRetried, user.Id, to: failed.Count.ToString());
         await uow.SaveChangesAsync(ct);
         return failed.Count;
     }
@@ -199,7 +258,7 @@ public sealed class GetTransactionsQueryHandler(ITransactionRepository transacti
 /// <summary>Records a refund of a charge (TransactionId), or of the customer's latest charge.</summary>
 public sealed record RefundCommand(Guid? TransactionId, Guid? CustomerId) : ICommand<TransactionDto>;
 
-public sealed class RefundCommandHandler(ITransactionRepository transactions, IUnitOfWork uow, TimeProvider clock)
+public sealed class RefundCommandHandler(ITransactionRepository transactions, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RefundCommand, TransactionDto>
 {
     public async Task<TransactionDto> HandleAsync(RefundCommand c, CancellationToken ct = default)
@@ -215,6 +274,7 @@ public sealed class RefundCommandHandler(ITransactionRepository transactions, IU
         if (all.Any(t => t.RefundOfId == charge.Id)) throw new ConflictException("รายการนี้คืนเงินไปแล้ว");
         var refund = charge.RefundOf(clock.GetUtcNow());
         transactions.Add(refund);
+        audit.Record(AuditAction.Refunded, charge.UserId, charge.Id.ToString(), refund.Amount.ToString());
         await uow.SaveChangesAsync(ct);
         return TransactionDto.From(refund);
     }
@@ -224,7 +284,7 @@ public sealed class RefundCommandHandler(ITransactionRepository transactions, IU
 public sealed record RecordPaymentCommand(Guid TransactionId) : ICommand<TransactionDto>;
 
 public sealed class RecordPaymentCommandHandler(
-    ITransactionRepository transactions, IUserRepository users, IUnitOfWork uow, TimeProvider clock)
+    ITransactionRepository transactions, IUserRepository users, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RecordPaymentCommand, TransactionDto>
 {
     public async Task<TransactionDto> HandleAsync(RecordPaymentCommand c, CancellationToken ct = default)
@@ -233,6 +293,7 @@ public sealed class RecordPaymentCommandHandler(
         tx.MarkPaid(clock.GetUtcNow());
         var user = await users.GetByIdAsync(tx.UserId, ct);
         if (user?.Status == CustomerStatus.PastDue) user.SetStatus(CustomerStatus.Active);
+        audit.Record(AuditAction.PaymentRecorded, tx.UserId, tx.Id.ToString(), tx.Amount.ToString());
         await uow.SaveChangesAsync(ct);
         return TransactionDto.From(tx);
     }
@@ -240,12 +301,14 @@ public sealed class RecordPaymentCommandHandler(
 
 public sealed record UpdatePlanCommand(PlanKey Key, int Price, int? Accounts, int? Posts, int? Devices, int? Seats) : ICommand<PlanDto>;
 
-public sealed class UpdatePlanCommandHandler(IPlanRepository plans, IUnitOfWork uow) : ICommandHandler<UpdatePlanCommand, PlanDto>
+public sealed class UpdatePlanCommandHandler(IPlanRepository plans, AdminAudit audit, IUnitOfWork uow) : ICommandHandler<UpdatePlanCommand, PlanDto>
 {
     public async Task<PlanDto> HandleAsync(UpdatePlanCommand c, CancellationToken ct = default)
     {
         var plan = await plans.GetAsync(c.Key, ct);
+        var from = AdminAudit.Plan(plan);
         plan.Update(c.Price, c.Accounts, c.Posts, c.Devices, c.Seats);
+        audit.Record(AuditAction.PlanSettingsChanged, null, from, AdminAudit.Plan(plan));
         await uow.SaveChangesAsync(ct);
         return PlanDto.From(plan);
     }
@@ -262,7 +325,7 @@ public sealed class GetPromosQueryHandler(IPromoRepository promos) : IQueryHandl
 /// <summary>A new code; without an end date it runs to the end of this year (Thai calendar).</summary>
 public sealed record CreatePromoCommand(string Code, string Discount, DateTimeOffset? ExpiresAt) : ICommand<PromoDto>;
 
-public sealed class CreatePromoCommandHandler(IPromoRepository promos, IUnitOfWork uow, TimeProvider clock)
+public sealed class CreatePromoCommandHandler(IPromoRepository promos, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreatePromoCommand, PromoDto>
 {
     public async Task<PromoDto> HandleAsync(CreatePromoCommand c, CancellationToken ct = default)
@@ -272,6 +335,7 @@ public sealed class CreatePromoCommandHandler(IPromoRepository promos, IUnitOfWo
         var end = c.ExpiresAt ?? new DateTimeOffset(now.Year, 12, 31, 23, 59, 59, now.Offset);
         var promo = Promo.Create(c.Code, c.Discount, end.ToUniversalTime());
         promos.Add(promo);
+        audit.Record(AuditAction.PromoCreated, null, promo.Code, promo.Discount);
         await uow.SaveChangesAsync(ct);
         return PromoDto.From(promo);
     }
@@ -279,15 +343,80 @@ public sealed class CreatePromoCommandHandler(IPromoRepository promos, IUnitOfWo
 
 public sealed record SetPromoActiveCommand(string Code, bool Active) : ICommand<PromoDto>;
 
-public sealed class SetPromoActiveCommandHandler(IPromoRepository promos, IUnitOfWork uow) : ICommandHandler<SetPromoActiveCommand, PromoDto>
+public sealed class SetPromoActiveCommandHandler(IPromoRepository promos, AdminAudit audit, IUnitOfWork uow)
+    : ICommandHandler<SetPromoActiveCommand, PromoDto>
 {
     public async Task<PromoDto> HandleAsync(SetPromoActiveCommand c, CancellationToken ct = default)
     {
         var promo = await promos.GetByCodeAsync(Promo.NormalizeCode(c.Code), ct) ?? throw new NotFoundException("โค้ดส่วนลด", c.Code);
         promo.SetActive(c.Active);
+        audit.Record(AuditAction.PromoToggled, null, promo.Code, c.Active ? "active" : "inactive");
         await uow.SaveChangesAsync(ct);
         return PromoDto.From(promo);
     }
+}
+
+/// <summary>
+/// Signs the admin in as a customer for an hour (the "assist" button). The token carries the admin's id,
+/// and the API only answers reads for it (ReadOnlyImpersonationMiddleware).
+/// </summary>
+public sealed record ImpersonateCommand(Guid CustomerId) : ICommand<AuthResultDto>;
+
+public sealed class ImpersonateCommandHandler(
+    IUserRepository users, ITokenService tokens, ICurrentUser current, AdminAudit audit, IUnitOfWork uow)
+    : ICommandHandler<ImpersonateCommand, AuthResultDto>
+{
+    public static readonly TimeSpan Lifetime = TimeSpan.FromHours(1);
+
+    public async Task<AuthResultDto> HandleAsync(ImpersonateCommand c, CancellationToken ct = default)
+    {
+        var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
+        var token = tokens.CreateImpersonation(user, current.UserId, Lifetime);
+        audit.Record(AuditAction.Impersonated, user.Id);
+        await uow.SaveChangesAsync(ct);
+        return new AuthResultDto(token.Token, token.ExpiresAt, UserDto.From(user));
+    }
+}
+
+/// <summary>The activity log, newest first: one customer's, or the whole platform's.</summary>
+public sealed record GetAuditQuery(Guid? CustomerId, int Take) : IQuery<IReadOnlyList<AuditEntryDto>>;
+
+public sealed class GetAuditQueryHandler(IAuditRepository audit, IUserRepository users)
+    : IQueryHandler<GetAuditQuery, IReadOnlyList<AuditEntryDto>>
+{
+    public async Task<IReadOnlyList<AuditEntryDto>> HandleAsync(GetAuditQuery q, CancellationToken ct = default)
+    {
+        var list = await audit.ListAsync(q.CustomerId, Math.Clamp(q.Take, 1, 200), ct);
+        var ids = list.Select(e => e.ActorId).Concat(list.Where(e => e.CustomerId is not null).Select(e => e.CustomerId!.Value)).Distinct();
+        var people = (await users.ListByIdsAsync(ids, ct)).ToDictionary(u => u.Id);
+        return list.Select(e => new AuditEntryDto(
+                e.Id, e.At, e.Action, e.ActorId, people.GetValueOrDefault(e.ActorId)?.Email ?? "",
+                e.CustomerId, e.CustomerId is { } cid ? people.GetValueOrDefault(cid)?.Email : null, e.From, e.To))
+            .ToList();
+    }
+}
+
+/// <summary>Writes activity-log entries for the signed-in admin; saved with the handler's unit of work.</summary>
+public sealed class AdminAudit(IAuditRepository audit, ICurrentUser current, TimeProvider clock)
+{
+    public void Record(AuditAction action, Guid? customerId, string? from = null, string? to = null) =>
+        audit.Add(AuditEntry.Create(current.ImpersonatorId ?? current.UserId, customerId, action, clock.GetUtcNow(), from, to));
+
+    public void PlanChange(User customer, PlanKey from) =>
+        audit.Add(AuditEntry.PlanChange(current.ImpersonatorId ?? current.UserId, customer, from, clock.GetUtcNow()));
+
+    public static string Key<T>(T value) where T : struct, Enum => System.Text.Json.JsonNamingPolicy.SnakeCaseLower.ConvertName(value.ToString());
+
+    /// <summary>"accounts=5 posts=- devices=0 seats=-": "-" keeps the plan's value, 0 = unlimited.</summary>
+    public static string Limits(LimitOverrides l) =>
+        $"accounts={N(l.Accounts)} posts={N(l.Posts)} devices={N(l.Devices)} seats={N(l.Seats)}";
+
+    public static string Plan(PlanSetting p) =>
+        $"{AuditEntry.Key(p.Key)} price={p.Price} accounts={N(p.Accounts)} posts={N(p.Posts)} devices={N(p.Devices)} seats={N(p.Seats)}";
+
+    public static string? Clip(string? text) => text is { Length: > 200 } ? text[..200] : text;
+
+    private static string N(int? n) => n?.ToString() ?? "-";
 }
 
 /// <summary>Builds the customer rows of the admin pages from users, workspaces, devices and posts.</summary>

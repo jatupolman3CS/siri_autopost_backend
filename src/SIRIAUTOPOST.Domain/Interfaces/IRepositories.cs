@@ -49,6 +49,15 @@ public interface ITransactionRepository
     void Add(Transaction transaction);
 }
 
+public interface IAuditRepository
+{
+    /// <summary>Newest first; customerId null = every entry.</summary>
+    Task<IReadOnlyList<AuditEntry>> ListAsync(Guid? customerId, int take, CancellationToken ct = default);
+    /// <summary>Every plan change since a time (the plan history behind churn and MRR).</summary>
+    Task<IReadOnlyList<AuditEntry>> ListPlanChangesAsync(DateTimeOffset since, CancellationToken ct = default);
+    void Add(AuditEntry entry);
+}
+
 public interface IPromoRepository
 {
     Task<IReadOnlyList<Promo>> ListAsync(CancellationToken ct = default);

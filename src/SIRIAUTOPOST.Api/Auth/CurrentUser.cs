@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Infrastructure.Auth;
 
 namespace SIRIAUTOPOST.Api.Auth;
 
@@ -15,4 +16,7 @@ public sealed class CurrentUser(IHttpContextAccessor http) : ICurrentUser
             return Guid.TryParse(sub, out var id) ? id : throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
         }
     }
+
+    public Guid? ImpersonatorId =>
+        Guid.TryParse(http.HttpContext?.User.FindFirstValue(JwtTokenService.ActorClaim), out var id) ? id : null;
 }

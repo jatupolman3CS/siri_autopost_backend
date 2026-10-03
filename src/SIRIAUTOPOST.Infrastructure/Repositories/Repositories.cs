@@ -282,6 +282,18 @@ public sealed class TransactionRepository(AppDbContext db) : ITransactionReposit
     public void Add(Transaction transaction) => db.Transactions.Add(transaction);
 }
 
+public sealed class AuditRepository(AppDbContext db) : IAuditRepository
+{
+    public async Task<IReadOnlyList<AuditEntry>> ListAsync(Guid? customerId, int take, CancellationToken ct = default) =>
+        await db.Audit.Where(x => customerId == null || x.CustomerId == customerId)
+            .OrderByDescending(x => x.At).Take(take).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<AuditEntry>> ListPlanChangesAsync(DateTimeOffset since, CancellationToken ct = default) =>
+        await db.Audit.Where(x => x.Action == AuditAction.PlanChanged && x.At >= since).OrderBy(x => x.At).ToListAsync(ct);
+
+    public void Add(AuditEntry entry) => db.Audit.Add(entry);
+}
+
 public sealed class PromoRepository(AppDbContext db) : IPromoRepository
 {
     public async Task<IReadOnlyList<Promo>> ListAsync(CancellationToken ct = default) =>

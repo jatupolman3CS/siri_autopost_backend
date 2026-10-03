@@ -10,23 +10,33 @@ namespace SIRIAUTOPOST.Infrastructure.Auth;
 
 public sealed class JwtTokenService(IOptions<JwtOptions> options, TimeProvider clock) : ITokenService
 {
-    public AuthToken Create(User user)
+    /// <summary>The admin acting as the user (RFC 8693 uses "act" for the acting party).</summary>
+    public const string ActorClaim = "act";
+
+    public AuthToken Create(User user) => Build(user, TimeSpan.FromHours(options.Value.LifetimeHours), null);
+
+    public AuthToken CreateImpersonation(User user, Guid adminId, TimeSpan lifetime) => Build(user, lifetime, adminId);
+
+    private AuthToken Build(User user, TimeSpan lifetime, Guid? actor)
     {
         var o = options.Value;
-        var expires = clock.GetUtcNow().AddHours(o.LifetimeHours);
+        var now = clock.GetUtcNow();
+        var expires = now.Add(lifetime);
+        var claims = new List<Claim>
+        {
+            new(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
+            new(JwtRegisteredClaimNames.Email, user.Email),
+            new("role", user.Role.ToString().ToLowerInvariant()),
+        };
+        if (actor is { } a) claims.Add(new Claim(ActorClaim, a.ToString()));
         var token = new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
         {
             Issuer = o.Issuer,
             Audience = o.Audience,
             Expires = expires.UtcDateTime,
-            IssuedAt = clock.GetUtcNow().UtcDateTime,
-            NotBefore = clock.GetUtcNow().UtcDateTime,
-            Subject = new ClaimsIdentity(
-            [
-                new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
-                new Claim(JwtRegisteredClaimNames.Email, user.Email),
-                new Claim("role", user.Role.ToString().ToLowerInvariant()),
-            ]),
+            IssuedAt = now.UtcDateTime,
+            NotBefore = now.UtcDateTime,
+            Subject = new ClaimsIdentity(claims),
             SigningCredentials = new SigningCredentials(SigningKey(o), SecurityAlgorithms.HmacSha256),
         });
         return new AuthToken(token, expires);

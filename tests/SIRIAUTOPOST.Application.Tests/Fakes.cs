@@ -10,4 +10,5 @@ internal sealed class FixedRandom(double value) : IRandomSource
 internal sealed class FakeUser(Guid id) : ICurrentUser
 {
     public Guid UserId => id;
+    public Guid? ImpersonatorId => null;
 }

@@ -156,6 +156,19 @@ public sealed class TransactionConfiguration : IEntityTypeConfiguration<Transact
     }
 }
 
+public sealed class AuditEntryConfiguration : IEntityTypeConfiguration<AuditEntry>
+{
+    public void Configure(EntityTypeBuilder<AuditEntry> b)
+    {
+        b.ToTable("audit_entries");
+        b.Property(x => x.From).HasMaxLength(200);
+        b.Property(x => x.To).HasMaxLength(200);
+        b.HasIndex(x => new { x.CustomerId, x.At });
+        b.HasIndex(x => new { x.Action, x.At });
+        // No foreign keys: the log outlives deleted users and promo codes.
+    }
+}
+
 public sealed class PromoConfiguration : IEntityTypeConfiguration<Promo>
 {
     public void Configure(EntityTypeBuilder<Promo> b)

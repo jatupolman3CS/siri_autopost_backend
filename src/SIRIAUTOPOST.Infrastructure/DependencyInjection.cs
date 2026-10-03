@@ -5,6 +5,7 @@ using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Infrastructure.Auth;
 using SIRIAUTOPOST.Infrastructure.Data;
+using SIRIAUTOPOST.Infrastructure.Diagnostics;
 using SIRIAUTOPOST.Infrastructure.Repositories;
 using SIRIAUTOPOST.Infrastructure.Seeding;
 using SIRIAUTOPOST.Infrastructure.Services;
@@ -34,6 +35,8 @@ public static class DependencyInjection
         services.AddScoped<IMemberRepository, MemberRepository>();
         services.AddScoped<IPlanRepository, PlanRepository>();
         services.AddScoped<ITransactionRepository, TransactionRepository>();
+        services.AddScoped<IAuditRepository, AuditRepository>();
+        services.AddScoped<IDatabaseProbe, DatabaseProbe>();
         services.AddScoped<IPromoRepository, PromoRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
 

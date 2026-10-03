@@ -45,8 +45,8 @@ public class StripePaymentGatewayTests
     private static string List(string url, params string[] items) =>
         $$$"""{"object":"list","url":"{{{url}}}","has_more":false,"data":[{{{string.Join(",", items)}}}]}""";
 
-    private static StripePaymentGateway Gateway(Stub stub, string key = "sk_test_unit") =>
-        new(Options.Create(new StripeOptions { SecretKey = key, WebhookSecret = "whsec_x", PortalConfigurationId = "bpc_1" }),
+    private static StripePaymentGateway Gateway(Stub stub, string key = "sk_test_unit", string currency = "thb") =>
+        new(Options.Create(new StripeOptions { SecretKey = key, WebhookSecret = "whsec_x", PortalConfigurationId = "bpc_1", Currency = currency }),
             NullLogger<StripePaymentGateway>.Instance, new HttpClient(stub));
 
     private static string SubscriptionJson(string id = "sub_1", string status = "active", string plan = "pro", string interval = "month", string extra = "") =>
@@ -290,6 +290,27 @@ public class StripePaymentGatewayTests
         Assert.Null(await gateway.GetCardAsync("cus_1")); // decoration on the billing page: never fatal
         await Assert.ThrowsAsync<PaymentGatewayException>(() => gateway.GetSubscriptionAsync("sub_1"));
         await Assert.ThrowsAsync<PaymentGatewayException>(() => gateway.CreatePortalAsync("cus_1", "https://a/b"));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("  ")]
+    public async Task An_empty_currency_setting_means_baht(string currency)
+    {
+        // An env file with "Stripe__Currency=" must not make Stripe reject every checkout.
+        var stub = new Stub();
+        stub.Answer = c => (c.Method.Method, c.Path) switch
+        {
+            ("GET", "/v1/products/autopost_pro") => (HttpStatusCode.OK, """{"id":"autopost_pro","object":"product"}"""),
+            ("POST", "/v1/checkout/sessions") => (HttpStatusCode.OK, """{"id":"cs_test_1","object":"checkout.session","url":"https://checkout.stripe.com/c/pay/cs_test_1"}"""),
+            _ => (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path)),
+        };
+
+        await Gateway(stub, currency: currency).CreateCheckoutAsync(new CheckoutRequest(
+            UserId, "cus_1", PlanKey.Pro, BillingCycle.Month, 790, 0, null, "https://app.test/ok", "https://app.test/cancel"));
+
+        var s = stub.Calls.Single(c => c.Path == "/v1/checkout/sessions").Fields;
+        Assert.Equal("thb", s["line_items[0][price_data][currency]"]);
     }
 
     [Fact]

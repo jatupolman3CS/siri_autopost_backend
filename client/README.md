@@ -111,7 +111,7 @@
 
 ### ติดตั้ง server
 
-**แบบ Docker (แนะนำสำหรับ VPS)** จากโฟลเดอร์ `server/`:
+**แบบ Docker (แนะนำสำหรับ VPS)** จาก root ของ repo นี้ (`docker-compose.yml` ที่ root):
 ```bash
 cp .env.example .env    # แก้ DB_PASSWORD, ADMIN_PASSWORD
 docker compose up -d --build
@@ -120,10 +120,10 @@ docker compose up -d --build
 ใช้ผ่านอินเทอร์เน็ตต้องมี **HTTPS** ด้านหน้า (Caddy / Nginx / Cloudflare Tunnel) เพราะคีย์เครื่องและรหัสผ่านวิ่งผ่านเส้นนี้
 
 **แบบรันเอง (Windows/Linux ที่มี .NET 10 SDK + PostgreSQL)**:
-1. ฐานข้อมูล: server อ่าน `server/.env` เอง ใช้ `ConnectionStrings__Default` ถ้ามี ถ้าไม่มีใช้ `AppSettings__ConnectionStrings` (server Postgres เดียวกับระบบ SIRI)
+1. ฐานข้อมูล: server อ่าน `.env` ในโฟลเดอร์ปัจจุบันหรือโฟลเดอร์แม่เอง ใช้ `ConnectionStrings__Default` ถ้ามี ถ้าไม่มีใช้ `AppSettings__ConnectionStrings` (server Postgres เดียวกับระบบ SIRI)
    แล้วเปลี่ยนชื่อฐานตาม `Database:Name`: **dev** (`ASPNETCORE_ENVIRONMENT=Development`, `dotnet run`) = `SIRIAUTOPOST`, **production** (ค่าเริ่มต้น / Docker) = `SIRIAUTOPOST_PRD`
    ระบบสร้างฐานและตารางให้เองตอนเริ่มครั้งแรก (user ของฐานต้องมีสิทธิ์ CREATEDB ถ้าไม่มี ให้สร้างฐานเองก่อน: `CREATE DATABASE "SIRIAUTOPOST" OWNER app_user;`)
-   ตารางทุกตัวชื่อขึ้นต้น `fbap_` และประวัติ migration อยู่ใน `fbap_ef_migrations`
+   ตารางทุกตัวชื่อขึ้นต้น `FBAP_` (ตัวพิมพ์ใหญ่ เช่น `FBAP_PROFILES`) และประวัติ migration อยู่ใน `fbap_ef_migrations` (ตัวพิมพ์เล็ก)
    ตั้งรหัสแอดมินด้วย `Admin__Password=...` ใน `.env` (หรือ `appsettings.json` > `Admin:Password`)
 2. `cd backend/SIRI.AUTOPOST.Server` แล้ว `dotnet run` (พอร์ต 5080) หรือ `dotnet publish -c Release` แล้วรัน `SIRI.AUTOPOST.Server.dll`
 3. ถ้าไม่ตั้ง `Admin:Password` ระบบสุ่มรหัสให้ครั้งแรกและพิมพ์ไว้ใน log ของ server เปลี่ยนรหัสได้ในหน้าเว็บ
@@ -131,7 +131,7 @@ docker compose up -d --build
 ### เชื่อมเครื่องรัน
 1. หน้าเว็บ server > **Config** > สร้าง config (เริ่มจากว่าง หรือคัดลอกจากที่มี)
 2. **เครื่องรัน** > ใส่ชื่อเครื่อง เลือก config > **เพิ่มเครื่อง** > ได้ URL server + **คีย์เครื่อง** (แสดงครั้งเดียว)
-3. บนเครื่องรัน: เปิดหน้าตั้งค่าส่วนขยาย > การ์ด **เชื่อมต่อ server (ตั้งค่าออนไลน์)** > ใส่ URL + คีย์ > **เชื่อมต่อ**
+3. บนเครื่องรัน: (ตั้งแต่ v2.2 การ์ดนี้ถูกถอดออกจากส่วนขยายแล้ว จึงเชื่อมเครื่องใหม่กับ server เดิมจากหน้า UI ไม่ได้ ใช้ "เชื่อมต่อเว็บ AutoPost" แทน) เปิดหน้าตั้งค่าส่วนขยาย > การ์ด **เชื่อมต่อ server (ตั้งค่าออนไลน์)** > ใส่ URL + คีย์ > **เชื่อมต่อ**
    - config บน server ยังว่าง → อัปโหลดการตั้งค่าที่เครื่องนี้มีขึ้นไปให้ (ย้ายของเดิมขึ้น server ได้ทันที)
    - config บน server มีข้อมูลแล้ว → เครื่องนี้ใช้ของ server แทนของเดิม
 4. จากนั้นแก้ที่หน้าเว็บ (Config > **แก้ไข** หรือ เครื่องรัน > **ควบคุม / ดูสถานะ**) เครื่องรันได้ของใหม่ภายใน ~30 วินาที
@@ -507,10 +507,10 @@ tools/test-online.mjs  ทดสอบโหมดออนไลน์ (backgro
 tools/test-cloud.mjs   ทดสอบโหมดเว็บ AutoPost (background.js จริง + SIRIAUTOPOST.Api จริง)
 backend/SIRI.AUTOPOST.Server/  server .NET 10 + PostgreSQL (ตั้งค่าออนไลน์)
   Program.cs             เริ่มระบบ, ล็อกอิน (cookie), CORS ของ API เครื่องรัน, เสิร์ฟหน้าตั้งค่าของส่วนขยายที่ /app
-  Data/                  ตาราง fbap_users, fbap_profiles (config), fbap_profile_images, fbap_devices, fbap_device_logs, fbap_device_commands + migrations
+  Data/                  ตาราง FBAP_USERS, FBAP_PROFILES (config), FBAP_PROFILE_IMAGES, FBAP_DEVICES, FBAP_DEVICE_LOGS, FBAP_DEVICE_COMMANDS + migrations
   Endpoints/             API เว็บ (/api/...) และ API เครื่องรัน (/api/device/..., header X-Device-Key)
   wwwroot/               หน้าล็อกอิน, หน้าจัดการ config/เครื่อง, web/shim.js (แปลง chrome.storage เป็นการเรียก server)
-server/Dockerfile, server/docker-compose.yml  รัน server + PostgreSQL ด้วย Docker
+backend/Dockerfile + docker-compose.yml (ที่ root ของ repo)  รัน server + PostgreSQL ด้วย Docker
 ```
 
 ข้อมูลทั้งหมด (ตั้งค่า, รูป, บันทึก, Bot Token) เก็บใน `chrome.storage.local` บนเครื่อง ส่งออกไปที่ `api.telegram.org` เฉพาะตอนแจ้งเตือน และไปที่ server ของคุณเองเฉพาะเมื่อเชื่อมต่อโหมดออนไลน์ (config + รูป + สถานะ + บันทึกการทำงาน)

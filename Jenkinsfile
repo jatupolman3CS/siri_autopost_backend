@@ -51,7 +51,13 @@ pipeline {
                         kubectl -n "$K8S_NAMESPACE" create secret generic api-env --from-env-file="$CLEAN" --dry-run=client -o yaml | kubectl apply -f -
                     '''
                 }
-                sh "kubectl -n ${K8S_NAMESPACE} set image deployment/api api=${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}"
+                // Deployment, Service `api` and the shared config come from deploy/k8s/overlays/prd, so the first build
+                // creates them (the dashboard's nginx needs Service `api`). The tag is pinned in the workspace copy only.
+                sh """
+                    set -eu
+                    sed -i "s/newTag: .*/newTag: ${IMAGE_TAG}/" deploy/k8s/overlays/prd/kustomization.yaml
+                    kubectl apply -k deploy/k8s/overlays/prd
+                """
                 sh "kubectl -n ${K8S_NAMESPACE} rollout status deployment/api --timeout=300s"
             }
         }

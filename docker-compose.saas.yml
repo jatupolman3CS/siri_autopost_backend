@@ -32,6 +32,13 @@ services:
       Admin__Email: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
       Admin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
       Google__ClientId: ${Google__ClientId:-}
+      # Stripe takes the payments (empty key: paid plans cannot be bought). The webhook endpoint to register
+      # in the Stripe dashboard is <public address>/api/webhooks/stripe.
+      Stripe__SecretKey: ${Stripe__SecretKey:-}
+      Stripe__WebhookSecret: ${Stripe__WebhookSecret:-}
+      Stripe__ReturnBaseUrl: ${Stripe__ReturnBaseUrl:-}
+      Stripe__Currency: ${Stripe__Currency:-thb}
+      Stripe__PortalConfigurationId: ${Stripe__PortalConfigurationId:-}
     depends_on:
       db:
         condition: service_healthy

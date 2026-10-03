@@ -23,3 +23,5 @@ configMapGenerator:
       - ASPNETCORE_ENVIRONMENT=Production
       # Pinned here so an env file copied from elsewhere cannot change the public origin.
       - Cors__AllowedOrigins__0=https://siriautopost.siristudiophoto.com
+      # Where Stripe Checkout and the billing portal send customers back to (same reason).
+      - Stripe__ReturnBaseUrl=https://siriautopost.siristudiophoto.com

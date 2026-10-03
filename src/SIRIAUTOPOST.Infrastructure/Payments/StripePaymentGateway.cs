@@ -47,7 +47,7 @@ public sealed class StripePaymentGateway : IPaymentGateway
 
     private IStripeClient Client => client ?? throw new DomainException(ChangePlanCommandHandler.NotReady);
 
-    private string Currency => options.Currency.Trim().ToLowerInvariant();
+    private string Currency => string.IsNullOrWhiteSpace(options.Currency) ? "thb" : options.Currency.Trim().ToLowerInvariant();
 
     public PaymentEvent? ParseWebhook(string payload, string? signature) => webhooks.Parse(payload, signature);
 

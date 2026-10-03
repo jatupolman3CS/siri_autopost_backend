@@ -56,7 +56,9 @@ spec:
               cpu: 100m
               memory: 256Mi
             limits:
-              memory: 768Mi
+              # A campaign video of up to 200 MB goes up as one base64 JSON body (about 270 MB on the wire),
+              # which the API holds as text and as bytes at once: 768Mi would be killed by one such upload.
+              memory: 2Gi
 ---
 # The dashboard's nginx (siri_autopost_ui/nginx.conf) proxies /api to http://api:8080,
 # so the Service name and port must stay `api` / 8080.

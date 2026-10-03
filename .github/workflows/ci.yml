@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports:
@@ -40,21 +40,52 @@ jobs:
       - run: dotnet test SIRIAUTOPOST.sln --no-build -c Release --logger "console;verbosity=normal"
 
   legacy-server:
-    name: Legacy server build
+    name: Legacy server build and extension online mode
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - run: dotnet build backend/SIRI.AUTOPOST.Server/SIRI.AUTOPOST.Server.csproj -c Release
+      - name: Start the server on a fresh database (runs every migration, then serves)
+        working-directory: backend/SIRI.AUTOPOST.Server
+        env:
+          ConnectionStrings__Default: Host=localhost;Port=5432;Database=postgres;Username=postgres;Password=postgres
+          Admin__Password: ci-admin-password
+          ASPNETCORE_ENVIRONMENT: Development
+          ASPNETCORE_URLS: http://localhost:5080
+        run: |
+          dotnet run --no-build -c Release --no-launch-profile > "$RUNNER_TEMP/legacy.log" 2>&1 &
+          for i in $(seq 1 60); do curl -fs -o /dev/null http://localhost:5080/login.html && exit 0; sleep 2; done
+          cat "$RUNNER_TEMP/legacy.log"; exit 1
+      - name: Connect, sync, command and log (real background.js, faked Chrome)
+        run: node client/tools/test-online.mjs http://localhost:5080 admin ci-admin-password
+      - name: Server log
+        if: failure()
+        run: cat "$RUNNER_TEMP/legacy.log"
 
   extension-cloud:
     name: Extension cloud mode against the API
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16
+        image: postgres:18
         env:
           POSTGRES_PASSWORD: postgres
         ports:

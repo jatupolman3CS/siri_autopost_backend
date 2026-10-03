@@ -29,12 +29,15 @@ public static class DependencyInjection
         services.AddScoped<IPostRepository, PostRepository>();
         services.AddScoped<IMediaRepository, MediaRepository>();
         services.AddScoped<ISnippetRepository, SnippetRepository>();
+        services.AddScoped<IDeviceRepository, DeviceRepository>();
+        services.AddScoped<IDevicePairingRepository, DevicePairingRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IRandomSource, RandomSource>();
+        services.AddSingleton<IDeviceSecrets, DeviceSecrets>();
 
         return services;
     }

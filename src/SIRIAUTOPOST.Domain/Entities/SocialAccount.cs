@@ -2,6 +2,12 @@ using SIRIAUTOPOST.Domain.Enums;
 
 namespace SIRIAUTOPOST.Domain.Entities;
 
+public class GroupLink
+{
+    public string Name { get; set; } = "";
+    public string Url { get; set; } = "";
+}
+
 // A social account the extension posts with. Accounts that post to Facebook groups list those groups.
 public class SocialAccount : Entity
 {
@@ -13,6 +19,10 @@ public class SocialAccount : Entity
     public string DefaultTarget { get; private set; } = "";
     public AccountHealth Health { get; private set; }
     public List<string> Groups { get; private set; } = [];
+    /// <summary>Group links reported by the extension; the extension posts to these URLs.</summary>
+    public List<GroupLink> GroupLinks { get; private set; } = [];
+    /// <summary>The device whose browser holds this account's login, when connected through the extension.</summary>
+    public Guid? DeviceId { get; private set; }
     public int SortOrder { get; private set; }
 
     private SocialAccount() { } // EF Core
@@ -36,5 +46,46 @@ public class SocialAccount : Entity
 
     public bool CanPost => Health != AccountHealth.Relogin;
 
+    public bool IsConnected => DeviceId is not null;
+
     public void MarkHealthy() => Health = AccountHealth.Ok;
+
+    /// <summary>The extension found Facebook logged out or asking for a checkpoint.</summary>
+    public void MarkNeedsLogin() => Health = AccountHealth.Relogin;
+
+    /// <summary>The Facebook account of a newly paired browser.</summary>
+    public static SocialAccount Connect(Guid workspaceId, Device device, int sortOrder) =>
+        new()
+        {
+            WorkspaceId = workspaceId,
+            Platform = Platform.Fb,
+            Name = $"Facebook · {device.Name}",
+            Handle = "เชื่อมผ่านส่วนขยาย",
+            DefaultTarget = "กลุ่ม Facebook",
+            Health = AccountHealth.Ok,
+            DeviceId = device.Id,
+            SortOrder = sortOrder,
+        };
+
+    /// <summary>Replaces the groups with the ones the extension knows (names must be unique).</summary>
+    public void SyncGroups(IEnumerable<GroupLink> links)
+    {
+        var list = links
+            .Select(l => new GroupLink { Name = (l.Name ?? "").Trim(), Url = (l.Url ?? "").Trim() })
+            .Where(l => l.Url.Length > 0)
+            .Select(l => l.Name.Length > 0 ? l : new GroupLink { Name = l.Url, Url = l.Url })
+            .DistinctBy(l => l.Name)
+            .ToList();
+        GroupLinks = list;
+        Groups = list.Select(l => l.Name).ToList();
+    }
+
+    public string? UrlFor(string group) => GroupLinks.FirstOrDefault(l => l.Name == group)?.Url;
+
+    /// <summary>The device was unbound: the account stays (with its history) but cannot post.</summary>
+    public void Disconnect()
+    {
+        DeviceId = null;
+        Health = AccountHealth.Relogin;
+    }
 }

@@ -164,7 +164,7 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
         var on = await client.PostAsJsonAsync($"/api/workspaces/{ws}/engine/extension", new { online = true });
         Assert.Equal(4, (await on.Content.ReadFromJsonAsync<ExtensionStateDto>(Json))!.Affected);
         Assert.Equal(0, await Count(PostStatus.Waiting));
-        Assert.Equal(sentBefore + 4, await Count(PostStatus.Success)); // default policy: queue, then send
+        Assert.Equal(sentBefore, await Count(PostStatus.Success)); // default policy: back in the queue for a device to send
     }
 
     [Fact]

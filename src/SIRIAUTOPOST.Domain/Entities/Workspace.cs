@@ -13,7 +13,7 @@ public class Workspace : Entity
     public DateTimeOffset CreatedAt { get; private set; }
     public AntiBanSettings AntiBan { get; private set; } = new();
     public OfflineSettings Offline { get; private set; } = new();
-    /// <summary>Whether the browser extension is connected. Set by the offline simulation until devices report heartbeats.</summary>
+    /// <summary>False while the offline simulation holds the extension offline. Real presence comes from devices.</summary>
     public bool ExtensionOnline { get; private set; } = true;
 
     private Workspace() { } // EF Core

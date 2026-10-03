@@ -33,3 +33,20 @@ public interface IWorkspaceSeeder
 {
     Task SeedAsync(Workspace workspace, CancellationToken ct = default);
 }
+
+/// <summary>The paired extension making the current request (X-Device-Key).</summary>
+public interface ICurrentDevice
+{
+    /// <summary>Throws AuthenticationException when the request has no valid device key.</summary>
+    Guid DeviceId { get; }
+    Guid WorkspaceId { get; }
+}
+
+/// <summary>Secrets for device pairing: random codes and keys, and the hash stored for a key.</summary>
+public interface IDeviceSecrets
+{
+    /// <summary>A short code people can type, like "K7QF-2MXP".</summary>
+    string NewPairingCode();
+    string NewDeviceKey();
+    string Hash(string deviceKey);
+}

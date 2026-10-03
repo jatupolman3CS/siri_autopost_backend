@@ -10,18 +10,23 @@ namespace SIRIAUTOPOST.Application.Features.Engine;
 
 public sealed record GetEngineSettingsQuery(Guid WorkspaceId) : IQuery<EngineSettingsDto>;
 
-public sealed class GetEngineSettingsQueryHandler(IWorkspaceRepository workspaces, ICurrentUser current)
+public sealed class GetEngineSettingsQueryHandler(
+    IWorkspaceRepository workspaces, IDeviceRepository devices, ICurrentUser current, TimeProvider clock)
     : IQueryHandler<GetEngineSettingsQuery, EngineSettingsDto>
 {
-    public async Task<EngineSettingsDto> HandleAsync(GetEngineSettingsQuery q, CancellationToken ct = default) =>
-        EngineSettingsDto.From(await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct));
+    public async Task<EngineSettingsDto> HandleAsync(GetEngineSettingsQuery q, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
+    }
 }
 
 public sealed record UpdateAntiBanCommand(Guid WorkspaceId, AntiBanDto Settings) : ICommand<EngineSettingsDto>;
 
 /// <summary>Human-like behaviour switches only change on Pro and above; lower plans keep their current values.</summary>
 public sealed class UpdateAntiBanCommandHandler(
-    IWorkspaceRepository workspaces, IUserRepository users, ICurrentUser current, IUnitOfWork uow)
+    IWorkspaceRepository workspaces, IUserRepository users, IDeviceRepository devices, ICurrentUser current, IUnitOfWork uow,
+    TimeProvider clock)
     : ICommandHandler<UpdateAntiBanCommand, EngineSettingsDto>
 {
     public async Task<EngineSettingsDto> HandleAsync(UpdateAntiBanCommand c, CancellationToken ct = default)
@@ -30,13 +35,14 @@ public sealed class UpdateAntiBanCommandHandler(
         var user = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
         ws.UpdateAntiBan(c.Settings.ToSettings(), user.HasAdvancedAntiBan);
         await uow.SaveChangesAsync(ct);
-        return EngineSettingsDto.From(ws);
+        return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
     }
 }
 
 public sealed record UpdateOfflineCommand(Guid WorkspaceId, OfflineDto Settings) : ICommand<EngineSettingsDto>;
 
-public sealed class UpdateOfflineCommandHandler(IWorkspaceRepository workspaces, ICurrentUser current, IUnitOfWork uow)
+public sealed class UpdateOfflineCommandHandler(
+    IWorkspaceRepository workspaces, IDeviceRepository devices, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateOfflineCommand, EngineSettingsDto>
 {
     public async Task<EngineSettingsDto> HandleAsync(UpdateOfflineCommand c, CancellationToken ct = default)
@@ -44,14 +50,14 @@ public sealed class UpdateOfflineCommandHandler(IWorkspaceRepository workspaces,
         var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
         ws.UpdateOffline(c.Settings.ToSettings());
         await uow.SaveChangesAsync(ct);
-        return EngineSettingsDto.From(ws);
+        return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
     }
 }
 
 /// <summary>
 /// "Simulate offline / reconnect" from the design. Going offline holds the next 4 queued posts due in the
-/// next 12 hours; reconnecting sends them, or skips them under the skip policy. Real connection state will
-/// come from extension heartbeats.
+/// next 12 hours, and paired devices take no jobs; reconnecting puts them back in the queue (a device posts
+/// them next), or skips them under the skip policy.
 /// </summary>
 public sealed record SetExtensionOnlineCommand(Guid WorkspaceId, bool Online) : ICommand<ExtensionStateDto>;
 

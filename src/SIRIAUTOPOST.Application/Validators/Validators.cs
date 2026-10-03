@@ -1,5 +1,6 @@
 using FluentValidation;
 using SIRIAUTOPOST.Application.Features.Auth;
+using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
 using SIRIAUTOPOST.Application.Features.Workspaces;
@@ -70,4 +71,30 @@ public sealed class UploadMediaCommandValidator : AbstractValidator<UploadMediaC
 {
     public UploadMediaCommandValidator() =>
         RuleFor(x => x.Data).Must(d => d.LongLength <= MediaFile.MaxBytes).WithMessage("ไฟล์ใหญ่เกิน 100 MB");
+}
+
+public sealed class PairDeviceCommandValidator : AbstractValidator<PairDeviceCommand>
+{
+    public PairDeviceCommandValidator()
+    {
+        RuleFor(x => x.Code).NotEmpty().WithMessage("กรุณาใส่รหัสจับคู่");
+        RuleFor(x => x.Name).MaximumLength(Device.MaxNameLength).WithMessage($"ชื่อเครื่องยาวเกิน {Device.MaxNameLength} ตัวอักษร");
+    }
+}
+
+public sealed class SyncDeviceGroupsCommandValidator : AbstractValidator<SyncDeviceGroupsCommand>
+{
+    public const int MaxGroups = 1000;
+
+    public SyncDeviceGroupsCommandValidator()
+    {
+        RuleFor(x => x.Groups).NotNull().Must(g => g.Count <= MaxGroups).WithMessage($"ส่งกลุ่มได้ไม่เกิน {MaxGroups} กลุ่ม");
+        RuleForEach(x => x.Groups).ChildRules(g =>
+        {
+            g.RuleFor(x => x.Name).MaximumLength(Post.MaxTargetLength).WithMessage($"ชื่อกลุ่มยาวเกิน {Post.MaxTargetLength} ตัวอักษร");
+            g.RuleFor(x => x.Url)
+                .Must(u => Uri.TryCreate(u, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https")
+                .WithMessage("ลิงก์กลุ่มต้องขึ้นต้นด้วย http:// หรือ https://");
+        });
+    }
 }

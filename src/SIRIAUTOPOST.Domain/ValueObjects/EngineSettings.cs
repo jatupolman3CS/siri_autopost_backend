@@ -65,4 +65,17 @@ public class OfflineSettings
     {
         if (!Windows.Contains(Window)) throw new DomainException("กรอบเวลาไม่ถูกต้อง");
     }
+
+    /// <summary>Under the skip policy a post may still go out this late (clock drift, a slow device).</summary>
+    public static readonly TimeSpan SkipGrace = TimeSpan.FromMinutes(10);
+
+    /// <summary>How late a post may go out before it is skipped instead.</summary>
+    public TimeSpan MaxLateness => Policy == OfflinePolicy.Skip
+        ? SkipGrace
+        : Window switch
+        {
+            "30m" => TimeSpan.FromMinutes(30),
+            "day" => TimeSpan.FromDays(1),
+            _ => TimeSpan.FromHours(2),
+        };
 }

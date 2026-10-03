@@ -12,6 +12,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options) : DbContext(op
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<MediaFile> Media => Set<MediaFile>();
     public DbSet<Snippet> Snippets => Set<Snippet>();
+    public DbSet<Device> Devices => Set<Device>();
+    public DbSet<DevicePairing> DevicePairings => Set<DevicePairing>();
 
     // Picks up every IEntityTypeConfiguration in Data/Configurations.
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>

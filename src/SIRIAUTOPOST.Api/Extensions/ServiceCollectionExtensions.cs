@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
@@ -14,6 +15,8 @@ namespace SIRIAUTOPOST.Api.Extensions;
 public static class ServiceCollectionExtensions
 {
     public const string FrontendCors = "Frontend";
+    /// <summary>The extension calls /api/device from its own origin; it sends a key header, never cookies.</summary>
+    public const string DeviceCors = "Devices";
 
     public static IServiceCollection AddApi(this IServiceCollection services, IConfiguration config)
     {
@@ -23,6 +26,7 @@ public static class ServiceCollectionExtensions
 
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
+        services.AddScoped<ICurrentDevice, CurrentDevice>();
         services.AddJwtAuth(config);
 
         // Enums travel as snake_case strings ("fb", "pending_approval", "agency"...) and numbers
@@ -47,6 +51,7 @@ public static class ServiceCollectionExtensions
             .WithOrigins(origins)
             .AllowAnyHeader()
             .AllowAnyMethod()));
+        services.AddCors(o => o.AddPolicy(DeviceCors, p => p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod()));
 
         return services;
     }
@@ -58,6 +63,7 @@ public static class ServiceCollectionExtensions
         var key = JwtTokenService.SigningKey(jwt); // fails fast when Jwt:Key is missing or too short
 
         services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+            .AddScheme<AuthenticationSchemeOptions, DeviceKeyAuthenticationHandler>(DeviceKeyAuthenticationHandler.SchemeName, null)
             .AddJwtBearer(o =>
             {
                 o.MapInboundClaims = false;

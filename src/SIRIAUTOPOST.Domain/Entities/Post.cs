@@ -21,6 +21,11 @@ public class Post : Entity
     /// <summary>The user acknowledged the error report (skip / dismiss).</summary>
     public bool ErrorDismissed { get; private set; }
     public DateTimeOffset? PublishedAt { get; private set; }
+    /// <summary>What the extension reported when the post failed.</summary>
+    public string? FailureDetail { get; private set; }
+    /// <summary>The device posting it right now (status Posting).</summary>
+    public Guid? ClaimedByDeviceId { get; private set; }
+    public DateTimeOffset? ClaimedAt { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -83,6 +88,7 @@ public class Post : Entity
         if (Status != PostStatus.Failed) throw new DomainException("ลองใหม่ได้เฉพาะโพสต์ที่ล้มเหลว");
         Status = PostStatus.Queued;
         FailureCode = null;
+        FailureDetail = null;
         ErrorDismissed = false;
         ScheduledAt = now.AddMinutes(15).ToUniversalTime();
         UpdatedAt = now;
@@ -104,12 +110,67 @@ public class Post : Entity
         UpdatedAt = now;
     }
 
-    /// <summary>The extension came back: waiting posts are sent, or skipped under the skip policy.</summary>
+    /// <summary>The extension came back: waiting posts go back to the queue (sent next), or are skipped under the skip policy.</summary>
     public void ResolveWaiting(bool skip, DateTimeOffset now)
     {
         if (Status != PostStatus.Waiting) return;
-        Status = skip ? PostStatus.Skipped : PostStatus.Success;
-        PublishedAt = skip ? null : now.ToUniversalTime();
+        Status = skip ? PostStatus.Skipped : PostStatus.Queued;
         UpdatedAt = now;
+    }
+
+    public const int MaxDetailLength = 500;
+    /// <summary>A device that does not report back within this time is assumed to have failed.</summary>
+    public static readonly TimeSpan ClaimTimeout = TimeSpan.FromMinutes(15);
+
+    /// <summary>A device takes the post to publish it now.</summary>
+    public void Claim(Guid deviceId, DateTimeOffset now)
+    {
+        if (Status != PostStatus.Queued) throw new DomainException("โพสต์นี้ไม่ได้อยู่ในคิวแล้ว");
+        Status = PostStatus.Posting;
+        ClaimedByDeviceId = deviceId;
+        ClaimedAt = now;
+        UpdatedAt = now;
+    }
+
+    public bool ClaimExpired(DateTimeOffset now) =>
+        Status == PostStatus.Posting && ClaimedAt is { } at && now - at > ClaimTimeout;
+
+    /// <summary>The device posted it; a group that needs admin approval leaves it pending.</summary>
+    public void CompletePosted(bool awaitingApproval, DateTimeOffset now)
+    {
+        if (Status != PostStatus.Posting) throw new DomainException("โพสต์นี้ไม่ได้อยู่ระหว่างโพสต์");
+        Status = awaitingApproval ? PostStatus.Pending : PostStatus.Success;
+        FailureCode = awaitingApproval ? Enums.FailureCode.PendingApproval : null;
+        PublishedAt = now.ToUniversalTime();
+        ClaimedByDeviceId = null;
+        UpdatedAt = now;
+    }
+
+    /// <summary>Could not be posted (by the device, or refused before it was handed out).</summary>
+    public void Fail(FailureCode code, string? detail, DateTimeOffset now)
+    {
+        if (Status is not (PostStatus.Posting or PostStatus.Queued))
+            throw new DomainException("โพสต์นี้ไม่ได้อยู่ในคิวหรือระหว่างโพสต์");
+        Status = PostStatus.Failed;
+        FailureCode = code;
+        FailureDetail = Cut(detail);
+        ErrorDismissed = false;
+        ClaimedByDeviceId = null;
+        UpdatedAt = now;
+    }
+
+    /// <summary>Too late to post under the workspace's offline policy.</summary>
+    public void SkipLate(DateTimeOffset now)
+    {
+        if (Status != PostStatus.Queued) return;
+        Status = PostStatus.Skipped;
+        UpdatedAt = now;
+    }
+
+    private static string? Cut(string? s)
+    {
+        var t = s?.Trim();
+        if (string.IsNullOrEmpty(t)) return null;
+        return t.Length > MaxDetailLength ? t[..MaxDetailLength] : t;
     }
 }

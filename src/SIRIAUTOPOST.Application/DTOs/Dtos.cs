@@ -14,11 +14,13 @@ public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserD
 
 public sealed record WorkspaceDto(Guid Id, string Name, int Posts7, int Members);
 
+/// <param name="Connected">Posts through a paired browser (false for the demo accounts).</param>
 public sealed record AccountDto(
-    Guid Id, Platform Platform, string Name, string Handle, string DefaultTarget, AccountHealth Health, IReadOnlyList<string> Groups)
+    Guid Id, Platform Platform, string Name, string Handle, string DefaultTarget, AccountHealth Health,
+    IReadOnlyList<string> Groups, bool Connected)
 {
     public static AccountDto From(SocialAccount a) =>
-        new(a.Id, a.Platform, a.Name, a.Handle, a.DefaultTarget, a.Health, a.Groups);
+        new(a.Id, a.Platform, a.Name, a.Handle, a.DefaultTarget, a.Health, a.Groups, a.IsConnected);
 }
 
 public sealed record PostDto(
@@ -31,10 +33,12 @@ public sealed record PostDto(
     DateTimeOffset ScheduledAt,
     PostStatus Status,
     FailureCode? FailureCode,
+    string? FailureDetail,
     DateTimeOffset? PublishedAt)
 {
     public static PostDto From(Post p) =>
-        new(p.Id, p.AccountId, p.Platform, p.Target, p.Content, p.MediaIds, p.ScheduledAt, p.Status, p.FailureCode, p.PublishedAt);
+        new(p.Id, p.AccountId, p.Platform, p.Target, p.Content, p.MediaIds, p.ScheduledAt, p.Status, p.FailureCode,
+            p.FailureDetail, p.PublishedAt);
 }
 
 public sealed record ScheduleResultDto(int Created, DateTimeOffset FirstAt, DateTimeOffset LastAt);
@@ -79,11 +83,47 @@ public sealed record OfflineDto(OfflinePolicy Policy, string Window, bool Line, 
     public OfflineSettings ToSettings() => new() { Policy = Policy, Window = Window, Line = Line, Email = Email, Push = Push };
 }
 
-public sealed record EngineSettingsDto(AntiBanDto AntiBan, OfflineDto Offline, bool ExtensionOnline)
+/// <param name="ExtensionOnline">
+/// Off while the offline simulation holds it; otherwise on when no device is paired yet (demo) or when a
+/// paired device called in within the last 100 seconds.
+/// </param>
+/// <param name="Devices">Paired devices.</param>
+/// <param name="DevicesOnline">Paired devices seen within the last 100 seconds.</param>
+public sealed record EngineSettingsDto(AntiBanDto AntiBan, OfflineDto Offline, bool ExtensionOnline, int Devices, int DevicesOnline)
 {
-    public static EngineSettingsDto From(Workspace ws) =>
-        new(AntiBanDto.From(ws.AntiBan), OfflineDto.From(ws.Offline), ws.ExtensionOnline);
+    public static EngineSettingsDto From(Workspace ws, IReadOnlyList<Device> devices, DateTimeOffset now)
+    {
+        var online = devices.Count(d => d.IsOnline(now));
+        return new(AntiBanDto.From(ws.AntiBan), OfflineDto.From(ws.Offline),
+            ws.ExtensionOnline && (devices.Count == 0 || online > 0), devices.Count, online);
+    }
 }
 
 /// <summary>How many posts the offline simulation moved.</summary>
 public sealed record ExtensionStateDto(bool Online, int Affected);
+
+/// <param name="Online">Called in within the last 100 seconds.</param>
+/// <param name="AccountId">The Facebook account this browser posts with.</param>
+public sealed record DeviceDto(
+    Guid Id, string Name, string Browser, string Version, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online, Guid? AccountId)
+{
+    public static DeviceDto From(Device d, Guid? accountId, DateTimeOffset now) =>
+        new(d.Id, d.Name, d.Browser, d.Version, d.CreatedAt, d.LastSeenAt, d.IsOnline(now), accountId);
+}
+
+/// <param name="MaxDevices">The owner's plan limit; null = unlimited.</param>
+public sealed record PairingCodeDto(string Code, DateTimeOffset ExpiresAt, int? MaxDevices);
+
+/// <summary>Returned once to the extension; only its hash is stored.</summary>
+public sealed record PairResultDto(string DeviceKey, Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid AccountId);
+
+/// <param name="Online">False while the offline simulation holds the workspace offline: take no jobs.</param>
+public sealed record DeviceStatusDto(
+    Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid? AccountId, int Groups, bool Online, AntiBanDto AntiBan);
+
+public sealed record GroupLinkDto(string Name, string Url);
+
+public sealed record JobMediaDto(Guid Id, string Name, string ContentType);
+
+/// <summary>One post for the extension to publish now, in one Facebook group.</summary>
+public sealed record JobDto(Guid PostId, string GroupName, string GroupUrl, string Content, IReadOnlyList<JobMediaDto> Media, AntiBanDto AntiBan);

@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SIRIAUTOPOST.Application.DTOs;
@@ -23,6 +24,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
     };
 
+    /// <summary>The API's clock. Tests that move it must put it back (see <see cref="TestClock.Advance"/>).</summary>
+    public TestClock Clock { get; } = new();
+
     private static readonly string ConnectionString =
         Environment.GetEnvironmentVariable("SIRIAUTOPOST_TEST_DB")
         ?? "Host=localhost;Port=5432;Database=siriautopost_test;Username=postgres;Password=postgres";
@@ -35,6 +39,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "integration-test-signing-key-0123456789abcdef");
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);
+        builder.ConfigureTestServices(s => s.AddSingleton<TimeProvider>(Clock));
     }
 
     public async Task InitializeAsync()
@@ -62,6 +67,26 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
         var ws = (await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!;
         return (client, auth, ws[0].Id);
+    }
+}
+
+/// <summary>System time plus an offset a test can move forward (and must reset).</summary>
+public sealed class TestClock : TimeProvider
+{
+    private TimeSpan offset;
+
+    public override DateTimeOffset GetUtcNow() => base.GetUtcNow() + offset;
+
+    /// <summary>Moves the clock; dispose the result to move it back.</summary>
+    public IDisposable Advance(TimeSpan by)
+    {
+        offset += by;
+        return new Reset(() => offset -= by);
+    }
+
+    private sealed class Reset(Action undo) : IDisposable
+    {
+        public void Dispose() => undo();
     }
 }
 

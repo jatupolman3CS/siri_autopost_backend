@@ -82,7 +82,7 @@ public class PostTests
 
     [Theory]
     [InlineData(true, PostStatus.Skipped)]
-    [InlineData(false, PostStatus.Success)]
+    [InlineData(false, PostStatus.Queued)]
     public void Waiting_posts_resolve_by_policy(bool skip, PostStatus expected)
     {
         var p = Queued();

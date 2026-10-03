@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Auth;
+using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
@@ -51,6 +52,17 @@ public static class DependencyInjection
         services.AddCommand<UpdateOfflineCommand, EngineSettingsDto, UpdateOfflineCommandHandler>();
         services.AddCommand<SetExtensionOnlineCommand, ExtensionStateDto, SetExtensionOnlineCommandHandler>();
         services.AddCommand<SkipWaitingPostsCommand, ExtensionStateDto, SkipWaitingPostsCommandHandler>();
+
+        // Devices: the owner's side, then the extension's side
+        services.AddQuery<GetDevicesQuery, IReadOnlyList<DeviceDto>, GetDevicesQueryHandler>();
+        services.AddCommand<CreatePairingCodeCommand, PairingCodeDto, CreatePairingCodeCommandHandler>();
+        services.AddCommand<RevokeDeviceCommand, Unit, RevokeDeviceCommandHandler>();
+        services.AddCommand<PairDeviceCommand, PairResultDto, PairDeviceCommandHandler>();
+        services.AddCommand<DeviceHeartbeatCommand, DeviceStatusDto, DeviceHeartbeatCommandHandler>();
+        services.AddCommand<SyncDeviceGroupsCommand, int, SyncDeviceGroupsCommandHandler>();
+        services.AddCommand<ClaimJobCommand, JobDto?, ClaimJobCommandHandler>();
+        services.AddCommand<ReportJobResultCommand, PostDto, ReportJobResultCommandHandler>();
+        services.AddQuery<GetDeviceMediaQuery, MediaContent, GetDeviceMediaQueryHandler>();
 
         return services;
     }

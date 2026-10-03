@@ -26,6 +26,7 @@ public static class DependencyInjection
         // Auth
         services.AddCommand<SignUpCommand, AuthResultDto, SignUpCommandHandler>();
         services.AddCommand<LogInCommand, AuthResultDto, LogInCommandHandler>();
+        services.AddCommand<GoogleLogInCommand, AuthResultDto, GoogleLogInCommandHandler>();
         services.AddQuery<GetMeQuery, UserDto, GetMeQueryHandler>();
 
         // Plans and billing

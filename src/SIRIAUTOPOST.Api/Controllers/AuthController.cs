@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Enums;
 
@@ -30,6 +31,23 @@ public sealed class AuthController : ControllerBase
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
     public Task<AuthResultDto> LogIn(LogInCommand command, [FromServices] ICommandHandler<LogInCommand, AuthResultDto> handler, CancellationToken ct) =>
         handler.HandleAsync(command, ct);
+
+    public sealed record GoogleLogInRequest(string IdToken, PlanKey? Plan);
+
+    /// <summary>Public sign-in settings; googleClientId is null when Google sign-in is off.</summary>
+    public sealed record AuthConfigDto(string? GoogleClientId);
+
+    [AllowAnonymous]
+    [HttpGet("config")]
+    public AuthConfigDto Config([FromServices] IGoogleTokenVerifier google) => new(google.ClientId);
+
+    /// <summary>Signs in (or signs up) with the ID token from Google Identity Services.</summary>
+    [AllowAnonymous]
+    [HttpPost("google")]
+    [ProducesResponseType<AuthResultDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status401Unauthorized)]
+    public Task<AuthResultDto> Google(GoogleLogInRequest request, [FromServices] ICommandHandler<GoogleLogInCommand, AuthResultDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new GoogleLogInCommand(request.IdToken, request.Plan), ct);
 
     [HttpGet("me")]
     public Task<UserDto> Me([FromServices] IQueryHandler<GetMeQuery, UserDto> handler, CancellationToken ct) =>

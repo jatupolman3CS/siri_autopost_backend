@@ -58,6 +58,37 @@ public sealed class LogInCommandHandler(
     }
 }
 
+public sealed record GoogleLogInCommand(string IdToken, PlanKey? Plan) : ICommand<AuthResultDto>;
+
+/// <summary>Signs in with a Google ID token; an unknown (verified) email gets a new shop account without a password.</summary>
+public sealed class GoogleLogInCommandHandler(
+    IGoogleTokenVerifier google, IUserRepository users, IWorkspaceRepository workspaces, IMemberRepository members,
+    IWorkspaceSeeder seeder, ITokenService tokens, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<GoogleLogInCommand, AuthResultDto>
+{
+    public async Task<AuthResultDto> HandleAsync(GoogleLogInCommand c, CancellationToken ct = default)
+    {
+        var identity = await google.VerifyAsync(c.IdToken, ct);
+        var email = User.NormalizeEmail(identity.Email);
+        var now = clock.GetUtcNow();
+        var user = await users.GetByEmailAsync(email, ct);
+        if (user is null)
+        {
+            user = User.Create(email, identity.Name ?? "", UserRole.User, c.Plan ?? PlanKey.Free, now);
+            users.Add(user); // no password hash: password login stays impossible until one is set
+            var ws = Workspace.Create(user.Id, $"เวิร์กสเปซของ {user.Name}", now);
+            workspaces.Add(ws);
+            await seeder.SeedAsync(ws, ct);
+            foreach (var m in await members.ListPendingAsync(email, ct)) m.Join(user.Id, now);
+        }
+        else if (user.IsBlocked) throw new ForbiddenException(LogInCommandHandler.BlockedMessage);
+        else user.Seen(now);
+        await uow.SaveChangesAsync(ct);
+        var token = tokens.Create(user);
+        return new AuthResultDto(token.Token, token.ExpiresAt, UserDto.From(user));
+    }
+}
+
 public sealed record GetMeQuery : IQuery<UserDto>;
 
 public sealed class GetMeQueryHandler(IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)

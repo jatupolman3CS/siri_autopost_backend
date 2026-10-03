@@ -16,6 +16,10 @@ RUN dotnet publish src/SIRIAUTOPOST.Api/SIRIAUTOPOST.Api.csproj -c Release -o /o
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /out .
+# The extension zip served by GET /api/extension/download is built from these files.
+COPY client/manifest.json client/background.js client/content.js client/status.html client/status.css client/status.js ./extension/
+COPY client/icons ./extension/icons
+COPY client/lib ./extension/lib
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 USER $APP_UID

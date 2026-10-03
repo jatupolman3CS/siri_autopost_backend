@@ -2,7 +2,11 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Domain.Exceptions;
 using SIRIAUTOPOST.Domain.Enums;
 
 namespace SIRIAUTOPOST.Api.IntegrationTests;
@@ -77,5 +81,43 @@ public class AuthEndpointsTests(ApiFactory factory)
         var res = await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "agency" });
         var me = await res.Content.ReadFromJsonAsync<UserDto>(Json);
         Assert.Equal(PlanKey.Agency, me!.Plan);
+    }
+
+    private sealed class FakeGoogle : IGoogleTokenVerifier
+    {
+        public string? ClientId => "test-client.apps.googleusercontent.com";
+        public Task<GoogleIdentity> VerifyAsync(string idToken, CancellationToken ct = default) =>
+            idToken.StartsWith("ok:") ? Task.FromResult(new GoogleIdentity(idToken[3..], "Google Person"))
+                : throw new AuthenticationException("bad token");
+    }
+
+    [Fact]
+    public async Task Google_sign_in_creates_then_reuses_the_account_and_rejects_bad_tokens()
+    {
+        var client = factory.WithWebHostBuilder(b => b.ConfigureTestServices(s => s.AddSingleton<IGoogleTokenVerifier, FakeGoogle>())).CreateClient();
+        var email = $"g{Guid.NewGuid():N}@gmail.com";
+
+        var cfg = await client.GetFromJsonAsync<System.Text.Json.JsonElement>("/api/auth/config", Json);
+        Assert.Equal("test-client.apps.googleusercontent.com", cfg.GetProperty("googleClientId").GetString());
+
+        var first = await client.PostAsJsonAsync("/api/auth/google", new { idToken = "ok:" + email, plan = "pro" }, Json);
+        first.EnsureSuccessStatusCode();
+        var a = (await first.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
+        Assert.Equal(email, a.User.Email);
+        Assert.Equal(PlanKey.Pro, a.User.Plan);
+
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", a.Token);
+        Assert.NotEmpty((await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!);
+
+        var again = (await (await client.PostAsJsonAsync("/api/auth/google", new { idToken = "ok:" + email }, Json))
+            .Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
+        Assert.Equal(a.User.Id, again.User.Id);
+
+        // No password was set, so password login must fail.
+        var pw = await client.PostAsJsonAsync("/api/auth/login", new { email, password = "" }, Json);
+        Assert.NotEqual(HttpStatusCode.OK, pw.StatusCode);
+
+        var bad = await client.PostAsJsonAsync("/api/auth/google", new { idToken = "nope" }, Json);
+        Assert.Equal(HttpStatusCode.Unauthorized, bad.StatusCode);
     }
 }

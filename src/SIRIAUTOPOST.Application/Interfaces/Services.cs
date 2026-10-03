@@ -18,6 +18,17 @@ public interface IPasswordHasher
     bool Verify(User user, string hash, string password);
 }
 
+/// <summary>Who Google says the ID token belongs to.</summary>
+public sealed record GoogleIdentity(string Email, string? Name);
+
+public interface IGoogleTokenVerifier
+{
+    /// <summary>Null when Google sign-in is not configured.</summary>
+    string? ClientId { get; }
+    /// <summary>Checks an ID token from Google Identity Services; throws AuthenticationException when invalid.</summary>
+    Task<GoogleIdentity> VerifyAsync(string idToken, CancellationToken ct = default);
+}
+
 public sealed record AuthToken(string Token, DateTimeOffset ExpiresAt);
 
 public interface ITokenService

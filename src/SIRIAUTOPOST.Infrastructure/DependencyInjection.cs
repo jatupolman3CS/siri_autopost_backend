@@ -43,6 +43,7 @@ public static class DependencyInjection
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();
+        services.AddSingleton<IGoogleTokenVerifier>(sp => new GoogleTokenVerifier(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }, sp.GetRequiredService<IConfiguration>()));
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IRandomSource, RandomSource>();
         services.AddSingleton<IDeviceSecrets, DeviceSecrets>();

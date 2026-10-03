@@ -305,7 +305,14 @@
     return { ok: true, queued: true };
   }
 
-  const LOCAL_ONLY = { loadBundledConfig: 'ใช้ได้เฉพาะในส่วนขยาย ใช้ "อัปโหลดการตั้งค่า" แทน' };
+  const CLOUD_LOCAL = 'จับคู่กับเว็บ AutoPost ได้จากหน้าตั้งค่าในส่วนขยายของเครื่องนั้นเท่านั้น';
+  const LOCAL_ONLY = {
+    loadBundledConfig: 'ใช้ได้เฉพาะในส่วนขยาย ใช้ "อัปโหลดการตั้งค่า" แทน',
+    cloudPair: CLOUD_LOCAL,
+    cloudUnpair: CLOUD_LOCAL,
+    cloudSync: CLOUD_LOCAL,
+    cloudPause: CLOUD_LOCAL,
+  };
 
   async function sendMessage(msg) {
     if (!msg || msg.target !== 'fbap-bg') return undefined;

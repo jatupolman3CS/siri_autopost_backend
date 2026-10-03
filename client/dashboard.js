@@ -1441,6 +1441,63 @@ $('#btnOnlineDisconnect').addEventListener('click', async () => {
   await onlineAction($('#btnOnlineDisconnect'), () => bg('onlineDisconnect'), 'ยกเลิกการเชื่อมต่อแล้ว');
 });
 
+// ---------- cloud: posts from the SIRI AutoPost web app ----------
+
+async function renderCloud() {
+  if (webMode()) return; // pairing happens in the browser that will post
+  const { cloud = {} } = await chrome.storage.local.get('cloud');
+  const on = !!cloud.enabled;
+  const err = cloud.lastError || '';
+  const resting = cloud.pausedUntil > Date.now();
+  const badge = $('#cloudBadge');
+  badge.className = 'badge' + (on && !err && !cloud.paused ? ' on' : '');
+  badge.textContent = !on ? 'ไม่ได้จับคู่' : err ? 'มีปัญหา' : cloud.paused || resting ? 'พักรับงาน' : 'รับงานอยู่';
+  $('#cloudForm').hidden = on;
+  $('#cloudActions').hidden = !on;
+  $('#btnCloudPause').textContent = cloud.paused ? 'รับงานต่อ' : 'พักรับงาน';
+  const box = $('#cloudStatus');
+  box.hidden = !on;
+  if (on) {
+    const job = cloud.lastJob;
+    box.className = 'cfg-status ' + (err ? 'bad' : 'found');
+    box.textContent =
+      `เวิร์กสเปซ "${cloud.workspaceName || '-'}" · เครื่อง "${cloud.deviceName || '-'}" · ${cloud.groups || 0} กลุ่ม` +
+      ` · ซิงก์ล่าสุด ${cloud.lastSyncAt ? fmtDateTime(cloud.lastSyncAt) : '-'}` +
+      (job ? ` · งานล่าสุด ${fmtDateTime(job.at)} ${job.ok ? 'สำเร็จ' : 'ไม่สำเร็จ'} (${job.group})` : '') +
+      (resting ? ` · พักหลัง Facebook แจ้งเตือนถึง ${fmtDateTime(cloud.pausedUntil)}` : '') +
+      (err ? ` · ⚠ ${err}` : '');
+  }
+  if (!$('#cloudUrl').value) $('#cloudUrl').value = cloud.apiUrl || '';
+}
+
+$('#btnCloudPair').addEventListener('click', async () => {
+  const apiUrl = $('#cloudUrl').value.trim();
+  const code = $('#cloudCode').value.trim();
+  if (!apiUrl || !code) return toast('ใส่ URL และรหัสจับคู่ก่อน');
+  await save();
+  await onlineAction($('#btnCloudPair'), () => bg('cloudPair', { apiUrl, code, name: $('#cloudName').value }), 'จับคู่กับเว็บ AutoPost แล้ว');
+  $('#cloudCode').value = '';
+  renderCloud();
+});
+
+$('#btnCloudSync').addEventListener('click', async () => {
+  await save();
+  await onlineAction($('#btnCloudSync'), () => bg('cloudSync'), 'ซิงก์กับเว็บ AutoPost แล้ว');
+  renderCloud();
+});
+
+$('#btnCloudPause').addEventListener('click', async () => {
+  const { cloud = {} } = await chrome.storage.local.get('cloud');
+  await onlineAction($('#btnCloudPause'), () => bg('cloudPause', { paused: !cloud.paused }), cloud.paused ? 'รับงานต่อแล้ว' : 'พักรับงานแล้ว');
+  renderCloud();
+});
+
+$('#btnCloudUnpair').addEventListener('click', async () => {
+  if (!confirm('ยกเลิกการจับคู่กับเว็บ AutoPost?\nเครื่องนี้จะไม่รับงานโพสต์จากเว็บอีก (ยกเลิกการผูกในหน้าเว็บด้วย เพื่อคืนโควตาอุปกรณ์)')) return;
+  await onlineAction($('#btnCloudUnpair'), () => bg('cloudUnpair'), 'ยกเลิกการจับคู่แล้ว');
+  renderCloud();
+});
+
 // ---------- overview / status ----------
 
 function renderOverview() {
@@ -1478,7 +1535,8 @@ function renderOverview() {
   const line = $('#currentLine');
   if (state.current) {
     const c = settings.campaigns.find((x) => x.id === state.current.campaignId);
-    line.textContent = `${state.testing ? '[ทดสอบ] ' : ''}กำลังโพสต์: ${c ? c.name + ' → ' : ''}${state.current.url}`;
+    const from = state.current.cloud ? 'เว็บ AutoPost → ' : c ? c.name + ' → ' : '';
+    line.textContent = `${state.testing ? '[ทดสอบ] ' : ''}กำลังโพสต์: ${from}${state.current.url}`;
   } else if (state.running && state.pausedUntil > Date.now()) {
     line.textContent = `⏸ พักอัตโนมัติถึง ${fmtDateTime(state.pausedUntil)}: ${state.pauseReason || ''}`;
   } else {
@@ -1526,6 +1584,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
   }
   if (changes.logs) renderLogs(changes.logs.newValue || []);
   if (changes.online) renderOnline();
+  if (changes.cloud) renderCloud();
   // Settings were replaced by a config file or the server: show the new data.
   if (changes.configLoaded || changes.onlinePulled) location.reload();
 });
@@ -1548,5 +1607,6 @@ setInterval(renderOverview, 1000);
   renderLogs(data.logs || []);
   if (!webMode()) renderConfigStatus();
   renderOnline();
+  renderCloud();
   cleanupImages().catch(() => {});
 })();

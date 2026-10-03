@@ -228,6 +228,33 @@
     </div>
 
     <div class="col">
+      <!-- Cloud: posts scheduled in the SIRI AutoPost web app -->
+      <section class="card ext-only" id="cloudCard">
+        <div class="card-head">
+          <h2>เชื่อมต่อเว็บ AutoPost (ตั้งเวลาโพสต์จากเว็บ)</h2>
+          <span id="cloudBadge" class="badge">ไม่ได้จับคู่</span>
+        </div>
+        <p class="hint">จับคู่เครื่องนี้กับเวิร์กสเปซบนเว็บ AutoPost แล้วโพสต์ที่ตั้งเวลาไว้บนเว็บ (บัญชี "Facebook · ชื่อเครื่อง") จะถูกโพสต์จากเครื่องนี้ด้วยวิธีเดียวกับชุดโพสต์ กลุ่มที่ตั้งไว้ในทุกชุดของเครื่องนี้จะไปเป็นกลุ่มให้เลือกบนเว็บ ทำงานแยกจากปุ่มเริ่ม/หยุด</p>
+        <div id="cloudStatus" class="cfg-status none" hidden></div>
+        <div id="cloudForm" class="backup-box">
+          <label>URL ของ API เว็บ AutoPost
+            <input type="url" id="cloudUrl" placeholder="https://api.autopost.example.com" spellcheck="false" autocomplete="off">
+          </label>
+          <label>รหัสจับคู่ (จากหน้าเว็บ &gt; ทีมและเวิร์กสเปซ &gt; เพิ่มอุปกรณ์)
+            <input type="text" id="cloudCode" placeholder="XXXX-XXXX" spellcheck="false" autocomplete="off" maxlength="12">
+          </label>
+          <label>ชื่อเครื่อง (ไม่บังคับ)
+            <input type="text" id="cloudName" placeholder="เช่น คอมที่ร้าน" maxlength="80" autocomplete="off">
+          </label>
+          <button id="btnCloudPair" class="btn small primary" type="button">จับคู่</button>
+        </div>
+        <div id="cloudActions" class="row wrap" hidden>
+          <button id="btnCloudSync" class="btn small" type="button">ซิงก์และรับงานตอนนี้</button>
+          <button id="btnCloudPause" class="btn small" type="button">พักรับงาน</button>
+          <button id="btnCloudUnpair" class="btn small ghost danger-text" type="button">ยกเลิกการจับคู่</button>
+        </div>
+      </section>
+
       <!-- Online: config from the server -->
       <section class="card ext-only" id="onlineCard">
         <div class="card-head">

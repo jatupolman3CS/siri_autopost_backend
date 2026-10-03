@@ -20,6 +20,7 @@ import {
   fmtDuration,
   migrateSettings,
   activeGroups,
+  DEFAULT_CONFIG,
   composeText,
   splitPageTags,
   replaceInPosts,
@@ -1670,6 +1671,286 @@ function schedulePush() {
   }, PUSH_DELAY_MS);
 }
 
+// ---------- cloud: posts scheduled in the SIRI AutoPost web app ----------
+// The browser pairs with a workspace of SIRIAUTOPOST.Api (a code from Team & workspaces),
+// then every 30 seconds: heartbeat, send the groups set up here (they become the groups of
+// this browser's Facebook account in the web app), and take one due post to publish with
+// the same human-like flow as the campaigns. Independent of Start/Stop and of the legacy
+// server connection above.
+
+const CLOUD_ALARM = 'fbap-cloud';
+const CLOUD_PERIOD_MIN = 0.5;
+const CLOUD_IMG = 'cloudimg:'; // media of a cloud post; removed after posting
+
+const DEFAULT_CLOUD = {
+  enabled: false,
+  apiUrl: '',
+  deviceKey: '',
+  deviceId: '',
+  deviceName: '',
+  workspaceName: '',
+  paused: false,      // stop taking posts (heartbeats go on)
+  pausedUntil: 0,     // Facebook showed a warning: take no posts until then
+  groupsHash: '',     // groups last sent to the web app
+  groups: 0,
+  lastSyncAt: 0,
+  lastError: '',
+  lastJob: null,      // { at, group, ok, error }
+};
+
+async function getCloud() {
+  const { cloud } = await chrome.storage.local.get('cloud');
+  return { ...DEFAULT_CLOUD, ...(cloud || {}) };
+}
+
+let cloudChain = Promise.resolve();
+function setCloud(patch) {
+  const p = cloudChain.then(async () => {
+    const next = { ...(await getCloud()), ...patch };
+    await chrome.storage.local.set({ cloud: next });
+    return next;
+  });
+  cloudChain = p.catch(() => {});
+  return p;
+}
+
+// fetch with the device key; errors carry the API's Thai message (ProblemDetails title).
+async function cloudApi(c, method, path, body, { blob = false } = {}) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 120000);
+  let res;
+  try {
+    res = await fetch(normServer(c.apiUrl) + path, {
+      method,
+      headers: {
+        ...(c.deviceKey ? { 'X-Device-Key': c.deviceKey } : {}),
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      signal: ctrl.signal,
+      cache: 'no-store',
+    });
+  } catch (e) {
+    throw new Error(e?.name === 'AbortError' ? 'เว็บ AutoPost ไม่ตอบ (หมดเวลา)' : `ติดต่อเว็บ AutoPost ไม่ได้ (${e?.message || e})`);
+  } finally {
+    clearTimeout(timer);
+  }
+  if (res.ok && blob) return res.blob();
+  let data = null;
+  try {
+    data = res.status === 204 ? null : await res.json();
+  } catch {
+    /* empty body */
+  }
+  if (!res.ok) {
+    const msg = res.status === 401 ? 'เครื่องนี้ถูกยกเลิกการผูกแล้ว จับคู่ใหม่ด้วยรหัสจากหน้าเว็บ' : (data && (data.title || data.error)) || `เว็บ AutoPost ตอบกลับ ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+// Groups of every campaign (enabled ones), named as in the campaign or as seen on Facebook.
+// Names must be unique in the web app, so a repeated name gets the group's address added.
+async function cloudGroupList() {
+  const settings = await getSettings();
+  const state = await getState();
+  const out = [];
+  const urls = new Set();
+  const names = new Set();
+  for (const camp of settings.campaigns) {
+    for (const g of activeGroups(camp)) {
+      if (urls.has(g.url)) continue;
+      urls.add(g.url);
+      let name = (g.name || (state.groupNames || {})[g.url] || '').trim() || shortUrl(g.url);
+      if (names.has(name)) name = `${name} (${shortUrl(g.url)})`;
+      names.add(name);
+      out.push({ name, url: g.url });
+    }
+  }
+  return out;
+}
+
+// Same record shape as the campaign images: { name, type, data: data URL }.
+async function dataUrlOf(blob, type) {
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return `data:${type || blob.type || 'application/octet-stream'};base64,${btoa(bin)}`;
+}
+
+// Posts one job from the web app and reports how it went.
+async function runCloudJob(c, job) {
+  const global = (await getSettings()).global;
+  const ab = job.antiBan || {};
+  const cfg = {
+    ...DEFAULT_CONFIG,
+    pageTags: '',
+    typingSpeed: 'normal',
+    typos: ab.typing !== false,
+    maxTypeChars: ab.typing === false ? 1 : DEFAULT_CONFIG.maxTypeChars, // typing off = paste
+    browseBeforePost: ab.scroll !== false,
+  };
+  const keys = [];
+  posting = true;
+  abortFlag = false;
+  keepAlive(true);
+  await setState({ current: { campaignId: null, url: job.groupUrl, cloud: true } });
+  let result;
+  try {
+    for (const m of job.media || []) {
+      const blob = await cloudApi(c, 'GET', `/api/device/media/${m.id}`, undefined, { blob: true });
+      const key = CLOUD_IMG + m.id;
+      const type = m.contentType || blob.type;
+      await chrome.storage.local.set({ [key]: { name: m.name, type, data: await dataUrlOf(blob, type) } });
+      keys.push(key);
+    }
+    await log('info', `[เว็บ AutoPost] กำลังโพสต์ลงกลุ่ม ${job.groupName}: ${job.groupUrl}`);
+    result = await postToGroup(job.groupUrl, { text: job.content, imageIds: keys }, cfg, global);
+  } catch (e) {
+    result = {
+      ok: false,
+      error: e?.message || String(e),
+      aborted: e instanceof Aborted,
+      fatal: e instanceof Fatal,
+      blocked: e instanceof Blocked,
+      shot: e?.shot || null,
+      groupName: e?.groupName || '',
+    };
+  } finally {
+    posting = false;
+    keepAlive(false);
+    if (keys.length) await chrome.storage.local.remove(keys);
+    await setState({ current: null });
+  }
+
+  if (result.ok) {
+    await countPost(job.groupUrl);
+    await setState({ lastPostAt: Date.now() });
+    if (result.groupName) await rememberGroupName(job.groupUrl, result.groupName);
+    await log('success', `[เว็บ AutoPost] โพสต์สำเร็จ: ${job.groupName} ${job.groupUrl}`);
+  } else {
+    await log('error', `[เว็บ AutoPost] โพสต์ไม่สำเร็จ: ${job.groupName} - ${result.error}`);
+  }
+  try {
+    await cloudApi(c, 'POST', `/api/device/jobs/${job.postId}/result`, {
+      ok: !!result.ok,
+      awaitingApproval: false,
+      needsLogin: !!result.fatal,
+      blocked: !!(result.blocked || result.blockedAfter),
+      error: result.ok ? (result.blockedAfter || null) : result.error,
+    });
+  } catch (e) {
+    await log('warn', `[เว็บ AutoPost] ส่งผลการโพสต์ไม่สำเร็จ: ${e.message}`);
+  }
+  const g = global;
+  const patch = { lastJob: { at: Date.now(), group: job.groupName, ok: !!result.ok, error: result.ok ? '' : result.error } };
+  if (result.blocked || result.blockedAfter) {
+    // Same rest as the campaigns get after a Facebook warning.
+    patch.pausedUntil = Date.now() + rand(g.blockPauseHoursMin || 2, g.blockPauseHoursMax || 4) * 3600000;
+    await log('warn', `[เว็บ AutoPost] Facebook แจ้งเตือน พักรับงานถึง ${fmtDateTime(patch.pausedUntil)}`);
+  }
+  await setCloud(patch);
+  if (result.ok) {
+    await notify('success', `✅ <b>โพสต์สำเร็จ (เว็บ AutoPost)</b>\n${groupLine(result.groupName || job.groupName, job.groupUrl)}\n🕒 ${fmtDateTime(Date.now())}`, result.shot);
+  } else if (!result.aborted) {
+    await notify('fail', `❌ <b>โพสต์ไม่สำเร็จ (เว็บ AutoPost)</b>\n${groupLine(job.groupName, job.groupUrl)}\nสาเหตุ: ${escHtml(result.error)}`, result.shot);
+  }
+  return result;
+}
+
+// One round: heartbeat, groups, and at most one post. Runs in the tick chain, so it never
+// overlaps a campaign post.
+async function cloudTick({ claim = true } = {}) {
+  let c = await getCloud();
+  if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+  try {
+    const hb = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version });
+    const groups = await cloudGroupList();
+    const hash = await sha256(JSON.stringify(groups));
+    let count = hb.groups;
+    if (hash !== c.groupsHash || count !== groups.length) {
+      count = await cloudApi(c, 'PUT', '/api/device/groups', { groups });
+      await log('info', `[เว็บ AutoPost] ส่งรายชื่อกลุ่ม ${count} กลุ่มไปที่เว็บแล้ว`);
+    }
+    c = await setCloud({
+      deviceName: hb.deviceName,
+      workspaceName: hb.workspaceName,
+      groupsHash: hash,
+      groups: count,
+      lastSyncAt: Date.now(),
+      lastError: '',
+    });
+    const state = await getState();
+    const resting = c.pausedUntil > Date.now() || (state.pausedUntil && Date.now() < state.pausedUntil);
+    if (!claim || c.paused || resting || !hb.online || posting) return { ok: true, posted: false };
+    const job = await cloudApi(c, 'POST', '/api/device/jobs/claim');
+    if (!job) return { ok: true, posted: false };
+    const r = await runCloudJob(c, job);
+    return { ok: true, posted: true, result: !!r.ok };
+  } catch (e) {
+    const msg = e?.message || String(e);
+    const prev = (await getCloud()).lastError;
+    await setCloud({ lastError: msg });
+    if (msg !== prev) await log('warn', `[เว็บ AutoPost] ${msg}`);
+    return { ok: false, error: msg };
+  }
+}
+
+async function ensureCloudAlarm() {
+  const c = await getCloud();
+  if (!c.enabled) return chrome.alarms.clear(CLOUD_ALARM);
+  if (!(await chrome.alarms.get(CLOUD_ALARM))) {
+    await chrome.alarms.create(CLOUD_ALARM, { periodInMinutes: CLOUD_PERIOD_MIN, delayInMinutes: CLOUD_PERIOD_MIN });
+  }
+}
+
+// "Pair": trade the code from the web app for this browser's device key.
+async function cloudPair({ apiUrl, code, name }) {
+  const url = normServer(apiUrl);
+  if (!/^https?:\/\/[^/\s]+/i.test(url)) return { ok: false, error: 'URL ต้องขึ้นต้นด้วย http:// หรือ https://' };
+  if (!String(code || '').trim()) return { ok: false, error: 'ใส่รหัสจับคู่จากหน้าเว็บก่อน' };
+  const ua = (globalThis.navigator && navigator.userAgent) || '';
+  const browser = (ua.match(/(Edg|OPR|Chrome)\/(\d+)/) || []).slice(1).join(' ').replace('Edg', 'Edge').replace('OPR', 'Opera') || 'Chrome';
+  let pair;
+  try {
+    pair = await cloudApi({ apiUrl: url }, 'POST', '/api/device/pair', {
+      code: String(code).trim(),
+      name: String(name || '').trim() || `${browser} ${new Date().toLocaleDateString('th-TH')}`,
+      browser,
+      version: chrome.runtime.getManifest().version,
+    });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  await setCloud({
+    ...DEFAULT_CLOUD,
+    enabled: true,
+    apiUrl: url,
+    deviceKey: pair.deviceKey,
+    deviceId: pair.deviceId,
+    deviceName: pair.deviceName,
+    workspaceName: pair.workspaceName,
+  });
+  await ensureCloudAlarm();
+  await log('success', `[เว็บ AutoPost] จับคู่กับเวิร์กสเปซ "${pair.workspaceName}" แล้ว (เครื่อง "${pair.deviceName}")`);
+  return enqueue(() => cloudTick({ claim: false }));
+}
+
+async function cloudUnpair() {
+  await setCloud({ ...DEFAULT_CLOUD });
+  await ensureCloudAlarm();
+  await log('info', '[เว็บ AutoPost] ยกเลิกการจับคู่ในเครื่องนี้แล้ว (ยกเลิกการผูกในหน้าเว็บด้วย เพื่อคืนโควตาอุปกรณ์)');
+  return { ok: true };
+}
+
+async function cloudSetPaused({ paused }) {
+  await setCloud({ paused: !!paused, ...(paused ? {} : { pausedUntil: 0 }) });
+  await log('info', paused ? '[เว็บ AutoPost] พักรับงานโพสต์' : '[เว็บ AutoPost] รับงานโพสต์ต่อ');
+  return { ok: true };
+}
+
 // ---------- wiring ----------
 
 async function openDashboard() {
@@ -1690,6 +1971,10 @@ chrome.action.onClicked.addListener(() => {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === SYNC_ALARM) {
     syncOnline();
+    return;
+  }
+  if (alarm.name === CLOUD_ALARM) {
+    enqueue(() => cloudTick());
     return;
   }
   if (alarm.name.startsWith(ALARM_PREFIX)) {
@@ -1759,12 +2044,14 @@ chrome.runtime.onStartup.addListener(() => {
   enqueue(() => applyDataFixes());
   enqueue(() => loadBundledConfig({ auto: true }));
   ensureSyncAlarm().then(() => syncOnline());
+  ensureCloudAlarm();
 });
 chrome.runtime.onInstalled.addListener(() => {
   recover({ freshBrowser: false });
   enqueue(() => applyDataFixes());
   enqueue(() => loadBundledConfig({ auto: true }));
   ensureSyncAlarm().then(() => syncOnline());
+  ensureCloudAlarm();
 });
 
 const commands = {
@@ -1778,6 +2065,10 @@ const commands = {
   onlineConnect: (m) => onlineConnect(m),
   onlineDisconnect: () => onlineDisconnect(),
   onlineSync: (m) => syncOnline({ mode: m.mode || 'auto' }),
+  cloudPair: (m) => cloudPair(m),
+  cloudUnpair: () => cloudUnpair(),
+  cloudSync: () => enqueue(() => cloudTick()),
+  cloudPause: (m) => cloudSetPaused(m),
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

@@ -345,8 +345,9 @@
     });
   }
 
+  // Campaign images are stored as img:<id>; posts from the web app pass full keys (cloudimg:<id>).
   async function loadFiles(ids) {
-    const keys = ids.map((id) => 'img:' + id);
+    const keys = ids.map((id) => (String(id).includes(':') ? String(id) : 'img:' + id));
     const data = await chrome.storage.local.get(keys);
     return keys.map((k) => data[k]).filter(Boolean).map(dataUrlToFile);
   }

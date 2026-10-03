@@ -5,9 +5,10 @@ kind: Kustomization
 # Applied by the Jenkinsfile at the repo root (Jenkins job SIRIAUTOPOST-BACKEND).
 namespace: siriautopost
 
+# No Ingress: the public host goes Cloudflare tunnel -> NodePort 30907 (Service `ui`, siri_autopost_ui),
+# and the dashboard's nginx proxies /api to Service `api` below.
 resources:
   - ../../base
-  - ingress.yaml
 
 images:
   # newTag is rewritten by the Jenkinsfile for every build; the value below is never deployed as-is.

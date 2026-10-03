@@ -1,5 +1,5 @@
 // PRD pipeline for siri_autopost_backend (Jenkins job: SIRIAUTOPOST-BACKEND).
-// Builds SIRIAUTOPOST.Api into the local registry and deploys the API, Postgres and the Ingress for
+// Builds SIRIAUTOPOST.Api into the local registry and deploys the API and Postgres for
 // https://siriautopost.siristudiophoto.com into namespace siriautopost (deploy/k8s/overlays/prd).
 //
 // Same conventions as the SIRISTUDIOPHOTO jobs: docker + kubectl on the Jenkins host, registry localhost:5000.
@@ -94,10 +94,9 @@ pipeline {
 
         stage('Smoke test') {
             steps {
-                // The public URL needs the Cloudflare DNS record; report UNSTABLE instead of FAILED if it is not there yet.
-                catchError(buildResult: 'UNSTABLE', stageResult: 'FAILURE') {
-                    sh 'curl -fsS --retry 12 --retry-delay 10 --retry-all-errors "$PUBLIC_URL/healthz"'
-                }
+                // In-cluster check through the API server proxy: the public host only reaches the API via the
+                // dashboard's nginx (SIRIAUTOPOST-WEB), which may not be deployed yet.
+                sh 'kubectl get --raw "/api/v1/namespaces/$K8S_NAMESPACE/services/http:api:8080/proxy/healthz"'
             }
         }
     }

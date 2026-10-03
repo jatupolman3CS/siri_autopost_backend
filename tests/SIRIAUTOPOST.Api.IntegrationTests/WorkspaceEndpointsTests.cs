@@ -34,6 +34,28 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task New_workspaces_start_with_sample_history_and_error_reports()
+    {
+        var (client, _, ws) = await factory.SignUpAsync();
+
+        var errors = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/errors", Json))!;
+        Assert.Equal(5, errors.Count);
+        Assert.Single(errors, e => e.Status == PostStatus.Pending && e.FailureCode == FailureCode.PendingApproval);
+
+        // Retrying puts the failed post back in the queue; dismissing closes the report.
+        var failed = errors.First(e => e.FailureCode == FailureCode.Network);
+        var retried = await client.PostAsync($"/api/workspaces/{ws}/posts/{failed.Id}/retry", null);
+        Assert.Equal(PostStatus.Queued, (await retried.Content.ReadFromJsonAsync<PostDto>(Json))!.Status);
+        var pending = errors.First(e => e.Status == PostStatus.Pending);
+        (await client.PostAsync($"/api/workspaces/{ws}/posts/{pending.Id}/dismiss", null)).EnsureSuccessStatusCode();
+        errors = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/errors", Json))!;
+        Assert.Equal(3, errors.Count);
+
+        var list = (await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!;
+        Assert.True(list.Single().Posts7 > 0);
+    }
+
+    [Fact]
     public async Task Schedule_list_and_delete_posts()
     {
         var (client, _, ws) = await factory.SignUpAsync();
@@ -52,14 +74,17 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
         res.EnsureSuccessStatusCode();
         Assert.Equal(3, (await res.Content.ReadFromJsonAsync<ScheduleResultDto>(Json))!.Created);
 
-        var posts = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!;
+        // The demo workspace has sample posts of its own; look at ours only.
+        async Task<List<PostDto>> Ours() =>
+            (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!
+                .Where(p => p.Content == "โปรวันนี้").ToList();
+        var posts = await Ours();
         Assert.Equal(3, posts.Count);
         Assert.All(posts, p => Assert.Equal(PostStatus.Queued, p.Status));
 
         var del = await client.DeleteAsync($"/api/workspaces/{ws}/posts/{posts[0].Id}");
         Assert.Equal(HttpStatusCode.NoContent, del.StatusCode);
-        posts = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!;
-        Assert.Equal(2, posts.Count);
+        Assert.Equal(2, (await Ours()).Count);
     }
 
     [Fact]
@@ -127,15 +152,19 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
             targets = new[] { new { accountId = accounts[0].Id, groups = accounts[0].Groups.Take(6) } },
         }, Json);
 
+        async Task<int> Count(PostStatus status) =>
+            (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!
+                .Count(p => p.Status == status);
+        var sentBefore = await Count(PostStatus.Success);
+
         var off = await client.PostAsJsonAsync($"/api/workspaces/{ws}/engine/extension", new { online = false });
         Assert.Equal(4, (await off.Content.ReadFromJsonAsync<ExtensionStateDto>(Json))!.Affected);
-        var posts = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!;
-        Assert.Equal(4, posts.Count(p => p.Status == PostStatus.Waiting));
+        Assert.Equal(4, await Count(PostStatus.Waiting));
 
         var on = await client.PostAsJsonAsync($"/api/workspaces/{ws}/engine/extension", new { online = true });
         Assert.Equal(4, (await on.Content.ReadFromJsonAsync<ExtensionStateDto>(Json))!.Affected);
-        posts = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!;
-        Assert.Equal(4, posts.Count(p => p.Status == PostStatus.Success)); // default policy: queue, then send
+        Assert.Equal(0, await Count(PostStatus.Waiting));
+        Assert.Equal(sentBefore + 4, await Count(PostStatus.Success)); // default policy: queue, then send
     }
 
     [Fact]

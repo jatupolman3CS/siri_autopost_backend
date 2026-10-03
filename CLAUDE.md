@@ -6,13 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FB Group AutoPost: a Chrome extension that posts to Facebook groups while imitating a human, plus .NET servers that let people edit configs and control the extension remotely. The repo holds three parts:
 
-- `src/` + `tests/` + `SIRIAUTOPOST.sln`: the **new** Clean Architecture solution (.NET 10, EF Core, PostgreSQL). It's a skeleton with one sample feature (Posts) and is not wired to the extension yet. New backend work goes here.
+- `src/` + `tests/` + `SIRIAUTOPOST.sln`: the **new** Clean Architecture solution (.NET 10, EF Core, PostgreSQL). It is the API behind the Angular dashboard (JWT auth, workspaces, social accounts, post scheduling, error reports, media library, anti-ban/offline settings). It is not wired to the extension yet, so nothing actually posts. New backend work goes here.
 - `backend/SIRI.AUTOPOST.Server/`: the **legacy** server, a single-project minimal API that the extension and the legacy web UI talk to today.
 - `client/`: the Chrome extension (Manifest V3, plain ES modules, no build step).
 
 User-facing strings (UI text, API error messages, log messages) are in **Thai**. Code comments are in English. Keep both conventions.
 
-The sibling repo `siri_autopost_ui` holds the new Angular frontend (the full AutoPost Dashboard design, currently on in-memory sample data; its stores are where `SIRIAUTOPOST.Api` calls will go) at its root, and a Vite-hosted copy of the legacy web UI in `legacy/`. See "Duplicated files" below.
+The sibling repo `siri_autopost_ui` holds the new Angular frontend (the AutoPost Dashboard design, talking to `SIRIAUTOPOST.Api`) at its root, and a Vite-hosted copy of the legacy web UI in `legacy/`. See "Duplicated files" below.
 
 ## New solution (`SIRIAUTOPOST.sln`)
 
@@ -20,7 +20,7 @@ The sibling repo `siri_autopost_ui` holds the new Angular frontend (the full Aut
 dotnet build SIRIAUTOPOST.sln
 dotnet test SIRIAUTOPOST.sln                     # integration tests need PostgreSQL, see below
 dotnet test tests/SIRIAUTOPOST.Domain.Tests      # one project
-dotnet test SIRIAUTOPOST.sln --filter "FullyQualifiedName~GroupUrlTests"   # one class/test
+dotnet test SIRIAUTOPOST.sln --filter "FullyQualifiedName~PostTests"   # one class/test
 
 # API on http://localhost:5100 (OpenAPI at /openapi/v1.json in Development)
 cd src/SIRIAUTOPOST.Api && dotnet run
@@ -30,11 +30,15 @@ dotnet ef migrations add <Name> -p src/SIRIAUTOPOST.Infrastructure -s src/SIRIAU
 ```
 
 - Dev connection string is in `src/SIRIAUTOPOST.Api/appsettings.Development.json` (`localhost:5432`, database `siriautopost`). `Database:MigrateOnStartup` is true only in Development.
+- Auth is JWT bearer (`Infrastructure/Auth`, `Jwt` config section). `Jwt:Key` must be at least 32 characters or startup fails; only Development ships one. A fallback policy requires a signed-in user everywhere, so anonymous endpoints need `[AllowAnonymous]`. Handlers get the caller from `ICurrentUser` (the `sub` claim) and check workspace ownership with `WorkspaceAccess.RequireOwnedAsync`, which answers 404 for someone else's workspace.
+- Startup (`PrepareDatabaseAsync`) migrates when configured, then `AdminAccountSeeder` creates the platform admin from `Admin:Email`/`Admin:Password` (Development: `admin@autopost.local` / `admin1234`).
+- Every new workspace is filled by `DemoWorkspaceSeeder` (`IWorkspaceSeeder`): the design's 7 social accounts (the Facebook page has 20 groups), 4 snippets, a week of post history, a week of queued posts and 5 open error reports. Accounts cannot be connected through the extension yet, and no worker posts anything, so queued posts stay queued. Integration tests must not assume an empty workspace.
 - `SIRIAUTOPOST.Api.IntegrationTests` runs the real API through `WebApplicationFactory<Program>` against PostgreSQL. It drops and recreates the database `siriautopost_test` (override the whole connection string with `SIRIAUTOPOST_TEST_DB`).
-- Layer rules. **Domain** references nothing. **Application** references Domain only. **Infrastructure** references Application and Domain. **Api** references Application and Infrastructure. Keep entity invariants in Domain (`Post.Create`, `Post.Schedule`, the `GroupUrl` value object) and input-shape checks in FluentValidation validators (`Application/Validators`).
-- CQRS without a mediator library. Each command or query is a record plus a handler in `Application/Features/<Feature>/{Commands,Queries}`, and it has to be registered in `Application/DependencyInjection.cs`. `AddCommand<,,>` wraps each handler in `ValidationCommandHandlerDecorator`, so validators always run first. Controllers inject `ICommandHandler<,>`/`IQueryHandler<,>` with `[FromServices]`.
-- Errors. `ExceptionHandlingMiddleware` maps `ValidationException` to 400 (`ValidationProblemDetails` with camelCase keys), `NotFoundException` to 404 and `DomainException` to 422. Anything else becomes a 500.
-- EF Core: one `IEntityTypeConfiguration` per entity in `Infrastructure/Data/Configurations`, snake_case naming, and `AppDbContext` doubles as `IUnitOfWork`. Store `DateTimeOffset` values as UTC, because Npgsql rejects non-zero offsets for `timestamptz`.
+- Layer rules. **Domain** references nothing. **Application** references Domain only. **Infrastructure** references Application and Domain. **Api** references Application and Infrastructure. Keep entity invariants in Domain (`Post.Schedule`/`Retry`/`DismissError`, `Workspace.UpdateAntiBan`, `AntiBanSettings.Validate`, `MediaFile.Create`) and input-shape checks in FluentValidation validators (`Application/Validators/Validators.cs`).
+- CQRS without a mediator library. Each command or query is a record plus a handler, grouped per feature in `Application/Features/<Feature>/<Feature>.cs`, and it has to be registered in `Application/DependencyInjection.cs`. `AddCommand<,,>` wraps each handler in `ValidationCommandHandlerDecorator`, so validators always run first. Controllers inject `ICommandHandler<,>`/`IQueryHandler<,>` with `[FromServices]`.
+- Errors. `ExceptionHandlingMiddleware` maps `ValidationException` to 400 (`ValidationProblemDetails` with camelCase keys), `AuthenticationException` to 401, `NotFoundException` to 404, `ConflictException` to 409 and `DomainException` to 422. Anything else becomes a 500.
+- JSON: enums are snake_case strings (`fb`, `pending_approval`) and numbers are strict JSON numbers, set for both MVC and `ConfigureHttpJsonOptions` so the OpenAPI document (and the UI's generated types) match. The client sends `startAt` with its local UTC offset so weekday repeats follow the user's calendar.
+- EF Core: one `IEntityTypeConfiguration` per entity in `Infrastructure/Data/Configurations/Configurations.cs`, snake_case naming, enums stored as strings, and `AppDbContext` doubles as `IUnitOfWork`. Workspace anti-ban/offline settings are owned JSON (`jsonb`) columns. Store `DateTimeOffset` values as UTC, because Npgsql rejects non-zero offsets for `timestamptz`.
 - When the API contract changes, refresh `openapi.snapshot.json` in `siri_autopost_ui` (`curl localhost:5100/openapi/v1.json`) and run `npm run gen:api` there.
 
 ## Legacy server and extension commands

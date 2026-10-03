@@ -25,11 +25,20 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ICurrentUser, CurrentUser>();
         services.AddJwtAuth(config);
 
-        // Enums travel as snake_case strings: "fb", "pending_approval", "agency"...
-        // Set for MVC (responses) and for the HTTP JSON options the OpenAPI document is built from.
+        // Enums travel as snake_case strings ("fb", "pending_approval", "agency"...) and numbers
+        // only as JSON numbers. Set for MVC (responses) and for the HTTP JSON options the OpenAPI
+        // document is built from, so generated client types say `number`, not `number | string`.
         var enums = new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower);
-        services.AddControllers().AddJsonOptions(o => o.JsonSerializerOptions.Converters.Add(enums));
-        services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(enums));
+        services.AddControllers().AddJsonOptions(o =>
+        {
+            o.JsonSerializerOptions.Converters.Add(enums);
+            o.JsonSerializerOptions.NumberHandling = JsonNumberHandling.Strict;
+        });
+        services.ConfigureHttpJsonOptions(o =>
+        {
+            o.SerializerOptions.Converters.Add(enums);
+            o.SerializerOptions.NumberHandling = JsonNumberHandling.Strict;
+        });
         services.AddProblemDetails();
         services.AddOpenApi();
 

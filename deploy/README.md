@@ -15,6 +15,11 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
 
 ## One-time setup
 
+0. **Namespace + Jenkins rights (cluster admin, on the k8s host).** Jenkins deploys as `ci:jenkins-deployer`,
+   which cannot create namespaces:
+   ```
+   curl -fsSL https://raw.githubusercontent.com/jatupolman3CS/siri_autopost_backend/main/deploy/admin-bootstrap.sh | sh
+   ```
 1. **Tunnel route.** `siri-monitor` is locally managed, so its routes live in the cloudflared config file on the
    host, not in the dashboard. Add, before the catch-all rule, then restart cloudflared:
    ```yaml

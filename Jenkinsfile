@@ -63,7 +63,12 @@ pipeline {
                         trap 'rm -f "$APIENV" "$PGENV"' EXIT
                         sh deploy/prepare-env.sh "$ENV_FILE" "$APIENV" "$PGENV"
 
-                        kubectl create namespace "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+                        # Jenkins runs as ci:jenkins-deployer, which cannot create namespaces: the namespace and its
+                        # RoleBinding are created once by a cluster admin (deploy/README.md in siri_autopost_backend).
+                        if ! $K auth can-i create secrets >/dev/null 2>&1 || ! $K auth can-i patch deployments >/dev/null 2>&1; then
+                            echo "jenkins-deployer has no rights in namespace $K8S_NAMESPACE yet: run the one-time admin step in siri_autopost_backend/deploy/README.md" >&2
+                            exit 1
+                        fi
 
                         # Secrets come from the Jenkins credential and are never written to git.
                         $K create secret generic api-env --from-env-file="$APIENV" --dry-run=client -o yaml | $K apply -f -
@@ -92,9 +97,13 @@ pipeline {
 
         stage('Smoke test') {
             steps {
-                // In-cluster check through the API server proxy: the public host only reaches the API via the
-                // dashboard's nginx (SIRIAUTOPOST-WEB), which may not be deployed yet.
-                sh 'kubectl get --raw "/api/v1/namespaces/$K8S_NAMESPACE/services/http:api:8080/proxy/healthz"'
+                // The api readiness probe is GET /healthz, so a ready replica means the API answers.
+                sh '''
+                    set -eu
+                    ready="$(kubectl -n "$K8S_NAMESPACE" get deployment api -o jsonpath='{.status.readyReplicas}')"
+                    echo "api ready replicas: ${ready:-0}"
+                    [ "${ready:-0}" -ge 1 ]
+                '''
             }
         }
     }

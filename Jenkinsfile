@@ -70,6 +70,10 @@ pipeline {
                         for required_key in POSTGRES_USER POSTGRES_PASSWORD ConnectionStrings__Default Jwt__Key Admin__Email Admin__Password; do
                             if ! grep -Eq "^${required_key}=.+" "$ENV_FILE"; then
                                 echo "env file must contain ${required_key}=" >&2
+                                # Key names and encoding only, never values.
+                                echo "encoding: $(file -b "$ENV_FILE" 2>/dev/null || echo unknown)" >&2
+                                echo "keys found:" >&2
+                                cut -d= -f1 "$ENV_FILE" | sed -n '1,20l' >&2
                                 exit 1
                             fi
                         done

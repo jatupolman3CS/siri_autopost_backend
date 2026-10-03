@@ -31,6 +31,7 @@ services:
       Jwt__Key: ${JWT_KEY:?set JWT_KEY in .env (32+ characters)}
       Admin__Email: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
       Admin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+      Google__ClientId: ${Google__ClientId:-}
     depends_on:
       db:
         condition: service_healthy

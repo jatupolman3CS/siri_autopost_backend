@@ -122,12 +122,4 @@ public class DeviceTests
         Assert.Equal(TimeSpan.FromMinutes(minutes), new OfflineSettings { Policy = policy, Window = window }.MaxLateness);
     }
 
-    [Fact]
-    public void Plans_limit_devices()
-    {
-        Assert.Equal(1, PlanRules.MaxDevices(PlanKey.Free));
-        Assert.Equal(1, PlanRules.MaxDevices(PlanKey.Basic));
-        Assert.Equal(3, PlanRules.MaxDevices(PlanKey.Pro));
-        Assert.Null(PlanRules.MaxDevices(PlanKey.Agency));
-    }
 }

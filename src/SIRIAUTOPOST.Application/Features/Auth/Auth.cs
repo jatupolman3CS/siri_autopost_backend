@@ -12,7 +12,7 @@ public sealed record SignUpCommand(string Email, string Password, string? Name, 
 
 /// <summary>New shop user with one workspace, filled with the sample accounts.</summary>
 public sealed class SignUpCommandHandler(
-    IUserRepository users, IWorkspaceRepository workspaces, IWorkspaceSeeder seeder,
+    IUserRepository users, IWorkspaceRepository workspaces, IMemberRepository members, IWorkspaceSeeder seeder,
     IPasswordHasher hasher, ITokenService tokens, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SignUpCommand, AuthResultDto>
 {
@@ -27,6 +27,8 @@ public sealed class SignUpCommandHandler(
         var ws = Workspace.Create(user.Id, $"เวิร์กสเปซของ {user.Name}", now);
         workspaces.Add(ws);
         await seeder.SeedAsync(ws, ct);
+        // Invitations sent to this email before the account existed.
+        foreach (var m in await members.ListPendingAsync(email, ct)) m.Join(user.Id, now);
         await uow.SaveChangesAsync(ct);
         var token = tokens.Create(user);
         return new AuthResultDto(token.Token, token.ExpiresAt, UserDto.From(user));
@@ -35,15 +37,21 @@ public sealed class SignUpCommandHandler(
 
 public sealed record LogInCommand(string Email, string Password) : ICommand<AuthResultDto>;
 
-public sealed class LogInCommandHandler(IUserRepository users, IPasswordHasher hasher, ITokenService tokens)
+public sealed class LogInCommandHandler(
+    IUserRepository users, IPasswordHasher hasher, ITokenService tokens, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<LogInCommand, AuthResultDto>
 {
+    public const string BlockedMessage = "บัญชีนี้ถูกระงับการใช้งาน ติดต่อผู้ดูแลแพลตฟอร์ม";
+
     public async Task<AuthResultDto> HandleAsync(LogInCommand c, CancellationToken ct = default)
     {
         var user = await users.GetByEmailAsync(User.NormalizeEmail(c.Email), ct);
         // Same message for unknown email and wrong password.
         if (user is null || !hasher.Verify(user, user.PasswordHash, c.Password))
             throw new AuthenticationException("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
+        if (user.IsBlocked) throw new AuthenticationException(BlockedMessage);
+        user.Seen(clock.GetUtcNow());
+        await uow.SaveChangesAsync(ct);
         var token = tokens.Create(user);
         return new AuthResultDto(token.Token, token.ExpiresAt, UserDto.From(user));
     }
@@ -51,25 +59,13 @@ public sealed class LogInCommandHandler(IUserRepository users, IPasswordHasher h
 
 public sealed record GetMeQuery : IQuery<UserDto>;
 
-public sealed class GetMeQueryHandler(IUserRepository users, ICurrentUser current) : IQueryHandler<GetMeQuery, UserDto>
+public sealed class GetMeQueryHandler(IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : IQueryHandler<GetMeQuery, UserDto>
 {
     public async Task<UserDto> HandleAsync(GetMeQuery q, CancellationToken ct = default)
     {
         var user = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
-        return UserDto.From(user);
-    }
-}
-
-/// <summary>Self-service plan change. Billing (card charge, proration) is not wired to a payment provider yet.</summary>
-public sealed record ChangePlanCommand(PlanKey Plan) : ICommand<UserDto>;
-
-public sealed class ChangePlanCommandHandler(IUserRepository users, ICurrentUser current, IUnitOfWork uow)
-    : ICommandHandler<ChangePlanCommand, UserDto>
-{
-    public async Task<UserDto> HandleAsync(ChangePlanCommand c, CancellationToken ct = default)
-    {
-        var user = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
-        user.ChangePlan(c.Plan);
+        user.Seen(clock.GetUtcNow()); // "last active" for the team and admin pages
         await uow.SaveChangesAsync(ct);
         return UserDto.From(user);
     }

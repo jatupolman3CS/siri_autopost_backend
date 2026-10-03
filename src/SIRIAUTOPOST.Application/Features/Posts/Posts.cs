@@ -4,6 +4,7 @@ using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Application.Features.Posts;
@@ -19,7 +20,7 @@ public sealed class GetPostsQueryHandler(IWorkspaceRepository workspaces, IPostR
     {
         if (q.To <= q.From || (q.To - q.From).TotalDays > MaxRangeDays)
             throw new DomainException($"ช่วงวันที่ต้องไม่เกิน {MaxRangeDays} วัน");
-        await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         return (await posts.ListAsync(q.WorkspaceId, q.From, q.To, ct)).Select(PostDto.From).ToList();
     }
 }
@@ -32,7 +33,7 @@ public sealed class GetErrorsQueryHandler(IWorkspaceRepository workspaces, IPost
 {
     public async Task<IReadOnlyList<PostDto>> HandleAsync(GetErrorsQuery q, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         return (await posts.ListOpenErrorsAsync(q.WorkspaceId, ct)).Select(PostDto.From).ToList();
     }
 }
@@ -72,7 +73,7 @@ public sealed class SchedulePostsCommandHandler(
 {
     public async Task<ScheduleResultDto> HandleAsync(SchedulePostsCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var all = (await accounts.ListAsync(ws.Id, ct)).ToDictionary(a => a.Id);
 
         var tasks = new List<(SocialAccount Account, string Target)>();
@@ -134,7 +135,7 @@ public sealed class DeletePostCommandHandler(
 {
     public async Task<Unit> HandleAsync(DeletePostCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
         post.EnsureDeletable();
         posts.Remove(post);
@@ -151,7 +152,7 @@ public sealed class RetryPostCommandHandler(
 {
     public async Task<PostDto> HandleAsync(RetryPostCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
         post.Retry(clock.GetUtcNow());
         await uow.SaveChangesAsync(ct);
@@ -167,7 +168,7 @@ public sealed class DismissPostErrorCommandHandler(
 {
     public async Task<PostDto> HandleAsync(DismissPostErrorCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
         post.DismissError(clock.GetUtcNow());
         await uow.SaveChangesAsync(ct);

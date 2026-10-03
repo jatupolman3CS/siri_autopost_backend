@@ -31,6 +31,10 @@ public static class DependencyInjection
         services.AddScoped<ISnippetRepository, SnippetRepository>();
         services.AddScoped<IDeviceRepository, DeviceRepository>();
         services.AddScoped<IDevicePairingRepository, DevicePairingRepository>();
+        services.AddScoped<IMemberRepository, MemberRepository>();
+        services.AddScoped<IPlanRepository, PlanRepository>();
+        services.AddScoped<ITransactionRepository, TransactionRepository>();
+        services.AddScoped<IPromoRepository, PromoRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));

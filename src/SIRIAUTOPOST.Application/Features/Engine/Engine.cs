@@ -16,7 +16,7 @@ public sealed class GetEngineSettingsQueryHandler(
 {
     public async Task<EngineSettingsDto> HandleAsync(GetEngineSettingsQuery q, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
     }
 }
@@ -31,9 +31,10 @@ public sealed class UpdateAntiBanCommandHandler(
 {
     public async Task<EngineSettingsDto> HandleAsync(UpdateAntiBanCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
-        var user = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
-        ws.UpdateAntiBan(c.Settings.ToSettings(), user.HasAdvancedAntiBan);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        // The workspace owner's plan decides, whoever edits.
+        var owner = await users.GetByIdAsync(ws.OwnerId, ct) ?? throw new NotFoundException("ผู้ใช้", ws.OwnerId);
+        ws.UpdateAntiBan(c.Settings.ToSettings(), owner.HasAdvancedAntiBan);
         await uow.SaveChangesAsync(ct);
         return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
     }
@@ -47,7 +48,7 @@ public sealed class UpdateOfflineCommandHandler(
 {
     public async Task<EngineSettingsDto> HandleAsync(UpdateOfflineCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         ws.UpdateOffline(c.Settings.ToSettings());
         await uow.SaveChangesAsync(ct);
         return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
@@ -69,7 +70,7 @@ public sealed class SetExtensionOnlineCommandHandler(
 
     public async Task<ExtensionStateDto> HandleAsync(SetExtensionOnlineCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var now = clock.GetUtcNow();
         var affected = 0;
         if (!c.Online && ws.ExtensionOnline)
@@ -107,7 +108,7 @@ public sealed class SkipWaitingPostsCommandHandler(
 {
     public async Task<ExtensionStateDto> HandleAsync(SkipWaitingPostsCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var now = clock.GetUtcNow();
         var waiting = await posts.ListByStatusAsync(ws.Id, PostStatus.Waiting, ct);
         foreach (var p in waiting) p.ResolveWaiting(skip: true, now);

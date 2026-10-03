@@ -4,6 +4,7 @@ using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Application.Features.Library;
@@ -15,7 +16,7 @@ public sealed class GetMediaQueryHandler(IWorkspaceRepository workspaces, IMedia
 {
     public async Task<IReadOnlyList<MediaDto>> HandleAsync(GetMediaQuery q, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         return (await media.ListAsync(q.WorkspaceId, ct)).Select(MediaDto.From).ToList();
     }
 }
@@ -27,7 +28,7 @@ public sealed class GetMediaContentQueryHandler(IWorkspaceRepository workspaces,
 {
     public async Task<MediaContent> HandleAsync(GetMediaContentQuery q, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         var file = await media.GetAsync(q.WorkspaceId, q.MediaId, ct) ?? throw new NotFoundException("ไฟล์", q.MediaId);
         return new MediaContent(file.Name, file.ContentType, file.Data);
     }
@@ -41,7 +42,7 @@ public sealed class UploadMediaCommandHandler(
 {
     public async Task<MediaDto> HandleAsync(UploadMediaCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var file = MediaFile.Create(c.WorkspaceId, c.FileName, c.ContentType, c.Data, clock.GetUtcNow());
         media.Add(file);
         await uow.SaveChangesAsync(ct);
@@ -56,7 +57,7 @@ public sealed class GetSnippetsQueryHandler(IWorkspaceRepository workspaces, ISn
 {
     public async Task<IReadOnlyList<SnippetDto>> HandleAsync(GetSnippetsQuery q, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         return (await snippets.ListAsync(q.WorkspaceId, ct)).Select(SnippetDto.From).ToList();
     }
 }
@@ -69,7 +70,7 @@ public sealed class CreateSnippetCommandHandler(
 {
     public async Task<SnippetDto> HandleAsync(CreateSnippetCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var snippet = Snippet.Create(c.WorkspaceId, c.Title, c.Text, clock.GetUtcNow());
         snippets.Add(snippet);
         await uow.SaveChangesAsync(ct);

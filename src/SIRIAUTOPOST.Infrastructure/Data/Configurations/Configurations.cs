@@ -13,6 +13,8 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         b.HasIndex(x => x.Email).IsUnique();
         b.Property(x => x.Name).HasMaxLength(120);
         b.Property(x => x.PasswordHash).HasMaxLength(300);
+        b.Property(x => x.Note).HasMaxLength(500);
+        b.OwnsOne(x => x.Limits, o => o.ToJson("limit_overrides"));
     }
 }
 
@@ -115,5 +117,52 @@ public sealed class DevicePairingConfiguration : IEntityTypeConfiguration<Device
         b.Property(x => x.Code).HasMaxLength(9).IsRequired();
         b.HasIndex(x => x.Code).IsUnique();
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class WorkspaceMemberConfiguration : IEntityTypeConfiguration<WorkspaceMember>
+{
+    public void Configure(EntityTypeBuilder<WorkspaceMember> b)
+    {
+        b.ToTable("workspace_members");
+        b.Property(x => x.Email).HasMaxLength(254).IsRequired();
+        b.HasIndex(x => new { x.WorkspaceId, x.Email }).IsUnique();
+        b.HasIndex(x => x.UserId);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class PlanSettingConfiguration : IEntityTypeConfiguration<PlanSetting>
+{
+    public void Configure(EntityTypeBuilder<PlanSetting> b)
+    {
+        b.ToTable("plan_settings");
+        b.HasKey(x => x.Key);
+        // The design's prices and limits; the platform admin edits them from there.
+        b.HasData(PlanSetting.Defaults);
+    }
+}
+
+public sealed class TransactionConfiguration : IEntityTypeConfiguration<Transaction>
+{
+    public void Configure(EntityTypeBuilder<Transaction> b)
+    {
+        b.ToTable("transactions");
+        b.Property(x => x.PromoCode).HasMaxLength(30);
+        b.HasIndex(x => new { x.UserId, x.CreatedAt });
+        b.HasIndex(x => x.CreatedAt);
+        b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class PromoConfiguration : IEntityTypeConfiguration<Promo>
+{
+    public void Configure(EntityTypeBuilder<Promo> b)
+    {
+        b.ToTable("promos");
+        b.Property(x => x.Code).HasMaxLength(30).IsRequired();
+        b.HasIndex(x => x.Code).IsUnique();
+        b.Property(x => x.Discount).HasMaxLength(10).IsRequired();
     }
 }

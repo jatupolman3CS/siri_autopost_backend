@@ -7,6 +7,7 @@ using Microsoft.IdentityModel.Tokens;
 using SIRIAUTOPOST.Api.Auth;
 using SIRIAUTOPOST.Application;
 using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Infrastructure;
 using SIRIAUTOPOST.Infrastructure.Auth;
 
@@ -75,6 +76,17 @@ public static class ServiceCollectionExtensions
                     NameClaimType = "sub",
                     RoleClaimType = "role",
                     ClockSkew = TimeSpan.FromMinutes(1),
+                };
+                // A token stays valid for days: refuse it at once when the platform admin suspends the account.
+                o.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated = async ctx =>
+                    {
+                        var users = ctx.HttpContext.RequestServices.GetRequiredService<IUserRepository>();
+                        var id = Guid.TryParse(ctx.Principal?.FindFirst("sub")?.Value, out var g) ? g : Guid.Empty;
+                        var user = await users.GetByIdAsync(id, ctx.HttpContext.RequestAborted);
+                        if (user is null || user.IsBlocked) ctx.Fail("account blocked or deleted");
+                    },
                 };
             });
         services.AddAuthorizationBuilder()

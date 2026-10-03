@@ -3,6 +3,7 @@ using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Application.Features.Accounts;
@@ -14,7 +15,7 @@ public sealed class GetAccountsQueryHandler(IWorkspaceRepository workspaces, IAc
 {
     public async Task<IReadOnlyList<AccountDto>> HandleAsync(GetAccountsQuery q, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         return (await accounts.ListAsync(q.WorkspaceId, ct)).Select(AccountDto.From).ToList();
     }
 }
@@ -28,7 +29,7 @@ public sealed class ReconnectAccountCommandHandler(
 {
     public async Task<AccountDto> HandleAsync(ReconnectAccountCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var account = await accounts.GetAsync(c.WorkspaceId, c.AccountId, ct) ?? throw new NotFoundException("บัญชี", c.AccountId);
         account.MarkHealthy();
         await uow.SaveChangesAsync(ct);

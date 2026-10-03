@@ -20,7 +20,7 @@ public sealed class GetDevicesQueryHandler(
 {
     public async Task<IReadOnlyList<DeviceDto>> HandleAsync(GetDevicesQuery q, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(q.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         var byDevice = (await accounts.ListAsync(ws.Id, ct))
             .Where(a => a.DeviceId is not null)
             .ToDictionary(a => a.DeviceId!.Value, a => a.Id);
@@ -35,14 +35,15 @@ public sealed class GetDevicesQueryHandler(
 public sealed record CreatePairingCodeCommand(Guid WorkspaceId) : ICommand<PairingCodeDto>;
 
 public sealed class CreatePairingCodeCommandHandler(
-    IWorkspaceRepository workspaces, IUserRepository users, IDeviceRepository devices, IDevicePairingRepository pairings,
-    IDeviceSecrets secrets, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IUserRepository users, IPlanRepository plans, IDeviceRepository devices,
+    IAccountRepository accounts, IDevicePairingRepository pairings, IDeviceSecrets secrets, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreatePairingCodeCommand, PairingCodeDto>
 {
     public async Task<PairingCodeDto> HandleAsync(CreatePairingCodeCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
-        var max = await DeviceLimit.EnsureRoomAsync(ws, users, devices, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        var max = await DeviceLimit.EnsureRoomAsync(ws, users, plans, devices, accounts, workspaces, ct);
         var pairing = DevicePairing.Create(ws.Id, secrets.NewPairingCode(), clock.GetUtcNow());
         pairings.Add(pairing);
         await uow.SaveChangesAsync(ct);
@@ -60,7 +61,7 @@ public sealed class RevokeDeviceCommandHandler(
 {
     public async Task<Unit> HandleAsync(RevokeDeviceCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireOwnedAsync(c.WorkspaceId, current, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
         var now = clock.GetUtcNow();
         (await accounts.GetByDeviceAsync(device.Id, ct))?.Disconnect();
@@ -74,14 +75,25 @@ public sealed class RevokeDeviceCommandHandler(
 
 internal static class DeviceLimit
 {
-    /// <summary>Returns the plan's device limit, or throws when the workspace already has that many.</summary>
-    public static async Task<int?> EnsureRoomAsync(Workspace ws, IUserRepository users, IDeviceRepository devices, CancellationToken ct)
+    /// <summary>
+    /// Returns the owner's device limit, or throws when the workspace already has that many devices, or the owner
+    /// already has as many connected accounts (all workspaces) as the plan allows: each device brings one.
+    /// </summary>
+    public static async Task<int?> EnsureRoomAsync(
+        Workspace ws, IUserRepository users, IPlanRepository plans, IDeviceRepository devices, IAccountRepository accounts,
+        IWorkspaceRepository workspaces, CancellationToken ct)
     {
-        var owner = await users.GetByIdAsync(ws.OwnerId, ct) ?? throw new NotFoundException("ผู้ใช้", ws.OwnerId);
-        var max = PlanRules.MaxDevices(owner.Plan);
-        if (max is { } m && await devices.CountAsync(ws.Id, ct) >= m)
+        var owner = await users.OwnerOfAsync(ws, ct);
+        var limits = await plans.ForAsync(owner, ct);
+        if (limits.Devices is { } m && await devices.CountAsync(ws.Id, ct) >= m)
             throw new DomainException($"แผนปัจจุบันผูกอุปกรณ์ได้สูงสุด {m} เครื่อง ยกเลิกการผูกเครื่องเดิมหรืออัปเกรดแผนก่อน");
-        return max;
+        if (limits.Accounts is { } a)
+        {
+            var own = (await workspaces.ListByOwnerAsync(owner.Id, ct)).Select(w => w.Id);
+            if (await accounts.CountConnectedAsync(own, ct) >= a)
+                throw new DomainException($"แผนปัจจุบันเชื่อมบัญชีได้สูงสุด {a} บัญชี อัปเกรดแผนก่อน");
+        }
+        return limits.Devices;
     }
 }
 
@@ -91,8 +103,8 @@ internal static class DeviceLimit
 public sealed record PairDeviceCommand(string Code, string Name, string? Browser, string? Version) : ICommand<PairResultDto>;
 
 public sealed class PairDeviceCommandHandler(
-    IDevicePairingRepository pairings, IWorkspaceRepository workspaces, IUserRepository users, IDeviceRepository devices,
-    IAccountRepository accounts, IDeviceSecrets secrets, IUnitOfWork uow, TimeProvider clock)
+    IDevicePairingRepository pairings, IWorkspaceRepository workspaces, IUserRepository users, IPlanRepository plans,
+    IDeviceRepository devices, IAccountRepository accounts, IDeviceSecrets secrets, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<PairDeviceCommand, PairResultDto>
 {
     public async Task<PairResultDto> HandleAsync(PairDeviceCommand c, CancellationToken ct = default)
@@ -102,7 +114,7 @@ public sealed class PairDeviceCommandHandler(
         var pairing = await pairings.GetByCodeAsync(code, ct) ?? throw new DomainException("ไม่พบรหัสจับคู่นี้ ตรวจสอบรหัสอีกครั้ง");
         pairing.Use(now);
         var ws = await workspaces.GetByIdAsync(pairing.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", pairing.WorkspaceId);
-        await DeviceLimit.EnsureRoomAsync(ws, users, devices, ct);
+        await DeviceLimit.EnsureRoomAsync(ws, users, plans, devices, accounts, workspaces, ct);
 
         var key = secrets.NewDeviceKey();
         var device = Device.Pair(ws.Id, c.Name, c.Browser ?? "", c.Version ?? "", secrets.Hash(key), now);
@@ -167,7 +179,8 @@ public sealed record ClaimJobCommand : ICommand<JobDto?>;
 
 public sealed class ClaimJobCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IPostRepository posts, IMediaRepository media, IUnitOfWork uow, TimeProvider clock)
+    IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, IUnitOfWork uow,
+    TimeProvider clock)
     : ICommandHandler<ClaimJobCommand, JobDto?>
 {
     public async Task<JobDto?> HandleAsync(ClaimJobCommand c, CancellationToken ct = default)
@@ -191,12 +204,18 @@ public sealed class ClaimJobCommandHandler(
 
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         if (!ws.ExtensionOnline || account is null || !account.CanPost) return null;
+        var owner = await users.OwnerOfAsync(ws, ct);
+        if (!owner.CanPost) return null; // suspended, banned or paused by the platform admin
 
         var last = await posts.LastPublishedAtAsync(account.Id, ct);
         if (last is { } l && now - l < TimeSpan.FromMinutes(ws.AntiBan.Min)) return null;
 
         var limit = ws.AntiBan.Limits.For(account.Platform);
         var sentToday = await posts.CountPublishedSinceAsync(ws.Id, account.Platform, now.AddDays(-1), ct);
+        // The plan's posts per 24 hours count every workspace of the owner.
+        var planPosts = (await plans.ForAsync(owner, ct)).Posts;
+        var ownWorkspaces = (await workspaces.ListByOwnerAsync(owner.Id, ct)).Select(w => w.Id).ToList();
+        var sentByOwner = planPosts is null ? 0 : await posts.CountPublishedSinceAsync(ownWorkspaces, now.AddDays(-1), ct);
         foreach (var p in await posts.ListDueAsync(account.Id, now, ct))
         {
             if (now - p.ScheduledAt > ws.Offline.MaxLateness)
@@ -207,6 +226,11 @@ public sealed class ClaimJobCommandHandler(
             if (sentToday >= limit)
             {
                 p.Fail(FailureCode.Quota, $"ครบโควตา {limit} โพสต์ใน 24 ชั่วโมงของแพลตฟอร์มนี้", now);
+                continue;
+            }
+            if (planPosts is { } pp && sentByOwner >= pp)
+            {
+                p.Fail(FailureCode.Quota, $"ครบโควตา {pp} โพสต์ต่อวันของแผน อัปเกรดแผนเพื่อโพสต์ได้มากขึ้น", now);
                 continue;
             }
             var url = account.UrlFor(p.Target);

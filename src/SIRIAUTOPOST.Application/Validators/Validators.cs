@@ -1,5 +1,8 @@
 using FluentValidation;
+using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
+using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
@@ -35,7 +38,52 @@ public sealed class LogInCommandValidator : AbstractValidator<LogInCommand>
 
 public sealed class ChangePlanCommandValidator : AbstractValidator<ChangePlanCommand>
 {
-    public ChangePlanCommandValidator() => RuleFor(x => x.Plan).IsInEnum();
+    public ChangePlanCommandValidator()
+    {
+        RuleFor(x => x.Plan).IsInEnum();
+        RuleFor(x => x.Cycle).IsInEnum();
+        RuleFor(x => x.PromoCode).MaximumLength(30);
+    }
+}
+
+public sealed class InviteMemberCommandValidator : AbstractValidator<InviteMemberCommand>
+{
+    public InviteMemberCommandValidator()
+    {
+        RuleFor(x => x.Email).NotEmpty().EmailAddress().WithMessage("กรุณาใส่อีเมลที่ถูกต้อง").MaximumLength(254);
+        RuleFor(x => x.Role).IsInEnum().NotEqual(Domain.Enums.WorkspaceRole.Owner).WithMessage("บทบาทไม่ถูกต้อง");
+    }
+}
+
+public sealed class ChangeMemberRoleCommandValidator : AbstractValidator<ChangeMemberRoleCommand>
+{
+    public ChangeMemberRoleCommandValidator() =>
+        RuleFor(x => x.Role).IsInEnum().NotEqual(Domain.Enums.WorkspaceRole.Owner).WithMessage("บทบาทไม่ถูกต้อง");
+}
+
+public sealed class SetCustomerLimitsCommandValidator : AbstractValidator<SetCustomerLimitsCommand>
+{
+    public SetCustomerLimitsCommandValidator()
+    {
+        RuleFor(x => x.Accounts).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Posts).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Devices).GreaterThanOrEqualTo(0);
+        RuleFor(x => x.Seats).GreaterThanOrEqualTo(0);
+    }
+}
+
+public sealed class UpdatePlanCommandValidator : AbstractValidator<UpdatePlanCommand>
+{
+    public UpdatePlanCommandValidator() => RuleFor(x => x.Price).GreaterThanOrEqualTo(0).WithMessage("ราคาไม่ถูกต้อง");
+}
+
+public sealed class CreatePromoCommandValidator : AbstractValidator<CreatePromoCommand>
+{
+    public CreatePromoCommandValidator()
+    {
+        RuleFor(x => x.Code).NotEmpty().WithMessage("กรุณาใส่โค้ด").MaximumLength(30);
+        RuleFor(x => x.Discount).Must(d => Promo.Discounts.Contains(d)).WithMessage("ส่วนลดไม่ถูกต้อง");
+    }
 }
 
 public sealed class CreateWorkspaceCommandValidator : AbstractValidator<CreateWorkspaceCommand>

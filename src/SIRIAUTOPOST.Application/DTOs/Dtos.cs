@@ -5,14 +5,29 @@ using SIRIAUTOPOST.Domain.ValueObjects;
 
 namespace SIRIAUTOPOST.Application.DTOs;
 
-public sealed record UserDto(Guid Id, string Email, string Name, UserRole Role, PlanKey Plan)
+public sealed record UserDto(Guid Id, string Email, string Name, UserRole Role, PlanKey Plan, BillingCycle Cycle, CustomerStatus Status)
 {
-    public static UserDto From(User u) => new(u.Id, u.Email, u.Name, u.Role, u.Plan);
+    public static UserDto From(User u) => new(u.Id, u.Email, u.Name, u.Role, u.Plan, u.Cycle, u.Status);
+}
+
+/// <param name="Price">Baht per month, monthly billing.</param>
+/// <param name="Posts">Posts per 24 hours; null = unlimited (same for the other limits).</param>
+public sealed record PlanDto(PlanKey Key, int Price, int? Accounts, int? Posts, int? Devices, int? Seats)
+{
+    public static PlanDto From(PlanSetting p) => new(p.Key, p.Price, p.Accounts, p.Posts, p.Devices, p.Seats);
+}
+
+public sealed record TransactionDto(
+    Guid Id, Guid UserId, TransactionType Type, int Amount, PlanKey Plan, BillingCycle Cycle, string? PromoCode, DateTimeOffset CreatedAt)
+{
+    public static TransactionDto From(Transaction t) => new(t.Id, t.UserId, t.Type, t.Amount, t.Plan, t.Cycle, t.PromoCode, t.CreatedAt);
 }
 
 public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserDto User);
 
-public sealed record WorkspaceDto(Guid Id, string Name, int Posts7, int Members);
+/// <param name="Role">The signed-in user's role here (owner for their own workspaces).</param>
+/// <param name="Members">People with access, owner included.</param>
+public sealed record WorkspaceDto(Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role);
 
 /// <param name="Connected">Posts through a paired browser (false for the demo accounts).</param>
 public sealed record AccountDto(
@@ -129,3 +144,39 @@ public sealed record JobMediaDto(Guid Id, string Name, string ContentType);
 
 /// <summary>One post for the extension to publish now, in one Facebook group.</summary>
 public sealed record JobDto(Guid PostId, string GroupName, string GroupUrl, string Content, IReadOnlyList<JobMediaDto> Media, AntiBanDto AntiBan);
+
+/// <param name="Id">The membership; null for the owner.</param>
+/// <param name="Active">Joined (false: invited, waiting for that email to sign up).</param>
+public sealed record MemberDto(
+    Guid? Id, Guid? UserId, string Email, string Name, WorkspaceRole Role, bool Active, DateTimeOffset? LastSeenAt, bool You);
+
+public sealed record CustomerJobsDto(int Ok, int Failed, int Queued, int Running);
+
+public sealed record CustomerDeviceDto(Guid Id, string Name, string Browser, DateTimeOffset? LastSeenAt, bool Online);
+
+/// <summary>null keeps the plan's value, 0 = unlimited.</summary>
+public sealed record LimitOverridesDto(int? Accounts, int? Posts, int? Devices, int? Seats);
+
+/// <param name="Accounts">Accounts connected through the extension.</param>
+/// <param name="Seats">People in the customer's workspaces, the customer included.</param>
+/// <param name="Ext">Extension version of the most recently seen device.</param>
+/// <param name="Jobs">Posts of the last 24 hours (ok, failed) and the queue of the next 30 days.</param>
+public sealed record CustomerDto(
+    Guid Id, string Name, string Email, PlanKey Plan, CustomerStatus Status, DateTimeOffset Since, BillingCycle Cycle,
+    int Accounts, int Seats, string Ext, DateTimeOffset? LastActiveAt, bool Paused, CustomerJobsDto Jobs,
+    IReadOnlyList<CustomerDeviceDto> Devices, string? Note, int Workspaces, LimitOverridesDto Limits);
+
+public sealed record RevenueMonthDto(int Year, int Month, int Amount);
+
+/// <param name="Basic">Paying customers per plan (active or past due).</param>
+/// <param name="Revenue">Charges minus refunds, the last 12 months, oldest first.</param>
+public sealed record AdminSummaryDto(int Basic, int Pro, int Agency, IReadOnlyList<RevenueMonthDto> Revenue);
+
+public sealed record AdminJobDto(
+    Guid PostId, Guid CustomerId, string Customer, Platform Platform, string Target, string Content, DateTimeOffset ScheduledAt,
+    PostStatus Status, FailureCode? FailureCode);
+
+public sealed record PromoDto(string Code, string Discount, int Uses, DateTimeOffset ExpiresAt, bool Active)
+{
+    public static PromoDto From(Promo p) => new(p.Code, p.Discount, p.Uses, p.ExpiresAt, p.Active);
+}

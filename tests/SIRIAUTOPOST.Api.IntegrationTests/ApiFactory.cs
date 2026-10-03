@@ -56,11 +56,22 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
     Task IAsyncLifetime.DisposeAsync() => Task.CompletedTask;
 
-    /// <summary>Signs up a fresh user and returns a client carrying their token, plus their first workspace.</summary>
-    public async Task<(HttpClient Client, AuthResultDto Auth, Guid WorkspaceId)> SignUpAsync(string? plan = null)
+    /// <summary>A client signed in as the platform admin seeded at startup.</summary>
+    public async Task<HttpClient> AdminAsync()
     {
         var client = CreateClient();
-        var email = $"u{Guid.NewGuid():N}@shop.co";
+        var res = await client.PostAsJsonAsync("/api/auth/login", new { email = AdminEmail, password = AdminPassword }, Json);
+        res.EnsureSuccessStatusCode();
+        var auth = (await res.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
+        return client;
+    }
+
+    /// <summary>Signs up a fresh user and returns a client carrying their token, plus their first workspace.</summary>
+    public async Task<(HttpClient Client, AuthResultDto Auth, Guid WorkspaceId)> SignUpAsync(string? plan = null, string? email = null)
+    {
+        var client = CreateClient();
+        email ??= $"u{Guid.NewGuid():N}@shop.co";
         var res = await client.PostAsJsonAsync("/api/auth/signup", new { email, password = "password1", plan }, Json);
         res.EnsureSuccessStatusCode();
         var auth = (await res.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;

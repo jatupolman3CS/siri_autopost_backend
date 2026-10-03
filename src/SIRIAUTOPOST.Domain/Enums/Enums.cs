@@ -68,3 +68,38 @@ public enum OfflinePolicy
     Queue,
     Notify,
 }
+
+/// <summary>The customer's standing with the platform (shown to the platform admin).</summary>
+public enum CustomerStatus
+{
+    Active,
+    /// <summary>Signed up on a paid plan and has not paid yet.</summary>
+    Trial,
+    /// <summary>A charge failed.</summary>
+    PastDue,
+    /// <summary>Stopped by the platform admin: cannot sign in, devices take no posts.</summary>
+    Suspended,
+    Banned,
+}
+
+public enum BillingCycle
+{
+    Month,
+    Year,
+}
+
+public enum TransactionType
+{
+    Charge,
+    Refund,
+    Failed,
+}
+
+/// <summary>A member's role in someone else's workspace (the owner is not a member).</summary>
+public enum WorkspaceRole
+{
+    Viewer,
+    Editor,
+    Admin,
+    Owner,
+}

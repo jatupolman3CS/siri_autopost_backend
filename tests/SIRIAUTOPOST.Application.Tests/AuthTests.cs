@@ -26,7 +26,7 @@ public class AuthTests
     {
         _users.GetByEmailAsync("a@shop.co", Arg.Any<CancellationToken>())
             .Returns(User.Create("a@shop.co", "", UserRole.User, PlanKey.Free, Now));
-        var handler = new SignUpCommandHandler(_users, Substitute.For<IWorkspaceRepository>(), Substitute.For<IWorkspaceSeeder>(),
+        var handler = new SignUpCommandHandler(_users, Substitute.For<IWorkspaceRepository>(), Substitute.For<IMemberRepository>(), Substitute.For<IWorkspaceSeeder>(),
             _hasher, _tokens, Substitute.For<IUnitOfWork>(), new FixedClock(Now));
 
         await Assert.ThrowsAsync<ConflictException>(() => handler.HandleAsync(new SignUpCommand("A@shop.co", "password1", null, null)));
@@ -37,7 +37,7 @@ public class AuthTests
     {
         var workspaces = Substitute.For<IWorkspaceRepository>();
         var seeder = Substitute.For<IWorkspaceSeeder>();
-        var handler = new SignUpCommandHandler(_users, workspaces, seeder, _hasher, _tokens, Substitute.For<IUnitOfWork>(), new FixedClock(Now));
+        var handler = new SignUpCommandHandler(_users, workspaces, Substitute.For<IMemberRepository>(), seeder, _hasher, _tokens, Substitute.For<IUnitOfWork>(), new FixedClock(Now));
 
         var result = await handler.HandleAsync(new SignUpCommand("new@shop.co", "password1", "Nattaya", PlanKey.Pro));
 
@@ -53,7 +53,7 @@ public class AuthTests
         var user = User.Create("a@shop.co", "", UserRole.User, PlanKey.Free, Now);
         _users.GetByEmailAsync("a@shop.co", Arg.Any<CancellationToken>()).Returns(user);
         _hasher.Verify(user, Arg.Any<string>(), "wrong").Returns(false);
-        var handler = new LogInCommandHandler(_users, _hasher, _tokens);
+        var handler = new LogInCommandHandler(_users, _hasher, _tokens, Substitute.For<IUnitOfWork>(), new FixedClock(Now));
 
         var wrong = await Assert.ThrowsAsync<AuthenticationException>(() => handler.HandleAsync(new LogInCommand("a@shop.co", "wrong")));
         var unknown = await Assert.ThrowsAsync<AuthenticationException>(() => handler.HandleAsync(new LogInCommand("b@shop.co", "x")));

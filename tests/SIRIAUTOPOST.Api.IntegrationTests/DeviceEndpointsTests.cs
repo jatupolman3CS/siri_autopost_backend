@@ -71,7 +71,14 @@ public class DeviceEndpointsTests(ApiFactory factory)
         Assert.Equal(p.Pair.AccountId, d.AccountId);
 
         var engine = (await p.Owner.GetFromJsonAsync<EngineSettingsDto>($"/api/workspaces/{p.Ws}/engine", Json))!;
-        Assert.Equal((1, 1, true), (engine.Devices, engine.DevicesOnline, engine.ExtensionOnline));
+        Assert.Equal((1, 1, true, false), (engine.Devices, engine.DevicesOnline, engine.ExtensionOnline, engine.SimulatedOffline));
+
+        // No heartbeat for over 100 seconds: the workspace reads as offline (not simulated).
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(3)))
+        {
+            engine = (await p.Owner.GetFromJsonAsync<EngineSettingsDto>($"/api/workspaces/{p.Ws}/engine", Json))!;
+            Assert.Equal((0, false, false), (engine.DevicesOnline, engine.ExtensionOnline, engine.SimulatedOffline));
+        }
     }
 
     [Fact]

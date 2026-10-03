@@ -87,15 +87,17 @@ public sealed record OfflineDto(OfflinePolicy Policy, string Window, bool Line, 
 /// Off while the offline simulation holds it; otherwise on when no device is paired yet (demo) or when a
 /// paired device called in within the last 100 seconds.
 /// </param>
+/// <param name="SimulatedOffline">The offline simulation is on (the web app's "simulate offline").</param>
 /// <param name="Devices">Paired devices.</param>
 /// <param name="DevicesOnline">Paired devices seen within the last 100 seconds.</param>
-public sealed record EngineSettingsDto(AntiBanDto AntiBan, OfflineDto Offline, bool ExtensionOnline, int Devices, int DevicesOnline)
+public sealed record EngineSettingsDto(
+    AntiBanDto AntiBan, OfflineDto Offline, bool ExtensionOnline, bool SimulatedOffline, int Devices, int DevicesOnline)
 {
     public static EngineSettingsDto From(Workspace ws, IReadOnlyList<Device> devices, DateTimeOffset now)
     {
         var online = devices.Count(d => d.IsOnline(now));
         return new(AntiBanDto.From(ws.AntiBan), OfflineDto.From(ws.Offline),
-            ws.ExtensionOnline && (devices.Count == 0 || online > 0), devices.Count, online);
+            ws.ExtensionOnline && (devices.Count == 0 || online > 0), !ws.ExtensionOnline, devices.Count, online);
     }
 }
 

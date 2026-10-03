@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 FB Group AutoPost: a Chrome extension that posts to Facebook groups while imitating a human, plus .NET servers that let people edit configs and control the extension remotely. The repo holds three parts:
 
-- `src/` + `tests/` + `SIRIAUTOPOST.sln`: the **new** Clean Architecture solution (.NET 10, EF Core, PostgreSQL). It is the API behind the Angular dashboard (JWT auth, workspaces, social accounts, post scheduling, error reports, media library, anti-ban/offline settings). It is not wired to the extension yet, so nothing actually posts. New backend work goes here.
+- `src/` + `tests/` + `SIRIAUTOPOST.sln`: the **new** Clean Architecture solution (.NET 10, EF Core, PostgreSQL). It is the API behind the Angular dashboard (JWT auth, workspaces, social accounts, post scheduling, error reports, media library, anti-ban/offline settings) and the job API the extension's cloud mode posts from (device pairing, `/api/device/*`). New backend work goes here.
 - `backend/SIRI.AUTOPOST.Server/`: the **legacy** server, a single-project minimal API that the extension and the legacy web UI talk to today.
 - `client/`: the Chrome extension (Manifest V3, plain ES modules, no build step).
 
@@ -32,7 +32,11 @@ dotnet ef migrations add <Name> -p src/SIRIAUTOPOST.Infrastructure -s src/SIRIAU
 - Dev connection string is in `src/SIRIAUTOPOST.Api/appsettings.Development.json` (`localhost:5432`, database `siriautopost`). `Database:MigrateOnStartup` is true only in Development.
 - Auth is JWT bearer (`Infrastructure/Auth`, `Jwt` config section). `Jwt:Key` must be at least 32 characters or startup fails; only Development ships one. A fallback policy requires a signed-in user everywhere, so anonymous endpoints need `[AllowAnonymous]`. Handlers get the caller from `ICurrentUser` (the `sub` claim) and check workspace ownership with `WorkspaceAccess.RequireOwnedAsync`, which answers 404 for someone else's workspace.
 - Startup (`PrepareDatabaseAsync`) migrates when configured, then `AdminAccountSeeder` creates the platform admin from `Admin:Email`/`Admin:Password` (Development: `admin@autopost.local` / `admin1234`).
-- Every new workspace is filled by `DemoWorkspaceSeeder` (`IWorkspaceSeeder`): the design's 7 social accounts (the Facebook page has 20 groups), 4 snippets, a week of post history, a week of queued posts and 5 open error reports. Accounts cannot be connected through the extension yet, and no worker posts anything, so queued posts stay queued. Integration tests must not assume an empty workspace.
+- Every new workspace is filled by `DemoWorkspaceSeeder` (`IWorkspaceSeeder`): the design's 7 social accounts (the Facebook page has 20 groups), 4 snippets, a week of post history, a week of queued posts and 5 open error reports. These sample accounts have no device (`AccountDto.connected` false), so their posts are never handed out and stay queued. Integration tests must not assume an empty workspace.
+- Devices (`Features/Devices`). The owner creates a pairing code (`DevicePairing`, 10 minutes, single use; `PlanRules.MaxDevices`: free/basic 1, pro 3, agency unlimited). The extension trades it at `POST /api/device/pair` for a device key (only its SHA-256 is stored) and the workspace gets a connected Facebook account (`SocialAccount.DeviceId`). Device endpoints authenticate with the `X-Device-Key` header (`DeviceKeyAuthenticationHandler`, scheme `DeviceKey`, open CORS policy `Devices`) and read the caller from `ICurrentDevice`.
+- Jobs. The extension sends `PUT /api/device/groups` (name + URL; they become the account's `Groups`/`GroupLinks`, names unique) and polls `POST /api/device/jobs/claim`. `ClaimJobCommandHandler` hands out one due post at a time per device, keeps the anti-ban minimum gap per account, fails posts over the platform's 24-hour limit (`quota`) or for a group the extension no longer has, skips posts later than `OfflineSettings.MaxLateness`, and fails claims not reported within 15 minutes (never retried automatically: they may have gone out). `POST /api/device/jobs/{id}/result` completes it (`needsLogin` → `session` + account `relogin`, `blocked` → `rate_limit`).
+- Presence. A device is online when it called in within 100 s. `EngineSettingsDto.extensionOnline` is false while the offline simulation is on, or when devices are paired and none is online (`simulatedOffline`, `devices`, `devicesOnline` tell the cases apart). Reconnecting after the simulation puts held posts back in the queue.
+- Tests that need time to pass use `ApiFactory.Clock.Advance(...)` (dispose it to move the clock back).
 - `SIRIAUTOPOST.Api.IntegrationTests` runs the real API through `WebApplicationFactory<Program>` against PostgreSQL. It drops and recreates the database `siriautopost_test` (override the whole connection string with `SIRIAUTOPOST_TEST_DB`).
 - Layer rules. **Domain** references nothing. **Application** references Domain only. **Infrastructure** references Application and Domain. **Api** references Application and Infrastructure. Keep entity invariants in Domain (`Post.Schedule`/`Retry`/`DismissError`, `Workspace.UpdateAntiBan`, `AntiBanSettings.Validate`, `MediaFile.Create`) and input-shape checks in FluentValidation validators (`Application/Validators/Validators.cs`).
 - CQRS without a mediator library. Each command or query is a record plus a handler, grouped per feature in `Application/Features/<Feature>/<Feature>.cs`, and it has to be registered in `Application/DependencyInjection.cs`. `AddCommand<,,>` wraps each handler in `ValidationCommandHandlerDecorator`, so validators always run first. Controllers inject `ICommandHandler<,>`/`IQueryHandler<,>` with `[FromServices]`.
@@ -59,11 +63,14 @@ cd backend/SIRI.AUTOPOST.Server && dotnet ef migrations add <Name> --output-dir 
 # End-to-end test: runs the real background.js (chrome.* mocked) against a running server
 node client/tools/test-online.mjs http://localhost:5080 admin <admin-password>
 
+# Same for the cloud mode, against a running SIRIAUTOPOST.Api (signs up a throwaway user)
+node client/tools/test-cloud.mjs http://localhost:5100
+
 # Turn a SIRI_autopost_export.zip into client/config/autopost-config.json (options in client/README.md)
 node client/tools/siri-to-config.mjs <export.zip> [options]
 ```
 
-The legacy server has no unit test project. Its only automated test is `test-online.mjs`, which needs a live server and database. Neither part has a linter config.
+The legacy server has no unit test project. Its only automated test is `test-online.mjs`, which needs a live server and database. `test-cloud.mjs` fakes the Facebook page too (content commands in its `contentHandlers`), so it posts end to end without a browser. Neither part has a linter config.
 
 ## Legacy backend configuration quirks
 
@@ -113,6 +120,7 @@ So `dashboard.js` must keep talking only through those chrome APIs. A new chrome
 - Remote commands: the names in `AdminEndpoints.AllowedCommands` must match `remoteCommands` in `background.js`, and the shim's `LOCAL_ONLY` list blocks commands the web can't run.
 - `lib/shared.js` holds settings defaults, `migrateSettings`, spintax and the text composer. `lib/backup.js` handles import/export and the bundled `config/autopost-config.json`, which loads automatically only when the browser profile has no data. `lib/siri-import.js` + `lib/zip.js` import SIRI exports.
 - The files under `client/config/` (`extra-groups.txt`, `drop-images.txt`, `image-fixes/`) are only inputs for `tools/siri-to-config.mjs`. The extension never reads them at runtime.
+- Cloud mode (`background.js` "cloud" section, dashboard card `#cloudCard`): pairs with `SIRIAUTOPOST.Api` (storage key `cloud`), and every 30 s (`fbap-cloud` alarm, run through `enqueue` so it never overlaps a campaign post) sends a heartbeat and the enabled groups of every campaign, claims one job and posts it with `postToGroup`. Job media is stored as `cloudimg:<id>` (content.js `loadFiles` accepts full keys) and removed after the post, so the `img:` orphan cleanups never touch it. It is independent of Start/Stop and of the legacy online mode; the shim's `LOCAL_ONLY` keeps the `cloud*` commands out of the web editor.
 
 ## Duplicated files
 

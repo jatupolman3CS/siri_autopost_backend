@@ -2,7 +2,7 @@
 
 คลังโค้ดนี้รวบรวม **Backend Server** (.NET Core Web API / PostgreSQL) และ **Client** (Google Chrome Extension สำหรับ AutoPost) ไว้อยู่ด้วยกัน
 
-- `src/` + `tests/` + `SIRIAUTOPOST.sln` = API ใหม่แบบ Clean Architecture (.NET 10) ที่หน้าเว็บ Angular (`siri_autopost_ui`) ใช้งาน: สมัคร/เข้าสู่ระบบ (JWT), เวิร์กสเปซ, บัญชีโซเชียล, ตั้งเวลาโพสต์, รายงานข้อผิดพลาด, คลังสื่อ, การตั้งค่า anti-ban และเมื่อออฟไลน์ (ยังไม่ได้ต่อกับส่วนขยาย)
+- `src/` + `tests/` + `SIRIAUTOPOST.sln` = API ใหม่แบบ Clean Architecture (.NET 10) ที่หน้าเว็บ Angular (`siri_autopost_ui`) ใช้งาน: สมัคร/เข้าสู่ระบบ (JWT), เวิร์กสเปซ, บัญชีโซเชียล, ตั้งเวลาโพสต์, รายงานข้อผิดพลาด, คลังสื่อ, การตั้งค่า anti-ban และเมื่อออฟไลน์ และเป็น API ที่ส่วนขยายรับงานโพสต์ไปโพสต์จริง (โหมด "เชื่อมต่อเว็บ AutoPost" ดู `client/README.md`)
 - `backend/SIRI.AUTOPOST.Server/` = server เดิม (legacy) ที่ส่วนขยายใช้งานอยู่ตอนนี้
 
 ---
@@ -60,7 +60,7 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 - Connection string ตอนพัฒนาอยู่ที่ `src/SIRIAUTOPOST.Api/appsettings.Development.json` (`localhost:5432` ฐาน `siriautopost`) ระบบรัน migration ให้เองตอนเริ่มใน Development
 - **บัญชีผู้ดูแล:** ตอนเริ่มระบบจะสร้างผู้ดูแลแพลตฟอร์มจาก `Admin:Email`/`Admin:Password` (ใน Development คือ `admin@autopost.local` / `admin1234`) ถ้าไม่ตั้งค่าไว้จะไม่สร้าง
 - **JWT:** ตั้ง `Jwt:Key` (อย่างน้อย 32 ตัวอักษร) ทุก environment นอก Development ไม่อย่างนั้นระบบจะไม่ยอมเริ่ม เช่น `Jwt__Key=...`
-- เวิร์กสเปซใหม่ทุกอันจะมี **ข้อมูลตัวอย่าง** จากดีไซน์: บัญชีโซเชียล 7 บัญชี (เพจ Facebook พร้อม 20 กลุ่ม), ข้อความสำเร็จรูป 4 อัน, ประวัติโพสต์ 1 สัปดาห์ คิวโพสต์ล่วงหน้า 1 สัปดาห์ และรายงานข้อผิดพลาด 5 รายการ (ยังเชื่อมบัญชีผ่านส่วนขยายไม่ได้ และยังไม่มีตัวโพสต์จริง โพสต์ที่ตั้งเวลาไว้จึงอยู่สถานะ "รอโพสต์" ไปจนกว่าจะต่อกับส่วนขยาย)
+- เวิร์กสเปซใหม่ทุกอันจะมี **ข้อมูลตัวอย่าง** จากดีไซน์: บัญชีโซเชียล 7 บัญชี (เพจ Facebook พร้อม 20 กลุ่ม), ข้อความสำเร็จรูป 4 อัน, ประวัติโพสต์ 1 สัปดาห์ คิวโพสต์ล่วงหน้า 1 สัปดาห์ และรายงานข้อผิดพลาด 5 รายการ (บัญชีตัวอย่างไม่มีเครื่องผูกอยู่ โพสต์ของบัญชีเหล่านี้จึงไม่ถูกส่งจริง บัญชีจริงได้มาจากการจับคู่ส่วนขยาย)
 - Integration test ใช้ฐาน `siriautopost_test` (ลบแล้วสร้างใหม่ทุกครั้ง) เปลี่ยนได้ด้วย environment variable `SIRIAUTOPOST_TEST_DB`
 - เพิ่ม migration: `dotnet ef migrations add <ชื่อ> -p src/SIRIAUTOPOST.Infrastructure -s src/SIRIAUTOPOST.Api -o Data/Migrations`
 - เพิ่มฟีเจอร์ใหม่: Entity ใน Domain → Command/Query + Handler ใน `Application/Features/<ฟีเจอร์>/<ฟีเจอร์>.cs` → ลงทะเบียนใน `Application/DependencyInjection.cs` → Repository + Configuration ใน Infrastructure → Controller ใน Api
@@ -72,8 +72,10 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 | โพสต์ | `GET .../posts?from&to`, `POST .../posts/schedule`, `DELETE .../posts/{id}`, `POST .../posts/{id}/retry`, `POST .../posts/{id}/dismiss`, `GET .../errors` |
 | คลัง | `GET/POST .../media` (multipart field `file`), `GET .../media/{id}/content`, `GET/POST .../snippets` |
 | ระบบโพสต์ | `GET .../engine`, `PUT .../engine/anti-ban`, `PUT .../engine/offline`, `POST .../engine/extension`, `POST .../engine/waiting/skip` |
+| อุปกรณ์ (เจ้าของ) | `GET .../devices`, `POST .../devices/pairing` (รหัสจับคู่ 10 นาที), `DELETE .../devices/{id}` |
+| ส่วนขยาย (`X-Device-Key`) | `POST /api/device/pair`, `POST /api/device/heartbeat`, `PUT /api/device/groups`, `POST /api/device/jobs/claim` (204 = ไม่มีงาน), `POST /api/device/jobs/{id}/result`, `GET /api/device/media/{id}` |
 
-ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ยกเว้น signup, login และ `/healthz`
+ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ยกเว้น signup, login, `/healthz` และ `/api/device/*` (ใช้หัว `X-Device-Key` จากการจับคู่ ยกเว้น `pair`)
 - Frontend Angular ของโครงนี้อยู่ที่ repo `siri_autopost_ui` (ใช้ `openapi.snapshot.json` สร้าง type ของ API)
 
 ---

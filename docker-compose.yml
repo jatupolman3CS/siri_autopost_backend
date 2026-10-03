@@ -21,10 +21,11 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     environment:
-      ConnectionStrings__Default: Host=db;Database=fbautopost;Username=fbap;Password=${DB_PASSWORD}
+      # The server replaces the database name with Database:Name (SIRIAUTOPOST_PRD outside Development) and creates
+      # that database on first start; fbautopost above is only the one Postgres makes for itself.
+      ConnectionStrings__Default: Host=db;Database=fbautopost;Username=fbap;Password=${DB_PASSWORD};Gss Encryption Mode=Disable
       Admin__Username: ${ADMIN_USER:-admin}
       Admin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
-      Google__ClientId: ${Google__ClientId:-}
     ports:
       - "${PORT:-8080}:8080"
     volumes:

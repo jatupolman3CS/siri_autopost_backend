@@ -1,8 +1,9 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# Optional in-cluster Postgres. The Jenkinsfile applies it only when the env file has POSTGRES_USER and
-# POSTGRES_PASSWORD; otherwise the API uses the server in AppSettings__ConnectionStrings (as SIRISTUDIOPHOTO does).
+# Optional in-cluster Postgres that no pipeline applies (the API uses the server named by ConnectionStrings__Default
+# in the siriautopost-env-file credential). To use it: create the secret postgres-env (POSTGRES_USER, POSTGRES_PASSWORD)
+# in the namespace, run `kubectl apply -k deploy/k8s/postgres`, and point ConnectionStrings__Default at Host=postgres.
 namespace: siriautopost
 
 resources:

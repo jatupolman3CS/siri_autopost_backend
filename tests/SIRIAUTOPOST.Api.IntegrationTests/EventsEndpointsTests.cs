@@ -145,9 +145,11 @@ public class EventsEndpointsTests(ApiFactory factory)
         Assert.Equal(cmd.Id, liveDto.Payload.GetProperty("id").GetGuid());
         Assert.True(liveDto.Seq > backlogDto.Seq);
 
-        // The device answers: the page waiting for the command sees "done" on the stream.
+        // The device takes it ("sent"), then answers: the page waiting for the command sees both on the stream.
         var taken = (await (await SyncAsync(p.Device, new { version = "2.2.0", takeCommands = true })).Content.ReadFromJsonAsync<DeviceSyncDto>(Json))!;
         Assert.Equal(cmd.Id, Assert.Single(taken.Commands).Id);
+        var sentEvent = await NextAsync();
+        Assert.Equal("sent", JsonSerializer.Deserialize<DeviceEventDto>(sentEvent.Data, Json)!.Payload.GetProperty("status").GetString());
         (await p.Device.PostAsJsonAsync($"/api/device/commands/{cmd.Id}/result", new { result = new { ok = true } }, Json)).EnsureSuccessStatusCode();
         var done = await NextAsync();
         Assert.Equal(DeviceEventType.Command, done.Event);
@@ -155,6 +157,6 @@ public class EventsEndpointsTests(ApiFactory factory)
 
         var health = (await (await factory.AdminAsync()).GetFromJsonAsync<PlatformHealthDto>("/api/admin/health", Json))!;
         Assert.True(health.EventStreams >= 1);
-        Assert.True(health.EventsPublished >= 4);
+        Assert.True(health.EventsPublished >= 5);
     }
 }

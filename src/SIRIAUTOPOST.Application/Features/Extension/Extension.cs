@@ -24,9 +24,10 @@ public sealed class GetExtensionConfigQueryHandler(
 {
     public async Task<ExtensionConfigDto> HandleAsync(GetExtensionConfigQuery q, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
+        var (ws, role) = await workspaces.RequireRoleAsync(q.WorkspaceId, current, ct);
         var device = await devices.GetAsync(ws.Id, q.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", q.DeviceId);
-        return ExtensionConfigs.Dto(device.Id, await ext.GetConfigAsync(device.Id, ct));
+        // The Telegram bot token is a secret of the workspace admins: everyone else sees it empty.
+        return ExtensionConfigs.Dto(device.Id, await ext.GetConfigAsync(device.Id, ct), hideToken: role < WorkspaceRole.Admin);
     }
 }
 
@@ -41,9 +42,11 @@ public sealed class SaveExtensionConfigCommandHandler(
 {
     public async Task<ConfigSavedDto> HandleAsync(SaveExtensionConfigCommand c, CancellationToken ct = default)
     {
-        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var (ws, role) = await workspaces.RequireRoleAsync(c.WorkspaceId, current, ct);
+        if (role < WorkspaceRole.Editor) throw new ForbiddenException("สิทธิ์ของคุณในเวิร์กสเปซนี้ทำรายการนี้ไม่ได้");
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        return await ExtensionConfigs.SaveAsync(ext, events, uow, ws.Id, device.Id, c.Settings, c.BaseRevision, false, clock.GetUtcNow(), ct);
+        return await ExtensionConfigs.SaveAsync(
+            ext, events, uow, ws.Id, device.Id, c.Settings, c.BaseRevision, false, clock.GetUtcNow(), ct, keepToken: role < WorkspaceRole.Admin);
     }
 }
 
@@ -224,7 +227,9 @@ public sealed class DeviceSyncCommandHandler(
             }
         }
 
-        var commands = await TakeAsync(c.TakeCommands, now, ct);
+        // A held call (wait) only waits for new commands; the ones handed out earlier without a result come again
+        // with the next plain sync (the 30-second alarm, an edit, a button), so a held call never spins on them.
+        var commands = await TakeAsync(c.TakeCommands, again: !c.Wait, now, ct);
         var head = await ext.GetConfigHeadAsync(device.Id, ct);
         await uow.SaveChangesAsync(ct);
         if (newLogs)
@@ -237,17 +242,21 @@ public sealed class DeviceSyncCommandHandler(
         if (c.Wait && c.TakeCommands && commands.Count == 0
             && await bus.WaitForAsync(device.Id, DeviceEventType.Command, MaxWait, ct))
         {
-            commands = await TakeAsync(true, clock.GetUtcNow(), ct);
+            commands = await TakeAsync(true, again: false, clock.GetUtcNow(), ct);
             await uow.SaveChangesAsync(ct);
         }
         return new DeviceSyncDto(head?.Revision ?? 0, head?.HasContent ?? false, commands);
     }
 
-    /// <summary>Expires stale commands and, when asked, marks the rest sent and returns them.</summary>
-    private async Task<List<DeviceCommandItemDto>> TakeAsync(bool take, DateTimeOffset now, CancellationToken ct)
+    /// <summary>
+    /// Expires stale commands and, when asked, returns the open ones: new commands are marked sent, and with
+    /// <paramref name="again"/> the ones handed out earlier without a result come again (the call that carried
+    /// them may have been cut short; the device runs each id once and re-reports a result it already has).
+    /// </summary>
+    private async Task<List<DeviceCommandItemDto>> TakeAsync(bool take, bool again, DateTimeOffset now, CancellationToken ct)
     {
         var commands = new List<DeviceCommandItemDto>();
-        foreach (var cmd in await ext.ListPendingCommandsAsync(current.DeviceId, ct))
+        foreach (var cmd in await ext.ListOpenCommandsAsync(current.DeviceId, ct))
         {
             if (cmd.Stale(now))
             {
@@ -256,7 +265,8 @@ public sealed class DeviceSyncCommandHandler(
                 continue;
             }
             if (!take) continue;
-            cmd.Send(now);
+            if (cmd.Send(now)) events.Add(CommandEvents.Of(cmd, now));
+            else if (!again) continue; // handed out before: only a plain sync gives it again
             using var args = JsonDocument.Parse(cmd.Args);
             commands.Add(new DeviceCommandItemDto(cmd.Id, cmd.Cmd, args.RootElement.Clone()));
         }
@@ -346,18 +356,25 @@ internal static class ExtensionConfigs
     /// <summary>Unused images stay this long: the web app uploads images before the settings that use them.</summary>
     public static readonly TimeSpan OrphanGrace = TimeSpan.FromHours(1);
 
-    public static ExtensionConfigDto Dto(Guid deviceId, ExtensionConfig? c) =>
-        new(deviceId, c?.Revision ?? 0, ExtensionSettings.Element(c?.Settings), c?.UpdatedAt, c?.UpdatedByDevice ?? false,
+    /// <param name="hideToken">Blank out the Telegram bot token (a secret of the workspace admins).</param>
+    public static ExtensionConfigDto Dto(Guid deviceId, ExtensionConfig? c, bool hideToken = false)
+    {
+        var settings = c?.Settings;
+        if (hideToken && !string.IsNullOrEmpty(settings)) settings = ExtensionSettings.WithBotToken(settings, "");
+        return new(deviceId, c?.Revision ?? 0, ExtensionSettings.Element(settings), c?.UpdatedAt, c?.UpdatedByDevice ?? false,
             c?.HasContent ?? false);
+    }
 
+    /// <param name="keepToken">The caller may not change the Telegram bot token: the stored one stays whatever the settings say.</param>
     public static async Task<ConfigSavedDto> SaveAsync(
         IExtensionRepository ext, IDeviceEventRepository events, IUnitOfWork uow, Guid workspaceId, Guid deviceId, JsonElement settings,
-        int? baseRevision, bool byDevice, DateTimeOffset now, CancellationToken ct)
+        int? baseRevision, bool byDevice, DateTimeOffset now, CancellationToken ct, bool keepToken = false)
     {
         if (!ExtensionSettings.IsValid(settings)) throw new DomainException("รูปแบบการตั้งค่าไม่ถูกต้อง (ต้องมี campaigns)");
         var config = await ext.GetConfigAsync(deviceId, ct);
         if (config is null) ext.Add(config = ExtensionConfig.Create(workspaceId, deviceId));
         var json = settings.GetRawText();
+        if (keepToken) json = ExtensionSettings.WithBotToken(json, ExtensionSettings.BotToken(config.Settings));
         var changed = config.Save(json, ExtensionSettings.HasContent(json), baseRevision, byDevice, now);
         if (changed)
             events.Add(DeviceEvents.Make(workspaceId, deviceId, DeviceEventType.Config, new { revision = config.Revision, byDevice }, now));

@@ -1,4 +1,6 @@
+using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 
 namespace SIRIAUTOPOST.Application.Common;
@@ -52,6 +54,29 @@ public static partial class ExtensionSettings
         }
         return false;
     }
+
+    /// <summary>The Telegram bot token inside the settings (global.telegram.botToken); "" when there is none.</summary>
+    public static string BotToken(string? json)
+    {
+        if (string.IsNullOrEmpty(json)) return "";
+        var token = JsonNode.Parse(json)?["global"]?["telegram"]?["botToken"];
+        return token is JsonValue v && v.TryGetValue<string>(out var t) ? t : "";
+    }
+
+    /// <summary>
+    /// The settings with the Telegram bot token set to <paramref name="token"/>. The token is a secret that only
+    /// a workspace admin may read or change: everyone else gets "" on reads and their saves keep the stored one.
+    /// </summary>
+    public static string WithBotToken(string json, string token)
+    {
+        var root = JsonNode.Parse(json) as JsonObject ?? throw new JsonException("settings must be an object");
+        var global = root["global"] as JsonObject ?? (JsonObject)(root["global"] = new JsonObject());
+        var telegram = global["telegram"] as JsonObject ?? (JsonObject)(global["telegram"] = new JsonObject());
+        telegram["botToken"] = token;
+        return root.ToJsonString(Plain); // Thai text stays as typed, so saving the same settings again keeps the revision
+    }
+
+    private static readonly JsonSerializerOptions Plain = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     /// <summary>A stored JSON text as an element for a response (null when empty).</summary>
     public static JsonElement? Element(string? json)

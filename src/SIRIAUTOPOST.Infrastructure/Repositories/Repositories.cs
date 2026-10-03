@@ -307,8 +307,8 @@ public sealed class ExtensionRepository(AppDbContext db) : IExtensionRepository
     public Task<DeviceCommand?> GetCommandAsync(Guid deviceId, Guid commandId, CancellationToken ct = default) =>
         db.DeviceCommands.FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.Id == commandId, ct);
 
-    public async Task<IReadOnlyList<DeviceCommand>> ListPendingCommandsAsync(Guid deviceId, CancellationToken ct = default) =>
-        await db.DeviceCommands.Where(x => x.DeviceId == deviceId && x.Status == CommandStatus.Pending)
+    public async Task<IReadOnlyList<DeviceCommand>> ListOpenCommandsAsync(Guid deviceId, CancellationToken ct = default) =>
+        await db.DeviceCommands.Where(x => x.DeviceId == deviceId && (x.Status == CommandStatus.Pending || x.Status == CommandStatus.Sent))
             .OrderBy(x => x.CreatedAt).ToListAsync(ct);
 
     public void Add(DeviceCommand command) => db.DeviceCommands.Add(command);

@@ -6,6 +6,8 @@ namespace SIRIAUTOPOST.Domain.Entities;
 
 public class User : Entity
 {
+    public const int MaxNameLength = 120;
+
     public string Email { get; private set; } = "";
     public string Name { get; private set; } = "";
     public string PasswordHash { get; private set; } = "";
@@ -38,7 +40,7 @@ public class User : Entity
         return new User
         {
             Email = normalized,
-            Name = string.IsNullOrWhiteSpace(name) ? normalized.Split('@')[0] : name.Trim(),
+            Name = Clip(string.IsNullOrWhiteSpace(name) ? normalized.Split('@')[0] : name.Trim()),
             Role = role,
             Plan = plan,
             Status = CustomerStatus.Active,
@@ -46,6 +48,8 @@ public class User : Entity
             LastSeenAt = now,
         };
     }
+
+    private static string Clip(string name) => name.Length <= MaxNameLength ? name : name[..MaxNameLength];
 
     public bool IsBlocked => Status is CustomerStatus.Suspended or CustomerStatus.Banned;
 

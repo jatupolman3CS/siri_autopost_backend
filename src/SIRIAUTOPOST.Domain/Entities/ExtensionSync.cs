@@ -179,14 +179,24 @@ public class DeviceCommand : Entity
         };
     }
 
-    public bool Stale(DateTimeOffset now) => Status == CommandStatus.Pending && now - CreatedAt > Lifetime;
+    /// <summary>
+    /// Still open: waiting for the device, or handed to it without a result yet. A sync hands out every open
+    /// command again (the call that carried it may have been cut short, and the device remembers the ids it ran),
+    /// so a command is only given up on after <see cref="Lifetime"/>.
+    /// </summary>
+    public bool IsOpen => Status is CommandStatus.Pending or CommandStatus.Sent;
+
+    public bool Stale(DateTimeOffset now) => IsOpen && now - CreatedAt > Lifetime;
 
     public void Expire() => Status = CommandStatus.Expired;
 
-    public void Send(DateTimeOffset now)
+    /// <summary>First delivery to the device; handing the same command out again leaves it as it was.</summary>
+    public bool Send(DateTimeOffset now)
     {
+        if (Status != CommandStatus.Pending) return false;
         Status = CommandStatus.Sent;
         SentAt = now;
+        return true;
     }
 
     public void Complete(string resultJson, DateTimeOffset now)

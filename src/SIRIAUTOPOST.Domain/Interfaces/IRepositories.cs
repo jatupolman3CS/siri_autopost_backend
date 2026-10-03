@@ -197,6 +197,7 @@ public interface IExtensionRepository
 
     Task<DeviceCommand?> GetCommandAsync(Guid deviceId, Guid commandId, CancellationToken ct = default);
     /// <summary>Commands not handed to the device yet, oldest first.</summary>
-    Task<IReadOnlyList<DeviceCommand>> ListPendingCommandsAsync(Guid deviceId, CancellationToken ct = default);
+    /// <summary>Commands without a result yet (pending or sent), oldest first.</summary>
+    Task<IReadOnlyList<DeviceCommand>> ListOpenCommandsAsync(Guid deviceId, CancellationToken ct = default);
     void Add(DeviceCommand command);
 }

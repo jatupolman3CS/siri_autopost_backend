@@ -8,6 +8,15 @@ public class Workspace : Entity
 {
     public const int MaxNameLength = 120;
 
+    /// <summary>The name of the workspace a new account starts with; a long user name is cut to fit.</summary>
+    public static string DefaultNameFor(string userName)
+    {
+        var name = $"เวิร์กสเปซของ {userName}";
+        if (name.Length <= MaxNameLength) return name;
+        var cut = name[..MaxNameLength];
+        return (char.IsHighSurrogate(cut[^1]) ? cut[..^1] : cut).TrimEnd();
+    }
+
     public Guid OwnerId { get; private set; }
     public string Name { get; private set; } = "";
     public DateTimeOffset CreatedAt { get; private set; }

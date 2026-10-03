@@ -24,7 +24,7 @@ public sealed class SignUpCommandHandler(
         var user = User.Create(email, c.Name ?? "", UserRole.User, PlanKey.Free, now);
         user.SetPasswordHash(hasher.Hash(user, c.Password));
         users.Add(user);
-        var ws = Workspace.Create(user.Id, $"เวิร์กสเปซของ {user.Name}", now);
+        var ws = Workspace.Create(user.Id, Workspace.DefaultNameFor(user.Name), now);
         workspaces.Add(ws);
         await seeder.SeedAsync(ws, ct);
         // Invitations sent to this email before the account existed.
@@ -76,7 +76,7 @@ public sealed class GoogleLogInCommandHandler(
         {
             user = User.Create(email, identity.Name ?? "", UserRole.User, PlanKey.Free, now);
             users.Add(user); // no password hash: password login stays impossible until one is set
-            var ws = Workspace.Create(user.Id, $"เวิร์กสเปซของ {user.Name}", now);
+            var ws = Workspace.Create(user.Id, Workspace.DefaultNameFor(user.Name), now);
             workspaces.Add(ws);
             await seeder.SeedAsync(ws, ct);
             foreach (var m in await members.ListPendingAsync(email, ct)) m.Join(user.Id, now);

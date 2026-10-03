@@ -37,7 +37,8 @@ public static class ServiceCollectionExtensions
         // Enums travel as snake_case strings ("fb", "pending_approval", "agency"...) and numbers
         // only as JSON numbers. Set for MVC (responses) and for the HTTP JSON options the OpenAPI
         // document is built from, so generated client types say `number`, not `number | string`.
-        var enums = new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower);
+        // allowIntegerValues: false, so {"plan": 7} is a 400 instead of a plan that does not exist.
+        var enums = new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower, allowIntegerValues: false);
         services.AddControllers().AddJsonOptions(o =>
         {
             o.JsonSerializerOptions.Converters.Add(enums);

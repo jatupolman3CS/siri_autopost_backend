@@ -1554,8 +1554,45 @@ const remoteCommands = {
 };
 
 // Runs commands sent from a web page; report(id, result) sends each result back.
+// The server hands a command out again until its result is reported (the sync that carried it may have been
+// cut short after the server handed it over). So every id is run once: the ids and the results are kept here,
+// and a command that comes again is not run again, its result is only reported again.
+const CMD_LEDGER_KEY = 'cmdLedger';
+const CMD_LEDGER_KEEP_MS = 60 * 60 * 1000; // the server gives up on a command after 10 minutes
+let cmdLedgerChain = Promise.resolve();
+
+function cmdLedger(update) {
+  const run = cmdLedgerChain.then(async () => {
+    const { [CMD_LEDGER_KEY]: stored } = await chrome.storage.local.get([CMD_LEDGER_KEY]);
+    const ledger = stored || {};
+    const out = update(ledger);
+    const cutoff = Date.now() - CMD_LEDGER_KEEP_MS;
+    for (const id of Object.keys(ledger)) if (ledger[id].at < cutoff) delete ledger[id];
+    await chrome.storage.local.set({ [CMD_LEDGER_KEY]: ledger });
+    return out;
+  });
+  cmdLedgerChain = run.catch(() => {});
+  return run;
+}
+
 async function runRemoteCommands(list, report) {
   for (const c of list) {
+    const known = await cmdLedger((l) => {
+      if (!l[c.id]) l[c.id] = { at: Date.now() }; // before running: a long command must not start twice
+      return l[c.id];
+    });
+    if (known.seen) {
+      // Handed out again: report an answer we have, or leave it to the run that is still going.
+      if (known.result !== undefined) {
+        try {
+          await report(c.id, known.result);
+        } catch (e) {
+          console.warn('[FBAP] command result', e);
+        }
+      }
+      continue;
+    }
+    await cmdLedger((l) => { l[c.id].seen = true; });
     const fn = remoteCommands[c.cmd];
     let result;
     try {
@@ -1566,8 +1603,10 @@ async function runRemoteCommands(list, report) {
     if (!['clearLogs', 'syncNow'].includes(c.cmd)) {
       await log('info', `รับคำสั่งจากหน้าเว็บ: ${c.cmd}${result && result.ok === false ? ` (ไม่สำเร็จ: ${result.error})` : ''}`);
     }
+    const answer = result ?? { ok: true };
+    await cmdLedger((l) => { l[c.id].result = answer; });
     try {
-      await report(c.id, result ?? { ok: true });
+      await report(c.id, answer);
     } catch (e) {
       console.warn('[FBAP] command result', e);
     }
@@ -2173,10 +2212,19 @@ async function doCloudConfigSync({ mode = 'auto', wait = false } = {}) {
   try {
     const s = await cloudReport(c, true, { wait });
     if (s.aborted) return { ok: true, aborted: true }; // woken up: the sync queued behind this one takes over
-    await cloudSyncSettings(await getCloud(), s, mode);
+    // The commands came with the answer: a settings sync that fails must not make them vanish. They run after
+    // the sync, so a button pressed right after an edit on the web finds the edit already here.
+    let syncError = null;
+    try {
+      await cloudSyncSettings(await getCloud(), s, mode);
+    } catch (e) {
+      if (e?.status === 401) throw e;
+      syncError = e;
+    }
     const report = (id, result) => cloudApi(c, 'POST', `/api/device/commands/${id}/result`, { result });
     // Report the new state right away so the web page sees it.
     if (await runRemoteCommands(s.commands || [], report)) await cloudReport(await getCloud(), false);
+    if (syncError) throw syncError;
     await setCloud({ configSyncAt: Date.now(), configError: '' });
     return { ok: true };
   } catch (e) {

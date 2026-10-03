@@ -1,10 +1,12 @@
 // End-to-end test of the cloud mode: runs the real background.js (chrome.* and the Facebook
 // page faked) against a running SIRIAUTOPOST.Api, and posts jobs scheduled in the web app.
 //   node tools/test-cloud.mjs [apiUrl]          (default http://localhost:5100)
-// Signs up a throwaway user on that API; it stays there with its workspace.
+// Signs up a throwaway user on that API; it stays there with its workspace. A new account is on Free, so the
+// platform admin (ADMIN_EMAIL / ADMIN_PASSWORD, default the Development account) grants it Pro.
 import assert from 'node:assert/strict';
 
 const API = (process.argv[2] || 'http://localhost:5100').replace(/\/+$/, '');
+const ADMIN = { email: process.env.ADMIN_EMAIL || 'admin@autopost.local', password: process.env.ADMIN_PASSWORD || 'admin1234' };
 const GROUP = { url: 'https://www.facebook.com/groups/plantlovers', name: 'คนรักต้นไม้ (ทดสอบ)' };
 
 // ---------- fake chrome ----------
@@ -192,11 +194,20 @@ async function postsOf(wsId, accountId) {
 
 // ---------- test ----------
 
-step('owner signs up (Pro: human-like settings can be changed)');
+step('owner signs up (granted Pro by the admin: human-like settings can be changed)');
 const email = `cloud${Date.now()}@test.co`;
-let r = await api('POST', '/api/auth/signup', { email, password: 'password123', plan: 'pro' });
+let r = await api('POST', '/api/auth/signup', { email, password: 'password123' });
 assert.equal(r.status, 200, r.text);
+assert.equal(r.json.user.plan, 'free', 'a new account starts on Free');
 token = r.json.token;
+const ownerToken = token;
+const ownerId = r.json.user.id;
+r = await api('POST', '/api/auth/login', ADMIN);
+assert.equal(r.status, 200, `admin login: ${r.text}`);
+token = r.json.token;
+r = await api('PUT', `/api/admin/customers/${ownerId}/plan`, { plan: 'pro' });
+assert.equal(r.status, 200, r.text);
+token = ownerToken;
 const ws = (await api('GET', '/api/workspaces')).json[0];
 
 step('extension has one campaign with one group');
@@ -274,7 +285,16 @@ const cmd = (await api('POST', `${devBase}/commands`, { cmd: 'clearLogs' })).jso
 assert.equal(cmd.status, 'pending');
 r = await bg('cloudConfig', { mode: 'auto' });
 assert.equal(r.ok, true, r.error);
-const cmdDone = (await api('GET', `${devBase}/commands/${cmd.id}`)).json;
+// The web's held sync may have been cut short after the server handed the command over; the next sync
+// hands it out again and the extension runs it once.
+let cmdDone;
+for (let i = 0; i < 40; i++) {
+  cmdDone = (await api('GET', `${devBase}/commands/${cmd.id}`)).json;
+  if (cmdDone.status === 'done') break;
+  r = await bg('cloudConfig', { mode: 'auto' });
+  assert.equal(r.ok, true, r.error);
+  await sleep(50);
+}
 assert.equal(cmdDone.status, 'done');
 assert.equal(cmdDone.result.ok, true);
 const live = (await api('GET', `${devBase}/live`)).json;
@@ -290,8 +310,12 @@ for (const t of ['device.paired', 'device.config', 'device.state', 'device.log',
   assert.ok(types.includes(t), `event ${t} recorded (got ${types.join(', ')})`);
 assert.ok(events.events.every((e, i) => i === 0 || e.seq > events.events[i - 1].seq), 'seq ascending');
 assert.equal(events.head, events.events[events.events.length - 1].seq);
-const cmdEvents = events.events.filter((e) => e.type === 'device.command' && e.payload.id === cmd.id).map((e) => e.payload.status);
-assert.deepEqual(cmdEvents, ['pending', 'done'], 'the command went pending -> done on the stream');
+// Two syncs that overlap may both hand the command over (the device runs it once), so "sent" can repeat.
+const cmdEvents = events.events
+  .filter((e) => e.type === 'device.command' && e.payload.id === cmd.id)
+  .map((e) => e.payload.status)
+  .filter((st, i, all) => st !== all[i - 1]);
+assert.deepEqual(cmdEvents, ['pending', 'sent', 'done'], 'the command went pending -> sent -> done on the stream');
 
 step('a sync held open (wait) returns as soon as the web app sends a command');
 {

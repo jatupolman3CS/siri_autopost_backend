@@ -99,6 +99,23 @@ public class AdminEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task Numbers_and_unknown_names_are_not_plans_or_statuses()
+    {
+        var admin = await factory.AdminAsync();
+        var (client, auth, _) = await factory.SignUpAsync();
+        var plan7 = new StringContent("{\"plan\":7}", System.Text.Encoding.UTF8, "application/json");
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsync($"/api/admin/customers/{auth.User.Id}/plan", plan7)).StatusCode);
+        var status9 = new StringContent("{\"status\":9}", System.Text.Encoding.UTF8, "application/json");
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsync($"/api/admin/customers/{auth.User.Id}/status", status9)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync($"/api/admin/customers/{auth.User.Id}/plan", new { plan = "platinum" }, Json)).StatusCode);
+        // A route value that is a number but no plan.
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync("/api/admin/plans/7", new { price = 100, accounts = 1, posts = 1, devices = 1, seats = 1 }, Json)).StatusCode);
+        // The customer is untouched and can still use the plan-based features.
+        Assert.Equal(PlanKey.Free, (await client.GetFromJsonAsync<UserDto>("/api/auth/me", Json))!.Plan);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsync($"/api/workspaces/{(await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))![0].Id}/devices/pairing", null)).StatusCode);
+    }
+
+    [Fact]
     public async Task Plan_prices_are_edited_by_the_admin()
     {
         var admin = await factory.AdminAsync();

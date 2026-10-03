@@ -52,16 +52,24 @@ public class ExtensionSyncTests
     }
 
     [Fact]
-    public void A_command_runs_only_if_taken_within_ten_minutes()
+    public void A_command_is_open_until_it_has_a_result_and_given_up_on_after_ten_minutes()
     {
         var cmd = DeviceCommand.Create(Guid.NewGuid(), Guid.NewGuid(), "start", "", Now);
         Assert.Equal(("{}", CommandStatus.Pending), (cmd.Args, cmd.Status));
         Assert.False(cmd.Stale(Now.AddMinutes(10)));
         Assert.True(cmd.Stale(Now.AddMinutes(11)));
-        cmd.Send(Now.AddMinutes(1));
-        Assert.False(cmd.Stale(Now.AddMinutes(30))); // handed out: waits for its result
+
+        Assert.True(cmd.Send(Now.AddMinutes(1)));
+        Assert.True(cmd.IsOpen); // handed out, no result yet: a sync hands it out again
+        Assert.False(cmd.Send(Now.AddMinutes(2))); // the second delivery changes nothing
+        Assert.Equal(Now.AddMinutes(1), cmd.SentAt);
+        Assert.False(cmd.Stale(Now.AddMinutes(9)));
+        Assert.True(cmd.Stale(Now.AddMinutes(11))); // lost for good: the device never answered
+
         cmd.Complete("""{"ok":true}""", Now.AddMinutes(2));
         Assert.Equal(CommandStatus.Done, cmd.Status);
+        Assert.False(cmd.IsOpen);
+        Assert.False(cmd.Stale(Now.AddMinutes(30)));
         Assert.Throws<DomainException>(() => DeviceCommand.Create(Guid.NewGuid(), Guid.NewGuid(), "rm", "{}", Now));
     }
 

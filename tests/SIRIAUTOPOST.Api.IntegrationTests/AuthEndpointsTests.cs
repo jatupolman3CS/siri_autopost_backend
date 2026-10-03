@@ -28,6 +28,41 @@ public class AuthEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task Each_sign_up_mistake_gets_its_own_thai_message()
+    {
+        var client = factory.CreateClient();
+        async Task<Dictionary<string, string[]>> ErrorsAsync(object body)
+        {
+            var res = await client.PostAsJsonAsync("/api/auth/signup", body, Json);
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+            return (await res.Content.ReadFromJsonAsync<Microsoft.AspNetCore.Mvc.ValidationProblemDetails>(Json))!.Errors
+                .ToDictionary(e => e.Key, e => e.Value);
+        }
+        var short1 = await ErrorsAsync(new { email = "ok@shop.co", password = "short" });
+        Assert.Equal("รหัสผ่านต้องยาวอย่างน้อย 8 ตัวอักษร", Assert.Single(short1["password"]));
+        var long1 = await ErrorsAsync(new { email = "ok@shop.co", password = new string('x', 101) });
+        Assert.Equal("รหัสผ่านยาวเกิน 100 ตัวอักษร", Assert.Single(long1["password"]));
+        var mail = await ErrorsAsync(new { email = "not-an-email", password = "password1" });
+        Assert.Equal("กรุณาใส่อีเมลที่ถูกต้อง", Assert.Single(mail["email"]));
+        var longMail = await ErrorsAsync(new { email = new string('a', 250) + "@x.co", password = "password1" });
+        Assert.Equal("อีเมลยาวเกิน 254 ตัวอักษร", Assert.Single(longMail["email"]));
+        Assert.Equal("ชื่อยาวเกิน 120 ตัวอักษร", Assert.Single((await ErrorsAsync(new { email = "n@shop.co", password = "password1", name = new string('n', 121) }))["name"]));
+    }
+
+    [Fact]
+    public async Task A_long_name_still_gets_a_workspace_that_fits()
+    {
+        var client = factory.CreateClient();
+        var res = await client.PostAsJsonAsync("/api/auth/signup", new { email = $"u{Guid.NewGuid():N}@shop.co", password = "password1", name = new string('ก', 120) }, Json);
+        res.EnsureSuccessStatusCode();
+        var auth = (await res.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", auth.Token);
+        var ws = Assert.Single((await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!);
+        Assert.Equal(120, ws.Name.Length);
+        Assert.StartsWith("เวิร์กสเปซของ ", ws.Name);
+    }
+
+    [Fact]
     public async Task Everything_but_sign_up_and_log_in_needs_a_token()
     {
         var anon = factory.CreateClient();

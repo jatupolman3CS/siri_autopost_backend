@@ -18,9 +18,9 @@ public class ExtensionEndpointsTests(ApiFactory factory)
         public string Base => $"/api/workspaces/{Ws}/devices/{Pair.DeviceId}";
     }
 
-    private async Task<Paired> PairAsync()
+    private async Task<Paired> PairAsync(string? plan = null)
     {
-        var (owner, _, ws) = await factory.SignUpAsync();
+        var (owner, _, ws) = await factory.SignUpAsync(plan);
         var code = (await (await owner.PostAsync($"/api/workspaces/{ws}/devices/pairing", null)).Content
             .ReadFromJsonAsync<PairingCodeDto>(Json))!;
         var device = factory.CreateClient();
@@ -152,13 +152,28 @@ public class ExtensionEndpointsTests(ApiFactory factory)
         var sync = await SyncAsync(p.Device);
         var cmd = Assert.Single(sync.Commands);
         Assert.Equal(("testPost", "c1"), (cmd.Cmd, cmd.Args.GetProperty("campaignId").GetString()));
-        Assert.Empty((await SyncAsync(p.Device)).Commands); // handed out once
+        // The call that carried it may have been cut short on the device, so a plain sync hands it out again
+        // until a result comes in (the device runs each id once). A held call only waits for new commands.
+        Assert.Equal(cmd.Id, Assert.Single((await SyncAsync(p.Device)).Commands).Id);
+        Assert.Equal(CommandStatus.Sent, (await p.Owner.GetFromJsonAsync<DeviceCommandDto>($"{p.Base}/commands/{cmd.Id}", Json))!.Status);
 
         Assert.Equal(HttpStatusCode.NoContent,
             (await p.Device.PostAsJsonAsync($"/api/device/commands/{cmd.Id}/result", new { result = new { ok = false, error = "ยังไม่ได้ล็อกอิน" } }, Json)).StatusCode);
         var done = (await p.Owner.GetFromJsonAsync<DeviceCommandDto>($"{p.Base}/commands/{cmd.Id}", Json))!;
         Assert.Equal(CommandStatus.Done, done.Status);
         Assert.Equal("ยังไม่ได้ล็อกอิน", done.Result!.Value.GetProperty("error").GetString());
+
+        Assert.Empty((await SyncAsync(p.Device)).Commands); // reported: not handed out again
+
+        // A command that was handed out and never answered is given up on after 10 minutes, like one nobody took.
+        var lost = (await (await p.Owner.PostAsJsonAsync($"{p.Base}/commands", new { cmd = "stop" }, Json)).Content
+            .ReadFromJsonAsync<DeviceCommandDto>(Json))!;
+        Assert.Equal(lost.Id, Assert.Single((await SyncAsync(p.Device)).Commands).Id);
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(11)))
+        {
+            Assert.Empty((await SyncAsync(p.Device)).Commands);
+            Assert.Equal(CommandStatus.Expired, (await p.Owner.GetFromJsonAsync<DeviceCommandDto>($"{p.Base}/commands/{lost.Id}", Json))!.Status);
+        }
 
         // A command nobody takes within 10 minutes never runs.
         var late = (await (await p.Owner.PostAsJsonAsync($"{p.Base}/commands", new { cmd = "start" }, Json)).Content
@@ -208,5 +223,54 @@ public class ExtensionEndpointsTests(ApiFactory factory)
         Assert.Equal(HttpStatusCode.NotFound, (await stranger.GetAsync($"{p.Base}/config")).StatusCode);
         Assert.Equal(HttpStatusCode.NotFound, (await p.Owner.GetAsync($"/api/workspaces/{p.Ws}/devices/{Guid.NewGuid()}/config")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await factory.CreateClient().PostAsJsonAsync("/api/device/sync", new { takeCommands = true })).StatusCode);
+    }
+
+    private static object WithToken(string token) => new
+    {
+        version = 2,
+        global = new { minGapMin = 2, telegram = new { enabled = true, botToken = token, chatId = "-100123" } },
+        campaigns = new[] { new { id = "c1", name = "แก้โดยทีม", enabled = true, groups = Array.Empty<object>(), posts = Array.Empty<object>(), leadImageIds = Array.Empty<string>() } },
+    };
+
+    private static string TokenOf(ExtensionConfigDto c) => c.Settings!.Value.GetProperty("global").GetProperty("telegram").GetProperty("botToken").GetString()!;
+
+    [Fact]
+    public async Task The_telegram_bot_token_is_only_for_workspace_admins_and_other_roles_cannot_change_it()
+    {
+        var p = await PairAsync("agency"); // seats for a team
+        async Task<HttpClient> Member(string role)
+        {
+            var (client, auth, _) = await factory.SignUpAsync();
+            (await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/members", new { email = auth.User.Email, role }, Json)).EnsureSuccessStatusCode();
+            return client;
+        }
+        var admin = await Member("admin");
+        var editor = await Member("editor");
+        var viewer = await Member("viewer");
+
+        // The owner (or the device) sets the token.
+        Assert.Equal(HttpStatusCode.OK, (await p.Owner.PutAsJsonAsync($"{p.Base}/config", new { settings = WithToken("123:SECRET"), baseRevision = (int?)null }, Json)).StatusCode);
+        async Task<ExtensionConfigDto> ReadAsync(HttpClient c) => (await c.GetFromJsonAsync<ExtensionConfigDto>($"{p.Base}/config", Json))!;
+        Assert.Equal("123:SECRET", TokenOf(await ReadAsync(p.Owner)));
+        Assert.Equal("123:SECRET", TokenOf(await ReadAsync(admin)));
+        Assert.Equal("", TokenOf(await ReadAsync(editor)));
+        Assert.Equal("", TokenOf(await ReadAsync(viewer)));
+        // The chat id and the switch are not secret.
+        var seen = (await ReadAsync(viewer)).Settings!.Value.GetProperty("global").GetProperty("telegram");
+        Assert.Equal(("-100123", true), (seen.GetProperty("chatId").GetString(), seen.GetProperty("enabled").GetBoolean()));
+
+        // An editor edits a campaign with the empty token they were shown, and tries to set one: the stored token stays.
+        var rev = (await ReadAsync(editor)).Revision;
+        (await editor.PutAsJsonAsync($"{p.Base}/config", new { settings = WithToken(""), baseRevision = rev }, Json)).EnsureSuccessStatusCode();
+        (await editor.PutAsJsonAsync($"{p.Base}/config", new { settings = WithToken("evil:TOKEN"), baseRevision = rev + 1 }, Json)).EnsureSuccessStatusCode();
+        var after = await ReadAsync(p.Owner);
+        Assert.Equal("123:SECRET", TokenOf(after));
+        Assert.Equal("แก้โดยทีม", after.Settings!.Value.GetProperty("campaigns")[0].GetProperty("name").GetString());
+
+        // An admin may change it, and the device (the browser that holds the token) keeps receiving it.
+        (await admin.PutAsJsonAsync($"{p.Base}/config", new { settings = WithToken("456:NEW"), baseRevision = after.Revision }, Json)).EnsureSuccessStatusCode();
+        Assert.Equal("456:NEW", TokenOf(await ReadAsync(p.Owner)));
+        var own = (await p.Device.GetFromJsonAsync<ExtensionConfigDto>("/api/device/config", Json))!;
+        Assert.Equal("456:NEW", TokenOf(own));
     }
 }

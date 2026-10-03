@@ -7,9 +7,8 @@
 //
 // Credential required (Jenkins "Secret file"): siriautopost-env-file, a .env file like the other jobs use.
 // deploy/prepare-env.sh picks what the API needs from it (only those keys reach the pod):
-//   ConnectionStrings__Default  or AppSettings__ConnectionStrings (same server, database SIRIAUTOPOST_PRD,
-//                               override with SIRIAUTOPOST_DB_NAME), or POSTGRES_USER/POSTGRES_PASSWORD for an
-//                               in-cluster Postgres (deploy/k8s/postgres)
+//   Database                    Postgres inside the namespace (deploy/k8s/postgres), password generated once into the
+//                               postgres-env secret. Put ConnectionStrings__Default in the env file to use another server.
 //   Jwt__Key (32+ chars)        or derived from AppSettings__Secret
 //   Admin__Email/Admin__Password  optional: creates the platform admin on first start
 
@@ -55,8 +54,21 @@ pipeline {
             steps {
                 withCredentials([file(credentialsId: 'siriautopost-env-file', variable: 'ENV_FILE')]) {
                     sh '''
+                        set +x
                         set -eu
                         K="kubectl -n $K8S_NAMESPACE"
+
+                        # Database: Postgres in this namespace. Its password is made once and kept in the postgres-env
+                        # secret, so no database has to be created by hand on another server. Set
+                        # ConnectionStrings__Default in the env file to use an external server instead.
+                        if $K get secret postgres-env >/dev/null 2>&1; then
+                            SIRIAUTOPOST_PG_USER="$($K get secret postgres-env -o jsonpath='{.data.POSTGRES_USER}' | base64 -d)"
+                            SIRIAUTOPOST_PG_PASSWORD="$($K get secret postgres-env -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)"
+                        else
+                            SIRIAUTOPOST_PG_USER=siriautopost
+                            SIRIAUTOPOST_PG_PASSWORD="$(head -c 64 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 32)"
+                        fi
+                        export SIRIAUTOPOST_PG_USER SIRIAUTOPOST_PG_PASSWORD
 
                         APIENV="$(mktemp)"
                         PGENV="$(mktemp)"

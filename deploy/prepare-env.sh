@@ -25,8 +25,10 @@ grep -E '^(ConnectionStrings|Jwt|Admin|Cors|Database)__[A-Za-z0-9_]+=' "$TMP" >>
 db_name="$(getv SIRIAUTOPOST_DB_NAME)"
 db_name="${db_name:-$DB_NAME_DEFAULT}"
 
-pg_user="$(getv POSTGRES_USER)"
-pg_pass="$(getv POSTGRES_PASSWORD)"
+# SIRIAUTOPOST_PG_USER / SIRIAUTOPOST_PG_PASSWORD (from the Jenkinsfile, kept in the postgres-env secret) select the
+# in-cluster Postgres and win over the env file.
+pg_user="${SIRIAUTOPOST_PG_USER:-$(getv POSTGRES_USER)}"
+pg_pass="${SIRIAUTOPOST_PG_PASSWORD:-$(getv POSTGRES_PASSWORD)}"
 if [ -n "$pg_user" ] && [ -n "$pg_pass" ]; then
     printf 'POSTGRES_USER=%s\nPOSTGRES_PASSWORD=%s\n' "$pg_user" "$pg_pass" > "$PG_OUT"
 fi
@@ -34,9 +36,11 @@ fi
 # Connection string: ConnectionStrings__Default as is; otherwise the shared server from AppSettings__ConnectionStrings
 # (SIRISTUDIOPHOTO style) with this app's own database; otherwise the in-cluster Postgres.
 if ! grep -q '^ConnectionStrings__Default=.' "$API_OUT"; then
-    cs="$(getv AppSettings__ConnectionStrings)"
-    if [ -z "$cs" ] && [ -s "$PG_OUT" ]; then
+    cs=""
+    if [ -s "$PG_OUT" ]; then
         cs="Host=postgres;Database=$db_name;Username=$pg_user;Password=$pg_pass"
+    else
+        cs="$(getv AppSettings__ConnectionStrings)"
     fi
     if [ -z "$cs" ]; then
         echo "env file needs ConnectionStrings__Default, AppSettings__ConnectionStrings or POSTGRES_USER + POSTGRES_PASSWORD" >&2

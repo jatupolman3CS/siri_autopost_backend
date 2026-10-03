@@ -1,8 +1,12 @@
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
 using SIRIAUTOPOST.Application.DTOs;
-using SIRIAUTOPOST.Application.Features.Posts.Commands;
-using SIRIAUTOPOST.Application.Features.Posts.Queries;
+using SIRIAUTOPOST.Application.Features.Accounts;
+using SIRIAUTOPOST.Application.Features.Auth;
+using SIRIAUTOPOST.Application.Features.Engine;
+using SIRIAUTOPOST.Application.Features.Library;
+using SIRIAUTOPOST.Application.Features.Posts;
+using SIRIAUTOPOST.Application.Features.Workspaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Application.Validators;
 
@@ -14,12 +18,39 @@ public static class DependencyInjection
     {
         services.AddValidatorsFromAssembly(typeof(DependencyInjection).Assembly, includeInternalTypes: true);
 
-        // Posts. Register every new command/query of a feature here.
-        services.AddCommand<CreatePostCommand, PostDto, CreatePostCommandHandler>();
-        services.AddCommand<UpdatePostCommand, PostDto, UpdatePostCommandHandler>();
-        services.AddCommand<DeletePostCommand, Unit, DeletePostCommandHandler>();
-        services.AddQuery<GetPostByIdQuery, PostDto, GetPostByIdQueryHandler>();
+        // Auth
+        services.AddCommand<SignUpCommand, AuthResultDto, SignUpCommandHandler>();
+        services.AddCommand<LogInCommand, AuthResultDto, LogInCommandHandler>();
+        services.AddCommand<ChangePlanCommand, UserDto, ChangePlanCommandHandler>();
+        services.AddQuery<GetMeQuery, UserDto, GetMeQueryHandler>();
+
+        // Workspaces and accounts
+        services.AddQuery<GetWorkspacesQuery, IReadOnlyList<WorkspaceDto>, GetWorkspacesQueryHandler>();
+        services.AddCommand<CreateWorkspaceCommand, WorkspaceDto, CreateWorkspaceCommandHandler>();
+        services.AddQuery<GetAccountsQuery, IReadOnlyList<AccountDto>, GetAccountsQueryHandler>();
+        services.AddCommand<ReconnectAccountCommand, AccountDto, ReconnectAccountCommandHandler>();
+
+        // Posts
         services.AddQuery<GetPostsQuery, IReadOnlyList<PostDto>, GetPostsQueryHandler>();
+        services.AddQuery<GetErrorsQuery, IReadOnlyList<PostDto>, GetErrorsQueryHandler>();
+        services.AddCommand<SchedulePostsCommand, ScheduleResultDto, SchedulePostsCommandHandler>();
+        services.AddCommand<DeletePostCommand, Unit, DeletePostCommandHandler>();
+        services.AddCommand<RetryPostCommand, PostDto, RetryPostCommandHandler>();
+        services.AddCommand<DismissPostErrorCommand, PostDto, DismissPostErrorCommandHandler>();
+
+        // Library
+        services.AddQuery<GetMediaQuery, IReadOnlyList<MediaDto>, GetMediaQueryHandler>();
+        services.AddQuery<GetMediaContentQuery, MediaContent, GetMediaContentQueryHandler>();
+        services.AddCommand<UploadMediaCommand, MediaDto, UploadMediaCommandHandler>();
+        services.AddQuery<GetSnippetsQuery, IReadOnlyList<SnippetDto>, GetSnippetsQueryHandler>();
+        services.AddCommand<CreateSnippetCommand, SnippetDto, CreateSnippetCommandHandler>();
+
+        // Posting engine
+        services.AddQuery<GetEngineSettingsQuery, EngineSettingsDto, GetEngineSettingsQueryHandler>();
+        services.AddCommand<UpdateAntiBanCommand, EngineSettingsDto, UpdateAntiBanCommandHandler>();
+        services.AddCommand<UpdateOfflineCommand, EngineSettingsDto, UpdateOfflineCommandHandler>();
+        services.AddCommand<SetExtensionOnlineCommand, ExtensionStateDto, SetExtensionOnlineCommandHandler>();
+        services.AddCommand<SkipWaitingPostsCommand, ExtensionStateDto, SkipWaitingPostsCommandHandler>();
 
         return services;
     }

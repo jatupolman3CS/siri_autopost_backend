@@ -6,7 +6,7 @@ builder.Services.AddApi(builder.Configuration);
 
 var app = builder.Build();
 
-await app.MigrateDatabaseAsync();
+await app.PrepareDatabaseAsync();
 app.UseApi();
 
 app.Run();

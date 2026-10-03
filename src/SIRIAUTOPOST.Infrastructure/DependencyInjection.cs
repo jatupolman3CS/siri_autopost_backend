@@ -1,9 +1,13 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Interfaces;
+using SIRIAUTOPOST.Infrastructure.Auth;
 using SIRIAUTOPOST.Infrastructure.Data;
 using SIRIAUTOPOST.Infrastructure.Repositories;
+using SIRIAUTOPOST.Infrastructure.Seeding;
+using SIRIAUTOPOST.Infrastructure.Services;
 
 namespace SIRIAUTOPOST.Infrastructure;
 
@@ -19,7 +23,18 @@ public static class DependencyInjection
             .UseNpgsql(connectionString)
             .UseSnakeCaseNamingConvention());
         services.AddScoped<IUnitOfWork>(sp => sp.GetRequiredService<AppDbContext>());
+        services.AddScoped<IUserRepository, UserRepository>();
+        services.AddScoped<IWorkspaceRepository, WorkspaceRepository>();
+        services.AddScoped<IAccountRepository, AccountRepository>();
         services.AddScoped<IPostRepository, PostRepository>();
+        services.AddScoped<IMediaRepository, MediaRepository>();
+        services.AddScoped<ISnippetRepository, SnippetRepository>();
+        services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
+
+        services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
+        services.AddSingleton<ITokenService, JwtTokenService>();
+        services.AddSingleton<IPasswordHasher, PasswordHasher>();
+        services.AddSingleton<IRandomSource, RandomSource>();
 
         return services;
     }

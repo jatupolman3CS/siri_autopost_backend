@@ -23,7 +23,9 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
                 {
                     Title = "ข้อมูลไม่ถูกต้อง",
                 }),
+                AuthenticationException => (StatusCodes.Status401Unauthorized, new ProblemDetails { Title = ex.Message }),
                 NotFoundException => (StatusCodes.Status404NotFound, new ProblemDetails { Title = ex.Message }),
+                ConflictException => (StatusCodes.Status409Conflict, new ProblemDetails { Title = ex.Message }),
                 DomainException => (StatusCodes.Status422UnprocessableEntity, new ProblemDetails { Title = ex.Message }),
                 _ => (StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "เกิดข้อผิดพลาดในระบบ" }),
             };

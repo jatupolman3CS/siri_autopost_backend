@@ -1,6 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 
-namespace AutoPost.Server.Data;
+namespace SIRI.AUTOPOST.Server.Data;
 
 public class User
 {

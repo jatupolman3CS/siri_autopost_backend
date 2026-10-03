@@ -1356,7 +1356,7 @@ async function tgFindChats() {
 }
 
 // ---------- online: config from the server ----------
-// The computer signs in to the server (server/AutoPost.Server) with a device
+// The computer signs in to the server (backend/SIRI.AUTOPOST.Server) with a device
 // key, pulls the config chosen for it there, pushes edits made in this
 // browser, reports state and logs, and runs commands sent from the web page.
 

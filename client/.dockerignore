@@ -4,6 +4,6 @@
 config
 tools
 *.json
-!server/AutoPost.Server/*.json
-!server/AutoPost.Server/Properties/*.json
+!server/SIRI.AUTOPOST.Server/*.json
+!server/SIRI.AUTOPOST.Server/Properties/*.json
 server/.env

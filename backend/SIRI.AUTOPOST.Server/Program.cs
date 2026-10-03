@@ -1,8 +1,8 @@
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
-using AutoPost.Server.Data;
-using AutoPost.Server.Endpoints;
-using AutoPost.Server.Services;
+using SIRI.AUTOPOST.Server.Data;
+using SIRI.AUTOPOST.Server.Endpoints;
+using SIRI.AUTOPOST.Server.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -152,7 +152,7 @@ static string ExtensionPath(WebApplication app)
         configured,
         Path.Combine(app.Environment.ContentRootPath, "extension"), // published output
         Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "client")), // client alongside backend
-        Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "client")), // source tree under backend/AutoPost.Server
+        Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..", "client")), // source tree under backend/SIRI.AUTOPOST.Server
         Path.GetFullPath(Path.Combine(app.Environment.ContentRootPath, "..", "..")), // legacy source tree
     };
     foreach (var c in candidates)

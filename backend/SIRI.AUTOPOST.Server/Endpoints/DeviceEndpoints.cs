@@ -1,10 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using AutoPost.Server.Data;
-using AutoPost.Server.Services;
+using SIRI.AUTOPOST.Server.Data;
+using SIRI.AUTOPOST.Server.Services;
 using Microsoft.EntityFrameworkCore;
 
-namespace AutoPost.Server.Endpoints;
+namespace SIRI.AUTOPOST.Server.Endpoints;
 
 // API for the extension (header X-Device-Key). CORS is open on these routes
 // because the extension calls them from its service worker.

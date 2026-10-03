@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace AutoPost.Server.Services;
+namespace SIRI.AUTOPOST.Server.Services;
 
 public static partial class Keys
 {

@@ -1,11 +1,11 @@
 using System.Security.Claims;
-using AutoPost.Server.Data;
+using SIRI.AUTOPOST.Server.Data;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 
-namespace AutoPost.Server.Endpoints;
+namespace SIRI.AUTOPOST.Server.Endpoints;
 
 public static class AuthEndpoints
 {

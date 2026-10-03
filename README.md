@@ -9,7 +9,7 @@
 ```text
 siri_autopost_backend/
 ├── backend/                  # ASP.NET Core Web API Server
-│   ├── AutoPost.Server/      # โค้ด Backend API (.NET 10 / C#)
+│   ├── SIRI.AUTOPOST.Server/ # โค้ด Backend API (.NET 10 / C#)
 │   ├── Dockerfile            # สำหรับรัน Backend ใน Container
 │   ├── docker-compose.yml    # Docker Compose สำหรับรัน DB + Server
 │   └── .env.example          # ตัวอย่างการตั้งค่า Environment
@@ -61,7 +61,7 @@ siri_autopost_backend/
 1. ติดตั้ง [.NET 10 SDK](https://dotnet.microsoft.com/)
 2. เข้าไปที่โฟลเดอร์ Backend:
    ```bash
-   cd backend/AutoPost.Server
+   cd backend/SIRI.AUTOPOST.Server
    dotnet run
    ```
 

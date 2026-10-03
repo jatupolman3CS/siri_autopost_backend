@@ -1,5 +1,5 @@
 // End-to-end test of the online mode: runs the real background.js with a fake
-// chrome.* API against a running server (server/AutoPost.Server).
+// chrome.* API against a running server (backend/SIRI.AUTOPOST.Server).
 //   node tools/test-online.mjs [serverUrl] [adminUser] [adminPassword]
 // Uses a throwaway config + device on that server and deletes them at the end.
 import { readFile } from 'node:fs/promises';

@@ -131,7 +131,7 @@ docker compose up -d --build
    ระบบสร้างฐานและตารางให้เองตอนเริ่มครั้งแรก (user ของฐานต้องมีสิทธิ์ CREATEDB ถ้าไม่มี ให้สร้างฐานเองก่อน: `CREATE DATABASE "SIRIAUTOPOST" OWNER app_user;`)
    ตารางทุกตัวชื่อขึ้นต้น `fbap_` และประวัติ migration อยู่ใน `fbap_ef_migrations`
    ตั้งรหัสแอดมินด้วย `Admin__Password=...` ใน `.env` (หรือ `appsettings.json` > `Admin:Password`)
-2. `cd server/AutoPost.Server` แล้ว `dotnet run` (พอร์ต 5080) หรือ `dotnet publish -c Release` แล้วรัน `AutoPost.Server.dll`
+2. `cd backend/SIRI.AUTOPOST.Server` แล้ว `dotnet run` (พอร์ต 5080) หรือ `dotnet publish -c Release` แล้วรัน `SIRI.AUTOPOST.Server.dll`
 3. ถ้าไม่ตั้ง `Admin:Password` ระบบสุ่มรหัสให้ครั้งแรกและพิมพ์ไว้ใน log ของ server เปลี่ยนรหัสได้ในหน้าเว็บ
 
 ### เชื่อมเครื่องรัน
@@ -473,7 +473,7 @@ config/            autopost-config.json = ทุกการตั้งค่�
                    extra-groups.txt, drop-images.txt, image-fixes/ = ข้อมูลที่ใช้สร้าง config (ดูคำสั่งด้านบน)
 icons/             ไอคอน
 tools/test-online.mjs  ทดสอบโหมดออนไลน์ (background.js จริง + server จริง)
-server/AutoPost.Server/  server .NET 10 + PostgreSQL (ตั้งค่าออนไลน์)
+backend/SIRI.AUTOPOST.Server/  server .NET 10 + PostgreSQL (ตั้งค่าออนไลน์)
   Program.cs             เริ่มระบบ, ล็อกอิน (cookie), CORS ของ API เครื่องรัน, เสิร์ฟหน้าตั้งค่าของส่วนขยายที่ /app
   Data/                  ตาราง fbap_users, fbap_profiles (config), fbap_profile_images, fbap_devices, fbap_device_logs, fbap_device_commands + migrations
   Endpoints/             API เว็บ (/api/...) และ API เครื่องรัน (/api/device/..., header X-Device-Key)

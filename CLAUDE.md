@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 FB Group AutoPost: a Chrome extension that posts to Facebook groups while imitating a human, plus an optional .NET server that lets people edit configs and control the extension remotely. The repo holds two parts that depend on each other:
 
 - `client/`: the Chrome extension (Manifest V3, plain ES modules, no build step).
-- `backend/AutoPost.Server/`: an ASP.NET Core (.NET 10) minimal API with EF Core and PostgreSQL.
+- `backend/SIRI.AUTOPOST.Server/`: an ASP.NET Core (.NET 10) minimal API with EF Core and PostgreSQL.
 
 User-facing strings (UI text, API error messages, log messages) are in **Thai**. Code comments are in English. Keep both conventions.
 
@@ -17,14 +17,14 @@ The sibling repo `siri_autopost_ui` is a Vite-hosted copy of the web UI. See "Du
 
 ```bash
 # Backend: local dev (http://localhost:5080, ASPNETCORE_ENVIRONMENT=Development)
-cd backend/AutoPost.Server && dotnet run
-dotnet build backend/AutoPost.Server/AutoPost.Server.csproj
+cd backend/SIRI.AUTOPOST.Server && dotnet run
+dotnet build backend/SIRI.AUTOPOST.Server/SIRI.AUTOPOST.Server.csproj
 
 # Backend + Postgres in Docker (run from the repo root; needs .env with DB_PASSWORD and ADMIN_PASSWORD)
 cp .env.example .env && docker compose up -d --build     # serves on ${PORT:-8080}
 
 # EF Core migrations (migrations run automatically on startup)
-cd backend/AutoPost.Server && dotnet ef migrations add <Name> --output-dir Data/Migrations
+cd backend/SIRI.AUTOPOST.Server && dotnet ef migrations add <Name> --output-dir Data/Migrations
 
 # Extension: load client/ unpacked at chrome://extensions (Developer mode)
 
@@ -48,7 +48,7 @@ There are no unit test projects and no linter config. `test-online.mjs` is the o
 
 ## Architecture
 
-### Three API surfaces (`backend/AutoPost.Server/Endpoints/`)
+### Three API surfaces (`backend/SIRI.AUTOPOST.Server/Endpoints/`)
 
 - `AuthEndpoints`: `/api/auth/*`, cookie auth (`fbap.auth`). Unauthenticated `/api` calls get a 401; page requests are redirected to `/login.html`.
 - `AdminEndpoints`: `/api/*` (requires login). Covers profiles (configs), profile images, devices, live device state and logs, and remote commands.
@@ -88,4 +88,4 @@ So `dashboard.js` must keep talking only through those chrome APIs. A new chrome
 
 ## Duplicated files
 
-`siri_autopost_ui` contains byte-identical copies of `client/dashboard.{css,js}`, `client/lib/*` and `client/icons/`, and near-copies of `client/dashboard.html` and `backend/AutoPost.Server/wwwroot/{index,login}.html` + `web/*`. The near-copies drop the `/app/` path prefix and load the shim as a module. When you change any of these files, mirror the change in the other repo.
+`siri_autopost_ui` contains byte-identical copies of `client/dashboard.{css,js}`, `client/lib/*` and `client/icons/`, and near-copies of `client/dashboard.html` and `backend/SIRI.AUTOPOST.Server/wwwroot/{index,login}.html` + `web/*`. The near-copies drop the `/app/` path prefix and load the shim as a module. When you change any of these files, mirror the change in the other repo.

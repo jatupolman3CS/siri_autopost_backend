@@ -4,7 +4,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace AutoPost.Server.Data.Migrations
+namespace SIRI.AUTOPOST.Server.Data.Migrations
 {
     /// <inheritdoc />
     public partial class Initial : Migration

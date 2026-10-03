@@ -1,9 +1,9 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using AutoPost.Server.Data;
+using SIRI.AUTOPOST.Server.Data;
 using Microsoft.EntityFrameworkCore;
 
-namespace AutoPost.Server.Services;
+namespace SIRI.AUTOPOST.Server.Services;
 
 // Settings and images of a profile; used by the admin web and the devices.
 public class ProfileStore(AppDb db)

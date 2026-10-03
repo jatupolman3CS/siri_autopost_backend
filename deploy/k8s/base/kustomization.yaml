@@ -1,0 +1,17 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - api.yaml
+  - postgres.yaml
+
+configMapGenerator:
+  # Values shared by every environment. Overlays add env-specific keys with behavior: merge.
+  - name: api-config
+    literals:
+      - ASPNETCORE_URLS=http://+:8080
+      - Database__MigrateOnStartup=true
+  # Database name is set by each overlay; the placeholder must never reach a cluster.
+  - name: postgres-config
+    literals:
+      - POSTGRES_DB=OVERRIDE_IN_OVERLAY

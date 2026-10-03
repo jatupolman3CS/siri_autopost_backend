@@ -1,0 +1,37 @@
+# Same approach as siristudiophoto.com: no ingressClassName and no tls block, so the cluster's default
+# IngressClass is used and TLS is terminated in front of the cluster (Cloudflare proxy, SSL mode Flexible/Full).
+# /api goes straight to the API; everything else to the dashboard (Service `ui`, defined in siri_autopost_ui).
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: siriautopost
+  annotations:
+    # Media uploads go up to 100 MB (MediaFile.MaxBytes). Only ingress-nginx reads this.
+    nginx.ingress.kubernetes.io/proxy-body-size: "101m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+spec:
+  rules:
+    - host: siriautopost.siristudiophoto.com
+      http:
+        paths:
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8080
+          - path: /healthz
+            pathType: Exact
+            backend:
+              service:
+                name: api
+                port:
+                  number: 8080
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: ui
+                port:
+                  number: 80

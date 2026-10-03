@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: siriautopost
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: api
+        app.kubernetes.io/part-of: siriautopost
+    spec:
+      containers:
+        - name: api
+          image: siriautopost-api
+          ports:
+            - name: http
+              containerPort: 8080
+          # api-config is listed last so its env-specific values win over any
+          # duplicate key in the api-env secret (Jenkins env file).
+          envFrom:
+            - secretRef:
+                name: api-env
+            - configMapRef:
+                name: api-config
+          # Media is stored in Postgres (bytea), so the API needs no volume.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 768Mi
+---
+# The dashboard's nginx (siri_autopost_ui/nginx.conf) proxies /api to http://api:8080,
+# so the Service name and port must stay `api` / 8080.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  labels:
+    app.kubernetes.io/name: api
+    app.kubernetes.io/part-of: siriautopost
+spec:
+  selector:
+    app.kubernetes.io/name: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

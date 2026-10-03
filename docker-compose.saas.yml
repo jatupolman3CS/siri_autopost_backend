@@ -1,0 +1,46 @@
+# The SaaS stack: SIRIAUTOPOST.Api + the Angular dashboard (siri_autopost_ui, cloned next to
+# this repo or at UI_PATH) + PostgreSQL. Copy .env.example to .env, set the SaaS values, then:
+#   docker compose -f docker-compose.saas.yml up -d --build
+# The dashboard serves on ${WEB_PORT:-8090} and proxies /api to the API, so the extension pairs
+# with that same origin. Put HTTPS in front before using it over the internet.
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: siriautopost
+      POSTGRES_USER: siriautopost
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?set DB_PASSWORD in .env}
+    volumes:
+      - saas-pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siriautopost -d siriautopost"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: src/SIRIAUTOPOST.Api/Dockerfile
+    environment:
+      ConnectionStrings__Default: Host=db;Database=siriautopost;Username=siriautopost;Password=${DB_PASSWORD};Gss Encryption Mode=Disable
+      Database__MigrateOnStartup: "true"
+      Jwt__Key: ${JWT_KEY:?set JWT_KEY in .env (32+ characters)}
+      Admin__Email: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
+      Admin__Password: ${ADMIN_PASSWORD:?set ADMIN_PASSWORD in .env}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ${UI_PATH:-../siri_autopost_ui}
+    ports:
+      - "${WEB_PORT:-8090}:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  saas-pgdata:

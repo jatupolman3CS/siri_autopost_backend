@@ -35,7 +35,7 @@ public class AdminEndpointsTests(ApiFactory factory)
         Assert.Equal((CustomerStatus.Suspended, true), ((await res.Content.ReadFromJsonAsync<CustomerDto>(Json))!.Status, (await CustomerAsync(admin, c.Id)).Paused));
         Assert.Equal(HttpStatusCode.Unauthorized, (await client.GetAsync("/api/workspaces")).StatusCode); // the old token too
         var login = await factory.CreateClient().PostAsJsonAsync("/api/auth/login", new { email = auth.User.Email, password = "password1" });
-        Assert.Equal(HttpStatusCode.Unauthorized, login.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, login.StatusCode);
         Assert.Contains("ระงับ", await login.Content.ReadAsStringAsync());
 
         await admin.PostAsJsonAsync($"/api/admin/customers/{c.Id}/status", new { status = "active" }, Json);

@@ -67,7 +67,10 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 
 | กลุ่ม | Endpoint |
 |---|---|
-| Auth | `POST /api/auth/signup`, `POST /api/auth/login`, `GET /api/auth/me`, `PUT /api/auth/me/plan` |
+| Auth | `POST /api/auth/signup`, `POST /api/auth/login`, `GET /api/auth/me`, `PUT /api/auth/me/plan` (`plan`, `cycle`, `promoCode`) |
+| แผนและบิล | `GET /api/plans` (ไม่ต้องเข้าสู่ระบบ), `GET /api/billing/invoices` |
+| ทีม | `GET/POST /api/workspaces/{ws}/members`, `PUT/DELETE .../members/{memberId}` |
+| เจ้าของแพลตฟอร์ม (`role=admin`) | `GET /api/admin/summary`, `GET /api/admin/customers`, `GET /api/admin/jobs?customerId&take`, `POST /api/admin/customers/{id}/status\|pause\|plan\|limits\|retry-failed\|refund`, `PUT .../note`, `DELETE .../devices/{deviceId}`, `GET /api/admin/transactions`, `POST .../transactions/{id}/refund\|paid`, `PUT /api/admin/plans/{key}`, `GET/POST /api/admin/promos`, `PUT .../promos/{code}/active` |
 | เวิร์กสเปซ | `GET/POST /api/workspaces`, `GET /api/workspaces/{ws}/accounts`, `POST .../accounts/{id}/reconnect` |
 | โพสต์ | `GET .../posts?from&to`, `POST .../posts/schedule`, `DELETE .../posts/{id}`, `POST .../posts/{id}/retry`, `POST .../posts/{id}/dismiss`, `GET .../errors` |
 | คลัง | `GET/POST .../media` (multipart field `file`), `GET .../media/{id}/content`, `GET/POST .../snippets` |
@@ -75,7 +78,22 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 | อุปกรณ์ (เจ้าของ) | `GET .../devices`, `POST .../devices/pairing` (รหัสจับคู่ 10 นาที), `DELETE .../devices/{id}` |
 | ส่วนขยาย (`X-Device-Key`) | `POST /api/device/pair`, `POST /api/device/heartbeat`, `PUT /api/device/groups`, `POST /api/device/jobs/claim` (204 = ไม่มีงาน), `POST /api/device/jobs/{id}/result`, `GET /api/device/media/{id}` |
 
-ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ยกเว้น signup, login, `/healthz` และ `/api/device/*` (ใช้หัว `X-Device-Key` จากการจับคู่ ยกเว้น `pair`)
+ทุก endpoint ต้องส่ง `Authorization: Bearer <token>` ยกเว้น signup, login, `GET /api/plans`, `/healthz` และ `/api/device/*` (ใช้หัว `X-Device-Key` จากการจับคู่ ยกเว้น `pair`)
+
+- **แผนและการเงิน:** ราคาและข้อจำกัดของแต่ละแผน (บัญชี, โพสต์ต่อวัน, อุปกรณ์, ที่นั่งทีม) อยู่ในตาราง `plan_settings` แก้ได้จากหน้าแอดมิน และแอดมินตั้งค่าเฉพาะลูกค้ารายคนทับได้ การเปลี่ยนแผนแบบเสียเงินจะ **บันทึกยอด** ลงสมุดบัญชี (`transactions`, รองรับโค้ดส่วนลด d10/d20/d30/dFree และรายปีลด 20%) แต่ **ยังไม่ได้ตัดบัตรจริง** เพราะยังไม่ได้เชื่อม payment gateway (เช่น Omise/Stripe ต้องใช้คีย์ของร้าน)
+- **ทีม:** เชิญด้วยอีเมล (ถ้ายังไม่มีบัญชี จะเข้าทีมให้เองตอนสมัคร) บทบาทในเวิร์กสเปซ: ผู้ชม (ดูอย่างเดียว) → ผู้แก้ไข (โพสต์, คลังสื่อ) → ผู้ดูแล (ตั้งค่า anti-ban/ออฟไลน์, อุปกรณ์, สมาชิก) → เจ้าของ จำนวนที่นั่ง (รวมเจ้าของ) มาจากแผนของเจ้าของ
+- **สถานะลูกค้า:** แอดมินระงับ/แบนได้ (เข้าสู่ระบบไม่ได้ ได้ 403 และ token เดิมใช้ไม่ได้ทันที) หยุดงานโพสต์ทั้งหมดของลูกค้า หรือคืนเงินรายการล่าสุด
+
+### รันทั้งระบบด้วย Docker (API + หน้าเว็บ Angular + PostgreSQL)
+
+ต้อง clone `siri_autopost_ui` ไว้ข้าง repo นี้ (หรือตั้ง `UI_PATH`) แล้ว:
+
+```bash
+cp .env.example .env    # ตั้ง DB_PASSWORD, ADMIN_PASSWORD, JWT_KEY (32+ ตัวอักษร), ADMIN_EMAIL
+docker compose -f docker-compose.saas.yml up -d --build    # หน้าเว็บที่ http://localhost:8090
+```
+
+nginx ในคอนเทนเนอร์ `web` เสิร์ฟหน้าเว็บและส่ง `/api` ต่อไปที่ API ส่วนขยายจึงจับคู่กับ origin เดียวกันได้ ระบบรัน migration และสร้างบัญชีแอดมินให้เองตอนเริ่ม ควรวาง HTTPS (Caddy / Nginx / Cloudflare Tunnel) ไว้ข้างหน้าก่อนเปิดใช้งานจริง
 - Frontend Angular ของโครงนี้อยู่ที่ repo `siri_autopost_ui` (ใช้ `openapi.snapshot.json` สร้าง type ของ API)
 
 ---

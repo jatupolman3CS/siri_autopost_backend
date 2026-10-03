@@ -49,7 +49,8 @@ public sealed class LogInCommandHandler(
         // Same message for unknown email and wrong password.
         if (user is null || !hasher.Verify(user, user.PasswordHash, c.Password))
             throw new AuthenticationException("อีเมลหรือรหัสผ่านไม่ถูกต้อง");
-        if (user.IsBlocked) throw new AuthenticationException(BlockedMessage);
+        // 403, not 401, so the sign-in page can tell a suspended account from a wrong password.
+        if (user.IsBlocked) throw new ForbiddenException(BlockedMessage);
         user.Seen(clock.GetUtcNow());
         await uow.SaveChangesAsync(ct);
         var token = tokens.Create(user);

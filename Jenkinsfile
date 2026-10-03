@@ -1,18 +1,17 @@
 // PRD pipeline for siri_autopost_backend (Jenkins job: SIRIAUTOPOST-BACKEND).
-// Builds SIRIAUTOPOST.Api into the local registry and deploys the API and Postgres for
+// Builds SIRIAUTOPOST.Api into the local registry and deploys the API for
 // https://siriautopost.siristudiophoto.com into namespace siriautopost (deploy/k8s/overlays/prd).
 //
 // Same conventions as the SIRISTUDIOPHOTO jobs: docker + kubectl on the Jenkins host, registry localhost:5000.
 // Run this job before SIRIAUTOPOST-WEB the first time: the dashboard's nginx needs Service `api` to exist.
 //
-// Credential required (Jenkins "Secret file"):
-//   siriautopost-env-file   plain KEY=value lines, no quotes:
-//                             POSTGRES_USER=siriautopost
-//                             POSTGRES_PASSWORD=<strong password>
-//                             ConnectionStrings__Default=Host=postgres;Database=siriautopost;Username=<POSTGRES_USER>;Password=<POSTGRES_PASSWORD>;Gss Encryption Mode=Disable
-//                             Jwt__Key=<32+ random characters>
-//                             Admin__Email=<platform admin email>
-//                             Admin__Password=<platform admin password>
+// Credential required (Jenkins "Secret file"): siriautopost-env-file, a .env file like the other jobs use.
+// deploy/prepare-env.sh picks what the API needs from it (only those keys reach the pod):
+//   ConnectionStrings__Default  or AppSettings__ConnectionStrings (same server, database SIRIAUTOPOST_PRD,
+//                               override with SIRIAUTOPOST_DB_NAME), or POSTGRES_USER/POSTGRES_PASSWORD for an
+//                               in-cluster Postgres (deploy/k8s/postgres)
+//   Jwt__Key (32+ chars)        or derived from AppSettings__Secret
+//   Admin__Email/Admin__Password  optional: creates the platform admin on first start
 
 pipeline {
     agent any
@@ -59,44 +58,33 @@ pipeline {
                         set -eu
                         K="kubectl -n $K8S_NAMESPACE"
 
-                        # A file saved on Windows may carry a UTF-8 BOM and CRLF line ends; both would end up in
-                        # the key names / values of the secrets, so work on a normalized copy.
-                        ENVN="$(mktemp)"
+                        APIENV="$(mktemp)"
                         PGENV="$(mktemp)"
-                        trap 'rm -f "$ENVN" "$PGENV"' EXIT
-                        sed -e '1s/^\\xEF\\xBB\\xBF//' -e 's/\\r$//' "$ENV_FILE" > "$ENVN"
-                        ENV_FILE="$ENVN"
-
-                        for required_key in POSTGRES_USER POSTGRES_PASSWORD ConnectionStrings__Default Jwt__Key Admin__Email Admin__Password; do
-                            if ! grep -Eq "^${required_key}=.+" "$ENV_FILE"; then
-                                echo "env file must contain ${required_key}=" >&2
-                                # Key names and encoding only, never values.
-                                echo "encoding: $(file -b "$ENV_FILE" 2>/dev/null || echo unknown)" >&2
-                                echo "keys found:" >&2
-                                grep -oE '^[^=#]+=' "$ENV_FILE" | sed 's/=$//' | sed -n '1,30l' >&2 || true
-                                exit 1
-                            fi
-                        done
+                        trap 'rm -f "$APIENV" "$PGENV"' EXIT
+                        sh deploy/prepare-env.sh "$ENV_FILE" "$APIENV" "$PGENV"
 
                         kubectl create namespace "$K8S_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
                         # Secrets come from the Jenkins credential and are never written to git.
-                        $K create secret generic api-env --from-env-file="$ENV_FILE" --dry-run=client -o yaml | $K apply -f -
+                        $K create secret generic api-env --from-env-file="$APIENV" --dry-run=client -o yaml | $K apply -f -
 
-                        # Postgres only gets its own two keys, not the whole env file.
-                        grep -E '^POSTGRES_(USER|PASSWORD)=' "$ENV_FILE" > "$PGENV" || true
-                        if [ "$(wc -l < "$PGENV")" -ne 2 ]; then
-                            echo "env file must contain exactly one POSTGRES_USER= and one POSTGRES_PASSWORD= line" >&2
-                            exit 1
+                        if [ -s "$PGENV" ]; then
+                            $K create secret generic postgres-env --from-env-file="$PGENV" --dry-run=client -o yaml | $K apply -f -
+                            kubectl apply -k deploy/k8s/postgres
+                            $K rollout status statefulset/postgres --timeout=300s
                         fi
-                        $K create secret generic postgres-env --from-env-file="$PGENV" --dry-run=client -o yaml | $K apply -f -
 
                         # Pin the image built above (workspace copy only, not committed).
                         sed -i "s/newTag: .*/newTag: $IMAGE_TAG/" "$OVERLAY/kustomization.yaml"
                         kubectl apply -k "$OVERLAY"
+                        # api-env is not part of the pod template, so a changed secret alone would not roll the pod.
+                        $K rollout restart deployment/api
 
-                        $K rollout status statefulset/postgres --timeout=300s
-                        $K rollout status deployment/api --timeout=300s
+                        if ! $K rollout status deployment/api --timeout=300s; then
+                            $K get pods -l app.kubernetes.io/name=api -o wide || true
+                            $K logs deployment/api --tail=80 || true
+                            exit 1
+                        fi
                     '''
                 }
             }

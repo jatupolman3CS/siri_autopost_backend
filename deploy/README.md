@@ -10,7 +10,7 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
 | Jenkins jobs | `SIRIAUTOPOST-BACKEND` (this repo, `Jenkinsfile`), `SIRIAUTOPOST-WEB` (siri_autopost_ui, `Jenkinsfile`) |
 | Branch | `*/main` (both repos are public, no git credential needed) |
 | Images | `localhost:5000/siriautopost-api`, `localhost:5000/siriautopost-web` |
-| Database | Postgres 18 StatefulSet `postgres` in the namespace, database `siriautopost` (10Gi PVC) |
+| Database | `SIRIAUTOPOST_PRD` on the server from the env file (or the optional in-cluster Postgres 18) |
 | Routing | tunnel → `http://172.17.0.1:30907` (Service `ui`, NodePort) → nginx serves the dashboard and proxies `/api` to Service `api:8080` |
 
 ## One-time setup
@@ -23,15 +23,13 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
    ```
 2. **DNS (Cloudflare, zone siristudiophoto.com):** CNAME `siriautopost` →
    `d7ef791e-9da8-416f-a040-d25f144e08eb.cfargotunnel.com`, proxied (or `cloudflared tunnel route dns siri-monitor siriautopost.siristudiophoto.com`).
-3. **Jenkins credential** `siriautopost-env-file` (Secret file), plain `KEY=value` lines, no quotes:
-   ```
-   POSTGRES_USER=siriautopost
-   POSTGRES_PASSWORD=<strong password>
-   ConnectionStrings__Default=Host=postgres;Database=siriautopost;Username=siriautopost;Password=<same password>;Gss Encryption Mode=Disable
-   Jwt__Key=<32+ random characters>
-   Admin__Email=<platform admin email>
-   Admin__Password=<platform admin password>
-   ```
+3. **Jenkins credential** `siriautopost-env-file` (Secret file): a `.env` file like the other jobs use.
+   `deploy/prepare-env.sh` takes only what the API needs (other keys never reach the pod):
+   - `ConnectionStrings__Default`, or `AppSettings__ConnectionStrings` (same server, own database
+     `SIRIAUTOPOST_PRD`, override with `SIRIAUTOPOST_DB_NAME`; the DB user needs CREATEDB for the first start),
+     or `POSTGRES_USER` + `POSTGRES_PASSWORD` for an in-cluster Postgres (`deploy/k8s/postgres`);
+   - `Jwt__Key` (32+ chars), or derived from `AppSettings__Secret`;
+   - optional `Admin__Email` / `Admin__Password` to create the platform admin.
 4. **Jenkins jobs** (Pipeline, "Pipeline script from SCM", Git, branch `*/main`, Script Path `Jenkinsfile`):
    - `SIRIAUTOPOST-BACKEND` → https://github.com/jatupolman3CS/siri_autopost_backend.git
    - `SIRIAUTOPOST-WEB` → https://github.com/jatupolman3CS/siri_autopost_ui.git

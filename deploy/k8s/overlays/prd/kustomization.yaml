@@ -1,7 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# PRD: https://siriautopost.siristudiophoto.com  |  database siriautopost
+# PRD: https://siriautopost.siristudiophoto.com  |  database SIRIAUTOPOST_PRD
 # Applied by the Jenkinsfile at the repo root (Jenkins job SIRIAUTOPOST-BACKEND).
 namespace: siriautopost
 
@@ -23,7 +23,3 @@ configMapGenerator:
       - ASPNETCORE_ENVIRONMENT=Production
       # Pinned here so an env file copied from elsewhere cannot change the public origin.
       - Cors__AllowedOrigins__0=https://siriautopost.siristudiophoto.com
-  - name: postgres-config
-    behavior: merge
-    literals:
-      - POSTGRES_DB=siriautopost

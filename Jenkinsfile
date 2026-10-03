@@ -59,6 +59,14 @@ pipeline {
                         set -eu
                         K="kubectl -n $K8S_NAMESPACE"
 
+                        # A file saved on Windows may carry a UTF-8 BOM and CRLF line ends; both would end up in
+                        # the key names / values of the secrets, so work on a normalized copy.
+                        ENVN="$(mktemp)"
+                        PGENV="$(mktemp)"
+                        trap 'rm -f "$ENVN" "$PGENV"' EXIT
+                        sed -e '1s/^\\xEF\\xBB\\xBF//' -e 's/\\r$//' "$ENV_FILE" > "$ENVN"
+                        ENV_FILE="$ENVN"
+
                         for required_key in POSTGRES_USER POSTGRES_PASSWORD ConnectionStrings__Default Jwt__Key Admin__Email Admin__Password; do
                             if ! grep -Eq "^${required_key}=.+" "$ENV_FILE"; then
                                 echo "env file must contain ${required_key}=" >&2
@@ -72,8 +80,6 @@ pipeline {
                         $K create secret generic api-env --from-env-file="$ENV_FILE" --dry-run=client -o yaml | $K apply -f -
 
                         # Postgres only gets its own two keys, not the whole env file.
-                        PGENV="$(mktemp)"
-                        trap 'rm -f "$PGENV"' EXIT
                         grep -E '^POSTGRES_(USER|PASSWORD)=' "$ENV_FILE" > "$PGENV" || true
                         if [ "$(wc -l < "$PGENV")" -ne 2 ]; then
                             echo "env file must contain exactly one POSTGRES_USER= and one POSTGRES_PASSWORD= line" >&2

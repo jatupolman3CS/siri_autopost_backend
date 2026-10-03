@@ -12,7 +12,7 @@ FB Group AutoPost: a Chrome extension that posts to Facebook groups while imitat
 
 User-facing strings (UI text, API error messages, log messages) are in **Thai**. Code comments are in English. Keep both conventions.
 
-The sibling repo `siri_autopost_ui` holds the new Angular frontend for `SIRIAUTOPOST.Api` at its root, and a Vite-hosted copy of the legacy web UI in `legacy/`. See "Duplicated files" below.
+The sibling repo `siri_autopost_ui` holds the new Angular frontend (the full AutoPost Dashboard design, currently on in-memory sample data; its stores are where `SIRIAUTOPOST.Api` calls will go) at its root, and a Vite-hosted copy of the legacy web UI in `legacy/`. See "Duplicated files" below.
 
 ## New solution (`SIRIAUTOPOST.sln`)
 

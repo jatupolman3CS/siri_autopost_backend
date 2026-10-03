@@ -80,6 +80,9 @@ public sealed class SchedulePostsCommandHandler(
         foreach (var sel in c.Targets.DistinctBy(t => t.AccountId))
         {
             if (!all.TryGetValue(sel.AccountId, out var account)) throw new NotFoundException("บัญชี", sel.AccountId);
+            // A browser's Facebook account posts to groups it has synced: with none, the post could only fail when claimed.
+            if (account.IsConnected && !account.PostsToGroups)
+                throw new DomainException($"บัญชี {account.Name} ยังไม่มีกลุ่ม: เปิดส่วนขยายแล้วเพิ่มกลุ่มในชุดโพสต์ก่อน");
             if (!account.PostsToGroups)
             {
                 tasks.Add((account, account.DefaultTarget));
@@ -113,6 +116,7 @@ public sealed class SchedulePostsCommandHandler(
         if (created.Count == 0) throw new DomainException("ไม่มีวันที่ตรงกับรูปแบบการทำซ้ำในอีก 14 วัน");
 
         await uow.SaveChangesAsync(ct);
+        if (mediaIds.Count > 0) await media.RecordUseAsync(ws.Id, mediaIds, ct); // once per scheduling, not per post
         return new ScheduleResultDto(created.Count, created.Min(p => p.ScheduledAt), created.Max(p => p.ScheduledAt));
     }
 

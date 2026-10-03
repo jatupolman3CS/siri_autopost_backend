@@ -105,13 +105,16 @@ public sealed record SendDeviceCommandCommand(Guid WorkspaceId, Guid DeviceId, s
 
 public sealed class SendDeviceCommandCommandHandler(
     IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, IDeviceEventRepository events,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SendDeviceCommandCommand, DeviceCommandDto>
 {
     public async Task<DeviceCommandDto> HandleAsync(SendDeviceCommandCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
+        // A suspended, banned or paused customer's devices get no jobs, and no button that starts posting either.
+        if (DeviceCommand.StartsPosting(c.Cmd) && !(await users.OwnerOfAsync(ws, ct)).CanPost)
+            throw new DomainException("บัญชีเจ้าของเวิร์กสเปซถูกระงับหรือหยุดการโพสต์โดยผู้ดูแลแพลตฟอร์ม จึงสั่งให้เครื่องโพสต์ไม่ได้");
         var args = c.Args is { ValueKind: JsonValueKind.Object } a ? a.GetRawText() : "{}";
         var now = clock.GetUtcNow();
         var cmd = DeviceCommand.Create(ws.Id, device.Id, c.Cmd, args, now);
@@ -207,8 +210,12 @@ public sealed class DeviceSyncCommandHandler(
             if (state is null) ext.Add(state = DeviceState.Create(device.Id));
             var json = st.GetRawText();
             state.Set(json, now);
+            // A very big state (hundreds of groups) would not fit an event: the event only says it changed and the
+            // client fetches it, instead of the sync failing for good with the same state sent again.
             events.Add(DeviceEvents.MakeRaw(device.WorkspaceId, device.Id, DeviceEventType.State,
-                $"{{\"state\":{json},\"at\":{JsonSerializer.Serialize(now)}}}", now));
+                json.Length <= DeviceEvents.MaxStateChars
+                    ? $"{{\"state\":{json},\"at\":{JsonSerializer.Serialize(now)}}}"
+                    : $"{{\"truncated\":true,\"at\":{JsonSerializer.Serialize(now)}}}", now));
         }
 
         var newLogs = false;
@@ -232,11 +239,9 @@ public sealed class DeviceSyncCommandHandler(
         var commands = await TakeAsync(c.TakeCommands, again: !c.Wait, now, ct);
         var head = await ext.GetConfigHeadAsync(device.Id, ct);
         await uow.SaveChangesAsync(ct);
-        if (newLogs)
-        {
-            await ext.PruneLogsAsync(device.Id, DeviceLog.KeepPerDevice, ct);
-            await events.PruneAsync(device.Id, DeviceEvent.KeepPerDevice, ct);
-        }
+        if (newLogs) await ext.PruneLogsAsync(device.Id, DeviceLog.KeepPerDevice, ct);
+        // Events grow with every state change and log line: keep the newest ones after any sync that wrote some.
+        if (newLogs || c.State is not null) await events.PruneAsync(device.Id, DeviceEvent.KeepPerDevice, ct);
 
         // Nothing to run: hold the call until the web app sends a command (or the wait is over), then take it.
         if (c.Wait && c.TakeCommands && commands.Count == 0

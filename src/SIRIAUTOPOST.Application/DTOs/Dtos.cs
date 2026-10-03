@@ -64,7 +64,10 @@ public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserD
 
 /// <param name="Role">The signed-in user's role here (owner for their own workspaces).</param>
 /// <param name="Members">People with access, owner included.</param>
-public sealed record WorkspaceDto(Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role);
+/// <param name="Limits">What the workspace's OWNER may use (their plan and the admin's overrides for them): the limits apply to
+/// everyone working in it, whatever plan a member has themselves.</param>
+/// <param name="AdvancedAntiBan">The owner's plan includes the advanced anti-ban settings.</param>
+public sealed record WorkspaceDto(Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role, LimitsDto Limits, bool AdvancedAntiBan);
 
 /// <param name="Connected">Posts through a paired browser (false for the demo accounts).</param>
 public sealed record AccountDto(

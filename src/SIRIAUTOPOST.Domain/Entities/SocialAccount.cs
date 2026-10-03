@@ -70,8 +70,8 @@ public class SocialAccount : Entity
     /// <summary>Follows a rename of its browser in the web app.</summary>
     public void FollowDevice(Device device) => Name = $"Facebook · {device.Name}";
 
-    /// <summary>Replaces the groups with the ones the extension knows (names must be unique).</summary>
-    public void SyncGroups(IEnumerable<GroupLink> links)
+    /// <summary>Replaces the groups with the ones the extension knows (names must be unique). False when nothing changed.</summary>
+    public bool SyncGroups(IEnumerable<GroupLink> links)
     {
         var list = links
             .Select(l => new GroupLink { Name = (l.Name ?? "").Trim(), Url = (l.Url ?? "").Trim() })
@@ -79,8 +79,11 @@ public class SocialAccount : Entity
             .Select(l => l.Name.Length > 0 ? l : new GroupLink { Name = l.Url, Url = l.Url })
             .DistinctBy(l => l.Name)
             .ToList();
+        if (list.Count == GroupLinks.Count && list.Zip(GroupLinks).All(p => p.First.Name == p.Second.Name && p.First.Url == p.Second.Url))
+            return false;
         GroupLinks = list;
         Groups = list.Select(l => l.Name).ToList();
+        return true;
     }
 
     public string? UrlFor(string group) => GroupLinks.FirstOrDefault(l => l.Name == group)?.Url;

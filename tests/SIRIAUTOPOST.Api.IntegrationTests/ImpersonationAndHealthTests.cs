@@ -85,13 +85,17 @@ public class ImpersonationAndHealthTests(ApiFactory factory)
 
         var log = await AuditAsync(admin, id);
         Assert.Equal(
-            [AuditAction.Refunded, AuditAction.StatusChanged, AuditAction.StatusChanged, AuditAction.LimitsChanged, AuditAction.PlanChanged, AuditAction.PlanChanged, AuditAction.PlanChanged],
+            [
+                AuditAction.Refunded, AuditAction.PauseChanged, AuditAction.StatusChanged, AuditAction.PauseChanged, AuditAction.StatusChanged,
+                AuditAction.LimitsChanged, AuditAction.PlanChanged, AuditAction.PlanChanged, AuditAction.PlanChanged,
+            ],
             log.Select(e => e.Action));
         Assert.Equal((Guid.Empty, "", "free", "pro"), (log[^1].ActorId, log[^1].ActorEmail, log[^1].From, log[^1].To)); // no person behind it
         Assert.Equal((Guid.Empty, "pro", "free"), (log[^2].ActorId, log[^2].From, log[^2].To));
         Assert.Equal((ApiFactory.AdminEmail, "free", "agency"), (log[^3].ActorEmail, log[^3].From, log[^3].To));
         Assert.Equal("accounts=5 posts=- devices=0 seats=-", log[^4].To);
         Assert.Equal(("active", "suspended"), (log[^5].From, log[^5].To));
+        Assert.Equal(("paused", "running"), (log[^6].To, log[1].To)); // suspending pauses posting, restoring resumes it: both are logged
         Assert.Equal("790", log[0].To); // the refunded amount
     }
 

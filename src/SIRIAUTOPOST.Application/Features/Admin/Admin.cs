@@ -1,6 +1,7 @@
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
@@ -58,7 +59,7 @@ public sealed record GetPlatformHealthQuery : IQuery<PlatformHealthDto>;
 public sealed class GetPlatformHealthQueryHandler(
     IUserRepository users, IAuditRepository audit, IPlanRepository plans, IWorkspaceRepository workspaces,
     IDeviceRepository devices, IPostRepository posts, IRequestTimings timings, IDatabaseProbe database, IDeviceEventBus events,
-    IPaymentGateway gateway, TimeProvider clock)
+    IPaymentGateway gateway, IExtensionPackage package, TimeProvider clock)
     : IQueryHandler<GetPlatformHealthQuery, PlatformHealthDto>
 {
     public async Task<PlatformHealthDto> HandleAsync(GetPlatformHealthQuery q, CancellationToken ct = default)
@@ -71,7 +72,10 @@ public sealed class GetPlatformHealthQueryHandler(
 
         var wsIds = (await workspaces.ListAllAsync(ct)).Select(w => w.Id).ToList();
         var devs = await devices.ListByWorkspacesAsync(wsIds, ct);
-        var latest = devs.Select(d => d.Version).Where(v => Version.TryParse(v, out _)).MaxBy(Version.Parse);
+        // The newest extension is the one the web app hands out; a server without a copy falls back to the newest a device runs.
+        var latest = package.Version is { } served && Version.TryParse(served, out _)
+            ? served
+            : devs.Select(d => d.Version).Where(v => Version.TryParse(v, out _)).MaxBy(Version.Parse);
 
         // Finished posts per window: success and "pending approval" went out, failed did not.
         async Task<(int Ok, int Failed)> Finished(DateTimeOffset from, DateTimeOffset to)
@@ -140,11 +144,14 @@ public sealed class SetCustomerStatusCommandHandler(
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
         var from = user.Status;
         var wasBlocked = user.IsBlocked;
+        var wasPaused = user.Paused;
         user.SetStatus(c.Status);
         // Before the save: when Stripe cannot be reached the status stays as it was, so nobody is billed while blocked.
         if (user.StripeSubscriptionId is { } subscription && wasBlocked != user.IsBlocked)
             await gateway.SetBillingPausedAsync(subscription, user.IsBlocked, ct);
         audit.Record(AuditAction.StatusChanged, user.Id, AdminAudit.Key(from), AdminAudit.Key(c.Status));
+        // Suspending pauses the customer's posting and restoring resumes it: the log says so too, as it does for the pause button.
+        if (wasPaused != user.Paused) audit.Record(AuditAction.PauseChanged, user.Id, to: user.Paused ? "paused" : "running");
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
     }
@@ -222,7 +229,7 @@ public sealed record AdminRevokeDeviceCommand(Guid CustomerId, Guid DeviceId) : 
 
 public sealed class AdminRevokeDeviceCommandHandler(
     IUserRepository users, IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts,
-    IPostRepository posts, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
+    IPostRepository posts, IDeviceEventRepository events, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AdminRevokeDeviceCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(AdminRevokeDeviceCommand c, CancellationToken ct = default)
@@ -231,13 +238,10 @@ public sealed class AdminRevokeDeviceCommandHandler(
         var device = await devices.GetByIdAsync(c.DeviceId, ct);
         var ws = device is null ? null : await workspaces.GetByIdAsync(device.WorkspaceId, ct);
         if (device is null || ws?.OwnerId != user.Id) throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        var now = clock.GetUtcNow();
-        (await accounts.GetByDeviceAsync(device.Id, ct))?.Disconnect();
-        foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
-            p.Fail(FailureCode.Network, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", now);
-        devices.Remove(device);
+        await DeviceRevocation.RevokeAsync(device, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, devices, events, clock.GetUtcNow(), ct);
         audit.Record(AuditAction.DeviceRevoked, user.Id, to: AdminAudit.Clip(device.Name));
         await uow.SaveChangesAsync(ct);
+        await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);
         return await customers.GetAsync(user.Id, ct);
     }
 }

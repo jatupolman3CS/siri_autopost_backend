@@ -1,6 +1,7 @@
 using System.IO.Compression;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SIRIAUTOPOST.Api.Services;
 
 namespace SIRIAUTOPOST.Api.Controllers;
 
@@ -13,7 +14,7 @@ namespace SIRIAUTOPOST.Api.Controllers;
 [Route("api/extension")]
 [AllowAnonymous]
 [ApiExplorerSettings(IgnoreApi = true)]
-public sealed class ExtensionDownloadController(IConfiguration config, IWebHostEnvironment env) : ControllerBase
+public sealed class ExtensionDownloadController(ExtensionPackage package) : ControllerBase
 {
     private static readonly string[] RootFiles =
         ["manifest.json", "background.js", "content.js", "status.html", "status.css", "status.js"];
@@ -26,26 +27,10 @@ public sealed class ExtensionDownloadController(IConfiguration config, IWebHostE
     [HttpGet("download")]
     public IActionResult Download()
     {
-        var dir = FindExtensionDir();
+        var dir = package.Directory;
         if (dir is null) return Problem("ไม่พบไฟล์ส่วนขยายบนเซิร์ฟเวอร์", statusCode: StatusCodes.Status404NotFound);
         var zip = BuildZip(dir, out var version);
         return File(zip, "application/zip", $"autopost-extension-{version}.zip");
-    }
-
-    /// <summary>Folder named by <c>Extension:Path</c>, <c>./extension</c> next to the app (Docker), or <c>client/</c> above the content root (dev).</summary>
-    private string? FindExtensionDir()
-    {
-        var configured = config["Extension:Path"];
-        if (!string.IsNullOrWhiteSpace(configured) && System.IO.File.Exists(Path.Combine(configured, "manifest.json")))
-            return configured;
-        var bundled = Path.Combine(AppContext.BaseDirectory, "extension");
-        if (System.IO.File.Exists(Path.Combine(bundled, "manifest.json"))) return bundled;
-        for (var d = new DirectoryInfo(env.ContentRootPath); d is not null; d = d.Parent)
-        {
-            var candidate = Path.Combine(d.FullName, "client");
-            if (System.IO.File.Exists(Path.Combine(candidate, "manifest.json"))) return candidate;
-        }
-        return null;
     }
 
     private static byte[] BuildZip(string dir, out string version)
@@ -55,7 +40,7 @@ public sealed class ExtensionDownloadController(IConfiguration config, IWebHostE
                 .SelectMany(f => Directory.GetFiles(f, "*", SearchOption.AllDirectories)))
             .Order(StringComparer.Ordinal).ToList();
         var key = string.Join('|', files.Select(f => $"{f}:{System.IO.File.GetLastWriteTimeUtc(f).Ticks}"));
-        version = ReadVersion(Path.Combine(dir, "manifest.json"));
+        version = ExtensionPackage.ReadVersion(Path.Combine(dir, "manifest.json")) ?? "latest";
         lock (Gate)
         {
             if (_cached is { } c && c.Key == key) return c.Zip;
@@ -74,15 +59,5 @@ public sealed class ExtensionDownloadController(IConfiguration config, IWebHostE
             _cached = (key, ms.ToArray());
             return _cached.Value.Zip;
         }
-    }
-
-    private static string ReadVersion(string manifest)
-    {
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(System.IO.File.ReadAllBytes(manifest));
-            return doc.RootElement.GetProperty("version").GetString() ?? "latest";
-        }
-        catch { return "latest"; }
     }
 }

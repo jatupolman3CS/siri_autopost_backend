@@ -149,7 +149,7 @@ public class Post : Entity
     /// <summary>Could not be posted (by the device, or refused before it was handed out).</summary>
     public void Fail(FailureCode code, string? detail, DateTimeOffset now)
     {
-        if (Status is not (PostStatus.Posting or PostStatus.Queued))
+        if (Status is not (PostStatus.Posting or PostStatus.Queued or PostStatus.Waiting))
             throw new DomainException("โพสต์นี้ไม่ได้อยู่ในคิวหรือระหว่างโพสต์");
         Status = PostStatus.Failed;
         FailureCode = code;

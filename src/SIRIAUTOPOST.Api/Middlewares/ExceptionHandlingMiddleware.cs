@@ -13,6 +13,10 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
         {
             await next(ctx);
         }
+        catch (OperationCanceledException) when (ctx.RequestAborted.IsCancellationRequested)
+        {
+            // The client went away (a device cuts a held sync short): nothing to answer and nothing to report.
+        }
         catch (Exception ex) when (!ctx.Response.HasStarted)
         {
             var (status, problem) = ex switch
@@ -33,7 +37,7 @@ public sealed class ExceptionHandlingMiddleware(RequestDelegate next, ILogger<Ex
                 _ => (StatusCodes.Status500InternalServerError, new ProblemDetails { Title = "เกิดข้อผิดพลาดในระบบ" }),
             };
             if (status is StatusCodes.Status500InternalServerError)
-                logger.LogError(ex, "Unhandled exception for {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
+                logger.LogError(ex, "ข้อผิดพลาดที่ไม่ได้ดักไว้ที่ {Method} {Path}", ctx.Request.Method, ctx.Request.Path);
 
             problem.Status = status;
             problem.Instance = ctx.Request.Path;

@@ -41,9 +41,9 @@ public class DeviceEvent
 /// <summary>The event names on the stream (the "event:" field of the web app's stream).</summary>
 public static class DeviceEventType
 {
-    /// <summary>A device was paired to the workspace: { name }.</summary>
+    /// <summary>A device was paired to the workspace: { name, accountId }.</summary>
     public const string Paired = "device.paired";
-    /// <summary>A device was unbound: {}.</summary>
+    /// <summary>A device was unbound (by the owner's team or the platform admin): { name }.</summary>
     public const string Revoked = "device.revoked";
     /// <summary>A device called in after being offline: { version }.</summary>
     public const string Online = "device.online";
@@ -57,11 +57,15 @@ public static class DeviceEventType
     public const string Command = "device.command";
     /// <summary>The settings moved to a new revision: { revision, byDevice }.</summary>
     public const string Config = "device.config";
-    /// <summary>A post of the device's account changed: { postId, status }.</summary>
+    /// <summary>A post of the device's account changed: { postId, status, failureCode }.</summary>
     public const string Post = "post";
+    /// <summary>The groups of the device's account changed (the extension synced a new list): { count }.</summary>
+    public const string Groups = "device.groups";
+    /// <summary>The web app renamed the device or paused/resumed its jobs: { name, jobsPaused }.</summary>
+    public const string Updated = "device.updated";
 
     public static readonly IReadOnlySet<string> All = new HashSet<string>
     {
-        Paired, Revoked, Online, State, Log, LogCleared, Command, Config, Post,
+        Paired, Revoked, Online, State, Log, LogCleared, Command, Config, Post, Groups, Updated,
     };
 }

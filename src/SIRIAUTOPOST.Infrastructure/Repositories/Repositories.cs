@@ -119,6 +119,9 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
             .OrderBy(x => x.ScheduledAt)
             .ToListAsync(ct);
 
+    public async Task<IReadOnlyList<Post>> ListOpenByAccountAsync(Guid accountId, CancellationToken ct = default) =>
+        await db.Posts.Where(x => x.AccountId == accountId && (x.Status == PostStatus.Queued || x.Status == PostStatus.Waiting)).ToListAsync(ct);
+
     public async Task<IReadOnlyList<Post>> ListClaimedByAsync(Guid deviceId, CancellationToken ct = default) =>
         await db.Posts.Where(x => x.ClaimedByDeviceId == deviceId && x.Status == PostStatus.Posting).ToListAsync(ct);
 
@@ -186,6 +189,13 @@ public sealed class MediaRepository(AppDbContext db) : IMediaRepository
         return db.Media.CountAsync(x => x.WorkspaceId == workspaceId && list.Contains(x.Id), ct);
     }
 
+    public Task RecordUseAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
+    {
+        var list = ids.Distinct().ToList();
+        return db.Media.Where(x => x.WorkspaceId == workspaceId && list.Contains(x.Id))
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.UsedCount, x => x.UsedCount + 1), ct);
+    }
+
     public void Add(MediaFile file) => db.Media.Add(file);
 }
 
@@ -229,6 +239,9 @@ public sealed class DevicePairingRepository(AppDbContext db) : IDevicePairingRep
 {
     public Task<DevicePairing?> GetByCodeAsync(string code, CancellationToken ct = default) =>
         db.DevicePairings.FirstOrDefaultAsync(x => x.Code == code, ct);
+
+    public Task DeleteExpiredAsync(DateTimeOffset before, CancellationToken ct = default) =>
+        db.DevicePairings.Where(x => x.ExpiresAt < before).ExecuteDeleteAsync(ct);
 
     public void Add(DevicePairing pairing) => db.DevicePairings.Add(pairing);
 }

@@ -44,14 +44,19 @@ public sealed class CreatePairingCodeCommandHandler(
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var max = await DeviceLimit.EnsureRoomAsync(ws, users, plans, devices, accounts, workspaces, ct);
-        var pairing = DevicePairing.Create(ws.Id, secrets.NewPairingCode(), clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        await pairings.DeleteExpiredAsync(now.AddDays(-1), ct); // a day-old code is no use to anyone
+        var pairing = DevicePairing.Create(ws.Id, secrets.NewPairingCode(), now);
         pairings.Add(pairing);
         await uow.SaveChangesAsync(ct);
         return new PairingCodeDto(pairing.Code, pairing.ExpiresAt, max);
     }
 }
 
-/// <summary>Unbinds a device. Its account keeps its history but needs a new pairing to post again.</summary>
+/// <summary>
+/// Unbinds a device. Its account keeps its history but needs a new pairing to post again, so the posts it
+/// still had to send are failed (they would never be claimed: the new pairing makes a new account).
+/// </summary>
 public sealed record RevokeDeviceCommand(Guid WorkspaceId, Guid DeviceId) : ICommand<Unit>;
 
 public sealed class RevokeDeviceCommandHandler(
@@ -63,14 +68,41 @@ public sealed class RevokeDeviceCommandHandler(
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        var now = clock.GetUtcNow();
-        (await accounts.GetByDeviceAsync(device.Id, ct))?.Disconnect();
-        foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
-            p.Fail(FailureCode.Network, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", now);
-        devices.Remove(device);
-        events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Revoked, new { name = device.Name }, now));
+        await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, devices, events, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
+        await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);
         return Unit.Value;
+    }
+}
+
+/// <summary>What unbinding a device does, shared by the owner's team and the platform admin.</summary>
+internal static class DeviceRevocation
+{
+    /// <summary>Events kept for a device that is gone: nothing prunes them later.</summary>
+    public const int KeepEvents = 50;
+
+    public const string QueuedDetail = "อุปกรณ์ถูกยกเลิกการผูกแล้ว ต้องจับคู่เครื่องใหม่ก่อนจึงจะโพสต์ได้";
+
+    /// <summary>Disconnects the account, fails its unfinished posts and removes the device. The caller saves.</summary>
+    public static async Task RevokeAsync(
+        Device device, string whilePostingDetail, IAccountRepository accounts, IPostRepository posts, IDeviceRepository devices,
+        IDeviceEventRepository events, DateTimeOffset now, CancellationToken ct)
+    {
+        var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        account?.Disconnect();
+        foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
+        {
+            p.Fail(FailureCode.Network, whilePostingDetail, now);
+            events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
+        }
+        if (account is not null)
+            foreach (var p in await posts.ListOpenByAccountAsync(account.Id, ct))
+            {
+                p.Fail(FailureCode.Session, QueuedDetail, now);
+                events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
+            }
+        devices.Remove(device);
+        events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Revoked, new { name = device.Name }, now));
     }
 }
 
@@ -81,8 +113,8 @@ public sealed class RevokeDeviceCommandHandler(
 public sealed record UpdateDeviceCommand(Guid WorkspaceId, Guid DeviceId, string? Name, bool? JobsPaused) : ICommand<DeviceDto>;
 
 public sealed class UpdateDeviceCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ICurrentUser current,
-    IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateDeviceCommand, DeviceDto>
 {
     public async Task<DeviceDto> HandleAsync(UpdateDeviceCommand c, CancellationToken ct = default)
@@ -96,8 +128,10 @@ public sealed class UpdateDeviceCommandHandler(
             account?.FollowDevice(device);
         }
         if (c.JobsPaused is { } paused) device.SetJobsPaused(paused);
+        var now = clock.GetUtcNow();
+        events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Updated, new { name = device.Name, jobsPaused = device.JobsPaused }, now));
         await uow.SaveChangesAsync(ct);
-        return DeviceDto.From(device, account?.Id, clock.GetUtcNow());
+        return DeviceDto.From(device, account?.Id, now);
     }
 }
 
@@ -167,7 +201,7 @@ public sealed record DeviceHeartbeatCommand(string? Version) : ICommand<DeviceSt
 
 public sealed class DeviceHeartbeatCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
+    IUserRepository users, IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<DeviceHeartbeatCommand, DeviceStatusDto>
 {
     public async Task<DeviceStatusDto> HandleAsync(DeviceHeartbeatCommand c, CancellationToken ct = default)
@@ -179,8 +213,10 @@ public sealed class DeviceHeartbeatCommandHandler(
         await uow.SaveChangesAsync(ct);
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        // "Paused" is also what a suspended, banned or paused customer's device is told: it gets no jobs.
+        var owner = await users.OwnerOfAsync(ws, ct);
         return new DeviceStatusDto(device.Id, device.Name, ws.Id, ws.Name, account?.Id, account?.GroupLinks.Count ?? 0,
-            ws.ExtensionOnline, AntiBanDto.From(ws.AntiBan), device.JobsPaused);
+            ws.ExtensionOnline, AntiBanDto.From(ws.AntiBan), device.JobsPaused || !owner.CanPost);
     }
 }
 
@@ -188,15 +224,19 @@ public sealed class DeviceHeartbeatCommandHandler(
 public sealed record SyncDeviceGroupsCommand(IReadOnlyList<GroupLinkDto> Groups) : ICommand<int>;
 
 public sealed class SyncDeviceGroupsCommandHandler(
-    ICurrentDevice current, IDeviceRepository devices, IAccountRepository accounts, IUnitOfWork uow, TimeProvider clock)
+    ICurrentDevice current, IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SyncDeviceGroupsCommand, int>
 {
     public async Task<int> HandleAsync(SyncDeviceGroupsCommand c, CancellationToken ct = default)
     {
         var device = await DeviceAccess.RequireAsync(devices, current, ct);
-        device.Seen(null, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        if (device.Seen(null, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         var account = await accounts.GetByDeviceAsync(device.Id, ct) ?? throw new NotFoundException("บัญชีของอุปกรณ์", device.Id);
-        account.SyncGroups(c.Groups.Select(g => new GroupLink { Name = g.Name, Url = g.Url }));
+        if (account.SyncGroups(c.Groups.Select(g => new GroupLink { Name = g.Name, Url = g.Url })))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Groups, new { count = account.GroupLinks.Count }, now));
         await uow.SaveChangesAsync(ct);
         return account.GroupLinks.Count;
     }
@@ -234,7 +274,10 @@ public sealed class ClaimJobCommandHandler(
         // A post the device never reported on is not retried automatically: it may have gone out.
         var claimed = await posts.ListClaimedByAsync(device.Id, ct);
         foreach (var p in claimed.Where(p => p.ClaimExpired(now)))
+        {
             p.Fail(FailureCode.Network, "ไม่ได้รับผลการโพสต์จากส่วนขยายภายใน 15 นาที", now);
+            events.Add(DeviceEvents.PostChanged(ws.Id, device.Id, p, now));
+        }
         if (claimed.Any(p => !p.ClaimExpired(now))) return null; // one post at a time
 
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
@@ -251,27 +294,34 @@ public sealed class ClaimJobCommandHandler(
         var planPosts = (await plans.ForAsync(owner, ct)).Posts;
         var ownWorkspaces = (await workspaces.ListByOwnerAsync(owner.Id, ct)).Select(w => w.Id).ToList();
         var sentByOwner = planPosts is null ? 0 : await posts.CountPublishedSinceAsync(ownWorkspaces, now.AddDays(-1), ct);
+        // The anti-ban gap is pacing, not lateness: a post held back by it is not "late" for the offline policy
+        // (otherwise two posts due together would leave the second one skipped under the skip policy).
+        var openFrom = last is { } lp ? lp + TimeSpan.FromMinutes(ws.AntiBan.Min) : DateTimeOffset.MinValue;
         foreach (var p in await posts.ListDueAsync(account.Id, now, ct))
         {
-            if (now - p.ScheduledAt > ws.Offline.MaxLateness)
+            if (now - (p.ScheduledAt > openFrom ? p.ScheduledAt : openFrom) > ws.Offline.MaxLateness)
             {
                 p.SkipLate(now);
+                events.Add(DeviceEvents.PostChanged(ws.Id, device.Id, p, now));
                 continue;
             }
             if (sentToday >= limit)
             {
                 p.Fail(FailureCode.Quota, $"ครบโควตา {limit} โพสต์ใน 24 ชั่วโมงของแพลตฟอร์มนี้", now);
+                events.Add(DeviceEvents.PostChanged(ws.Id, device.Id, p, now));
                 continue;
             }
             if (planPosts is { } pp && sentByOwner >= pp)
             {
                 p.Fail(FailureCode.Quota, $"ครบโควตา {pp} โพสต์ต่อวันของแผน อัปเกรดแผนเพื่อโพสต์ได้มากขึ้น", now);
+                events.Add(DeviceEvents.PostChanged(ws.Id, device.Id, p, now));
                 continue;
             }
             var url = account.UrlFor(p.Target);
             if (url is null)
             {
                 p.Fail(FailureCode.Network, $"ไม่พบลิงก์ของกลุ่ม \"{p.Target}\" ในส่วนขยาย", now);
+                events.Add(DeviceEvents.PostChanged(ws.Id, device.Id, p, now));
                 continue;
             }
             p.Claim(device.Id, now);
@@ -317,8 +367,7 @@ public sealed class ReportJobResultCommandHandler(
             post.Fail(code, c.Error, now);
             if (c.NeedsLogin) account?.MarkNeedsLogin();
         }
-        events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Post,
-            new { postId = post.Id, status = post.Status, failureCode = post.FailureCode }, now));
+        events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, post, now));
         await uow.SaveChangesAsync(ct);
         return PostDto.From(post);
     }

@@ -76,6 +76,13 @@ public interface IRequestTimings
     (int? P95Ms, int Samples) Snapshot();
 }
 
+/// <summary>The extension the web app hands out for download.</summary>
+public interface IExtensionPackage
+{
+    /// <summary>Its manifest version; null when the server has no copy of the extension.</summary>
+    string? Version { get; }
+}
+
 public interface IDatabaseProbe
 {
     /// <summary>Round trip of a trivial query.</summary>

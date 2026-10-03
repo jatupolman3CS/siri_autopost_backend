@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.IdentityModel.Tokens;
 using SIRIAUTOPOST.Api.Auth;
 using SIRIAUTOPOST.Api.Middlewares;
+using SIRIAUTOPOST.Api.Services;
 using SIRIAUTOPOST.Application;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Enums;
@@ -30,6 +31,8 @@ public static class ServiceCollectionExtensions
         services.AddHttpContextAccessor();
         services.AddScoped<ICurrentUser, CurrentUser>();
         services.AddScoped<IAppUrls, AppUrls>();
+        services.AddSingleton<ExtensionPackage>();
+        services.AddSingleton<IExtensionPackage>(sp => sp.GetRequiredService<ExtensionPackage>());
         services.AddSingleton<IRequestTimings, RequestTimings>();
         services.AddScoped<ICurrentDevice, CurrentDevice>();
         services.AddJwtAuth(config);

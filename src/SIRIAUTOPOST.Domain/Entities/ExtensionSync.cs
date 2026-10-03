@@ -153,6 +153,9 @@ public class DeviceCommand : Entity
         "start", "stop", "runNow", "testPost", "tgTest", "tgFindChats", "clearLogs", "syncNow",
     };
 
+    /// <summary>Buttons that make the extension post (start, run now, test post).</summary>
+    public static bool StartsPosting(string cmd) => cmd is "start" or "runNow" or "testPost";
+
     public Guid WorkspaceId { get; private set; }
     public Guid DeviceId { get; private set; }
     public string Cmd { get; private set; } = "";

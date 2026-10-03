@@ -259,4 +259,181 @@ public class DeviceEndpointsTests(ApiFactory factory)
         var (other, _, _) = await factory.SignUpAsync();
         Assert.Equal(HttpStatusCode.NotFound, (await other.GetAsync($"/api/workspaces/{p.Ws}/devices")).StatusCode);
     }
+
+    private static async Task<List<DeviceEventDto>> EventsAsync(Paired p, long after = 0) =>
+        (await p.Owner.GetFromJsonAsync<DeviceEventsPageDto>($"/api/workspaces/{p.Ws}/events?after={after}&take=500", Json))!.Events.ToList();
+
+    [Fact]
+    public async Task Unbinding_fails_the_posts_that_could_never_be_sent_and_tells_the_stream_whoever_does_it()
+    {
+        var admin = await factory.AdminAsync();
+        foreach (var byAdmin in new[] { false, true })
+        {
+            var p = await PairAsync();
+            await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+            var queued = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddHours(2));
+            var due = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(5));
+            PostDto? posting;
+            using (factory.Clock.Advance(TimeSpan.FromMinutes(6)))
+            {
+                var job = (await (await p.Device.PostAsync("/api/device/jobs/claim", null)).Content.ReadFromJsonAsync<JobDto>(Json))!;
+                Assert.Equal(due.Id, job.PostId);
+                posting = await PostAsync(p, due.Id);
+                Assert.Equal(PostStatus.Posting, posting.Status);
+            }
+
+            var me = (await p.Owner.GetFromJsonAsync<UserDto>("/api/auth/me", Json))!;
+            var res = byAdmin
+                ? await admin.DeleteAsync($"/api/admin/customers/{me.Id}/devices/{p.Pair.DeviceId}")
+                : await p.Owner.DeleteAsync($"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}");
+            Assert.True(res.IsSuccessStatusCode);
+
+            // What was handed out and what was still waiting both fail now: no new pairing claims them (it makes a new account).
+            var unsent = await PostAsync(p, queued.Id);
+            Assert.Equal((PostStatus.Failed, FailureCode.Session), (unsent.Status, unsent.FailureCode));
+            Assert.Contains("จับคู่", unsent.FailureDetail);
+            var lost = await PostAsync(p, due.Id);
+            Assert.Equal((PostStatus.Failed, FailureCode.Network), (lost.Status, lost.FailureCode));
+
+            var events = await EventsAsync(p);
+            Assert.Contains(events, e => e.Type == "device.revoked" && e.Payload.GetProperty("name").GetString() == "Office PC");
+            Assert.Equal(2, events.Count(e => e.Type == "post" && e.Payload.GetProperty("status").GetString() == "failed"));
+        }
+    }
+
+    [Fact]
+    public async Task What_the_device_changes_alone_reaches_the_web_app_as_events()
+    {
+        var p = await PairAsync();
+        var head = (await p.Owner.GetFromJsonAsync<DeviceEventsPageDto>($"/api/workspaces/{p.Ws}/events?after=0&take=1", Json))!.Head;
+
+        // New groups are an event, the same list again is not.
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        // Renaming and pausing from the web are events too.
+        (await p.Owner.PutAsJsonAsync($"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}", new { name = "Shop PC", jobsPaused = true }, Json)).EnsureSuccessStatusCode();
+        // A post settled while the device claims (a group it no longer has) is an event as well.
+        var gone = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(5));
+        await p.Owner.PutAsJsonAsync($"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}", new { jobsPaused = false }, Json);
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Other", url = "https://www.facebook.com/groups/other" } } });
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(6)))
+            await p.Device.PostAsync("/api/device/jobs/claim", null);
+
+        var events = await EventsAsync(p, head);
+        var groups = events.Where(e => e.Type == "device.groups").ToList();
+        Assert.Equal([1, 1], groups.Select(e => e.Payload.GetProperty("count").GetInt32()));
+        var updated = events.Where(e => e.Type == "device.updated").Select(e => (e.Payload.GetProperty("name").GetString(), e.Payload.GetProperty("jobsPaused").GetBoolean())).ToList();
+        Assert.Equal([("Shop PC", true), ("Shop PC", false)], updated);
+        var failed = Assert.Single(events, e => e.Type == "post" && e.Payload.GetProperty("postId").GetGuid() == gone.Id);
+        Assert.Equal("failed", failed.Payload.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task A_connected_account_with_no_synced_groups_cannot_be_scheduled()
+    {
+        var p = await PairAsync();
+        var res = await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/schedule", new
+        {
+            content = "ยังไม่มีกลุ่ม", startAt = DateTimeOffset.UtcNow.AddHours(1), useDelay = false, repeat = "none",
+            targets = new[] { new { accountId = p.Pair.AccountId } },
+        }, Json);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, res.StatusCode);
+        Assert.Contains("ยังไม่มีกลุ่ม", await res.Content.ReadAsStringAsync());
+
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        Assert.NotNull(await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddHours(1)));
+    }
+
+    [Fact]
+    public async Task The_anti_ban_gap_is_pacing_not_lateness_so_the_skip_policy_keeps_the_second_post()
+    {
+        var p = await PairAsync();
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        await p.Owner.PutAsJsonAsync($"/api/workspaces/{p.Ws}/engine/offline",
+            new { policy = "skip", window = "2h", line = false, email = false, push = false }, Json);
+        var engine = (await p.Owner.GetFromJsonAsync<EngineSettingsDto>($"/api/workspaces/{p.Ws}/engine", Json))!;
+        await p.Owner.PutAsJsonAsync($"/api/workspaces/{p.Ws}/engine/anti-ban", engine.AntiBan with { Min = 30, Max = 40 }, Json);
+        var at = DateTimeOffset.UtcNow.AddMinutes(5);
+        var first = await ScheduleAsync(p, "Plants", at);
+        var second = await ScheduleAsync(p, "Plants", at.AddMinutes(5)); // due soon after the first
+
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(6)))
+        {
+            var job = (await (await p.Device.PostAsync("/api/device/jobs/claim", null)).Content.ReadFromJsonAsync<JobDto>(Json))!;
+            Assert.Equal(first.Id, job.PostId);
+            await p.Device.PostAsJsonAsync($"/api/device/jobs/{job.PostId}/result", new { ok = true });
+        }
+        // 38 minutes after the first one went out, far past the skip policy's 10 minutes after its due time, but only 8 after
+        // the anti-ban gap (30 minutes) let it go: held back by the gap, not late.
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(38)))
+        {
+            var job = (await (await p.Device.PostAsync("/api/device/jobs/claim", null)).Content.ReadFromJsonAsync<JobDto>(Json))!;
+            Assert.Equal(second.Id, job.PostId);
+        }
+    }
+
+    [Fact]
+    public async Task A_suspended_customers_device_is_told_to_pause_and_gets_no_start_buttons()
+    {
+        var admin = await factory.AdminAsync();
+        var p = await PairAsync();
+        var me = (await p.Owner.GetFromJsonAsync<UserDto>("/api/auth/me", Json))!;
+        var cmd = $"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}/commands";
+        Assert.Equal(HttpStatusCode.OK, (await p.Owner.PostAsJsonAsync(cmd, new { cmd = "start" }, Json)).StatusCode);
+        Assert.False((await Heartbeat(p)).JobsPaused);
+
+        // The owner is paused by the platform admin: no jobs, and none of the buttons that make the browser post.
+        await admin.PostAsJsonAsync($"/api/admin/customers/{me.Id}/pause", new { paused = true }, Json);
+        Assert.True((await Heartbeat(p)).JobsPaused);
+        foreach (var blocked in new[] { "start", "runNow", "testPost" })
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, (await p.Owner.PostAsJsonAsync(cmd, new { cmd = blocked }, Json)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await p.Owner.PostAsJsonAsync(cmd, new { cmd = "stop" }, Json)).StatusCode); // stopping is always allowed
+
+        await admin.PostAsJsonAsync($"/api/admin/customers/{me.Id}/pause", new { paused = false }, Json);
+        Assert.False((await Heartbeat(p)).JobsPaused);
+    }
+
+    private static async Task<DeviceStatusDto> Heartbeat(Paired p) =>
+        (await (await p.Device.PostAsJsonAsync("/api/device/heartbeat", new { version = "2.2.0" }, Json)).Content.ReadFromJsonAsync<DeviceStatusDto>(Json))!;
+
+    [Fact]
+    public async Task A_state_too_big_for_an_event_still_syncs_and_the_web_fetches_it()
+    {
+        var p = await PairAsync();
+        var big = new { groups = Enumerable.Range(0, 20_000).Select(i => new { name = "กลุ่มทดสอบที่ " + i, url = "https://www.facebook.com/groups/" + i }).ToArray() };
+        var res = await p.Device.PostAsJsonAsync("/api/device/sync", new { version = "2.2.0", state = big, takeCommands = false }, Json);
+        res.EnsureSuccessStatusCode();
+        var state = Assert.Single(await EventsAsync(p), e => e.Type == "device.state");
+        Assert.True(state.Payload.GetProperty("truncated").GetBoolean());
+        var live = (await p.Owner.GetFromJsonAsync<DeviceLiveDto>($"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}/live", Json))!;
+        Assert.Equal(20_000, live.State!.Value.GetProperty("groups").GetArrayLength());
+    }
+
+    [Fact]
+    public async Task Scheduling_with_a_library_file_counts_one_use_and_members_see_the_owners_limits()
+    {
+        var (owner, _, ws) = await factory.SignUpAsync("agency");
+        var (member, memberAuth, _) = await factory.SignUpAsync(); // on Free themselves
+        (await owner.PostAsJsonAsync($"/api/workspaces/{ws}/members", new { email = memberAuth.User.Email, role = "admin" }, Json)).EnsureSuccessStatusCode();
+
+        var form = new MultipartFormDataContent();
+        var bytes = new ByteArrayContent([0xFF, 0xD8, 0xFF, 0xE0, 1]);
+        bytes.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+        form.Add(bytes, "file", "a.jpg");
+        var media = (await (await owner.PostAsync($"/api/workspaces/{ws}/media", form)).Content.ReadFromJsonAsync<MediaDto>(Json))!;
+        var accounts = (await owner.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
+        var ig = accounts.First(a => a.Platform == Platform.Ig).Id;
+        (await owner.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", new
+        {
+            content = "สามวัน", mediaIds = new[] { media.Id }, startAt = DateTimeOffset.UtcNow.AddDays(1), useDelay = false, repeat = "daily",
+            targets = new[] { new { accountId = ig } },
+        }, Json)).EnsureSuccessStatusCode(); // 14 posts, one use
+        var used = (await owner.GetFromJsonAsync<List<MediaDto>>($"/api/workspaces/{ws}/media", Json))!.Single(m => m.Id == media.Id);
+        Assert.Equal(1, used.UsedCount);
+
+        // The member's own plan is Free, the workspace's owner is on Agency: the workspace says what applies there.
+        var mine = (await member.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!.Single(w => w.Id == ws);
+        Assert.Equal((WorkspaceRole.Admin, true), (mine.Role, mine.AdvancedAntiBan));
+        Assert.Equal(new LimitsDto(null, null, null, 10), mine.Limits);
+    }
 }

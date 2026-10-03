@@ -33,12 +33,18 @@ public sealed class RequestTimings : IRequestTimings
     }
 }
 
-/// <summary>Times every /api request for the admin overview's latency figure.</summary>
+/// <summary>
+/// Times every /api request for the admin overview's latency figure, except the ones that are held open on
+/// purpose (the event stream lasts up to 30 minutes, a device's sync waits up to 25 seconds): they would be the
+/// whole 95th percentile.
+/// </summary>
 public sealed class RequestTimingMiddleware(RequestDelegate next, IRequestTimings timings)
 {
     public async Task InvokeAsync(HttpContext context)
     {
-        if (!context.Request.Path.StartsWithSegments("/api"))
+        var path = context.Request.Path;
+        if (!path.StartsWithSegments("/api") || path.StartsWithSegments("/api/device/sync")
+            || path.Value!.EndsWith("/events/stream", StringComparison.OrdinalIgnoreCase))
         {
             await next(context);
             return;

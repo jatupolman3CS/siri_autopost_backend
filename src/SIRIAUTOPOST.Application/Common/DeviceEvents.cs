@@ -16,9 +16,16 @@ public static class DeviceEvents
     public static DeviceEvent Make(Guid workspaceId, Guid deviceId, string type, object payload, DateTimeOffset now) =>
         DeviceEvent.Create(workspaceId, deviceId, type, JsonSerializer.Serialize(payload, Json), now);
 
+    /// <summary>A "post" event: the post's status changed (queued to posting, failed, skipped...).</summary>
+    public static DeviceEvent PostChanged(Guid workspaceId, Guid deviceId, Post post, DateTimeOffset now) =>
+        Make(workspaceId, deviceId, DeviceEventType.Post, new { postId = post.Id, status = post.Status, failureCode = post.FailureCode }, now);
+
     /// <summary>A payload that carries raw JSON text as one of its members (a state or a command result).</summary>
     public static DeviceEvent MakeRaw(Guid workspaceId, Guid deviceId, string type, string payloadJson, DateTimeOffset now) =>
         DeviceEvent.Create(workspaceId, deviceId, type, payloadJson, now);
+
+    /// <summary>A state bigger than this is not carried by its "device.state" event (the client fetches it).</summary>
+    public const int MaxStateChars = 300_000;
 
     /// <summary>Lines of a "device.log" event; over <see cref="MaxLogLines"/> the client refetches the log instead.</summary>
     public const int MaxLogLines = 100;

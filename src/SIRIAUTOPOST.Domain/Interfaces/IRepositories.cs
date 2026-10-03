@@ -94,6 +94,8 @@ public interface IPostRepository
     Task<IReadOnlyList<Post>> ListAsync(Guid workspaceId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
     Task<IReadOnlyList<Post>> ListOpenErrorsAsync(Guid workspaceId, CancellationToken ct = default);
     Task<IReadOnlyList<Post>> ListByStatusAsync(Guid workspaceId, PostStatus status, CancellationToken ct = default);
+    /// <summary>Posts of an account that are still to go out: queued, or held while the extension was offline.</summary>
+    Task<IReadOnlyList<Post>> ListOpenByAccountAsync(Guid accountId, CancellationToken ct = default);
     /// <summary>Posts sent in the last 7 days, per workspace.</summary>
     Task<Dictionary<Guid, int>> CountSentSinceAsync(IEnumerable<Guid> workspaceIds, DateTimeOffset since, CancellationToken ct = default);
     /// <summary>Queued posts of an account that are due at <paramref name="now"/>, oldest first.</summary>
@@ -128,6 +130,8 @@ public interface IMediaRepository
     Task<IReadOnlyList<MediaSummary>> ListAsync(Guid workspaceId, CancellationToken ct = default);
     Task<MediaFile?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     Task<int> CountExistingAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    /// <summary>Counts one more use (a post scheduled with it) for each file.</summary>
+    Task RecordUseAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     void Add(MediaFile file);
 }
 
@@ -157,6 +161,8 @@ public interface IDeviceEventRepository
 public interface IDevicePairingRepository
 {
     Task<DevicePairing?> GetByCodeAsync(string code, CancellationToken ct = default);
+    /// <summary>Deletes codes that expired before <paramref name="before"/> (used or not): nothing else cleans them up.</summary>
+    Task DeleteExpiredAsync(DateTimeOffset before, CancellationToken ct = default);
     void Add(DevicePairing pairing);
 }
 

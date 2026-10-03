@@ -65,8 +65,8 @@ public static class DeviceEndpoints
             if (req.Logs is { Count: > 0 })
             {
                 await db.Database.ExecuteSqlInterpolatedAsync($"""
-                    DELETE FROM fbap_device_logs WHERE device_id = {d.Id} AND id < (
-                      SELECT id FROM fbap_device_logs WHERE device_id = {d.Id}
+                    DELETE FROM "FBAP_DEVICE_LOGS" WHERE device_id = {d.Id} AND id < (
+                      SELECT id FROM "FBAP_DEVICE_LOGS" WHERE device_id = {d.Id}
                       ORDER BY id DESC OFFSET {MaxLogsPerDevice - 1} LIMIT 1)
                     """);
             }

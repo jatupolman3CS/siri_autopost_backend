@@ -97,9 +97,9 @@ public static class AdminEndpoints
             if (req.CopyFrom is Guid srcId)
             {
                 await db.Database.ExecuteSqlInterpolatedAsync($"""
-                    INSERT INTO fbap_profile_images (profile_id, image_id, name, content_type, data, size, created_at)
+                    INSERT INTO "FBAP_PROFILE_IMAGES" (profile_id, image_id, name, content_type, data, size, created_at)
                     SELECT {p.Id}, image_id, name, content_type, data, size, now()
-                    FROM fbap_profile_images WHERE profile_id = {srcId}
+                    FROM "FBAP_PROFILE_IMAGES" WHERE profile_id = {srcId}
                     """);
             }
             return Results.Ok(new { id = p.Id });

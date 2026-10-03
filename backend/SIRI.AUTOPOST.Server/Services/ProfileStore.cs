@@ -32,7 +32,7 @@ public class ProfileStore(AppDb db)
         // Same settings again (e.g. "save" before Start): keep the revision so
         // devices do not reload for nothing.
         var same = await db.Database
-            .SqlQuery<bool>($"SELECT settings IS NOT DISTINCT FROM CAST({json} AS jsonb) AS \"Value\" FROM fbap_profiles WHERE id = {profileId}")
+            .SqlQuery<bool>($"SELECT settings IS NOT DISTINCT FROM CAST({json} AS jsonb) AS \"Value\" FROM \"FBAP_PROFILES\" WHERE id = {profileId}")
             .FirstOrDefaultAsync();
         if (same)
         {

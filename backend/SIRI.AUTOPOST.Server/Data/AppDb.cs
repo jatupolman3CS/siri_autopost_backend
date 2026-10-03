@@ -86,8 +86,10 @@ public static class CommandStatus
 
 public class AppDb(DbContextOptions<AppDb> options) : DbContext(options)
 {
-    // Tables share the database with other apps: every name starts with fbap_.
-    public const string MigrationsTable = "FBAP_EF_MIGRATIONS";
+    // Tables share the database with other apps: every name starts with FBAP_ (uppercase, like the other
+    // apps' tables; see the UppercaseTableNames migration). The migrations history table keeps its lowercase
+    // name: renaming it would make a database that is already migrated run Initial again.
+    public const string MigrationsTable = "fbap_ef_migrations";
 
     public DbSet<User> Users => Set<User>();
     public DbSet<Profile> Profiles => Set<Profile>();

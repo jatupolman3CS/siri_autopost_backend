@@ -120,7 +120,63 @@ public interface IPostRepository
     Task<IReadOnlyList<Post>> ListFailedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     void Add(Post post);
     void Remove(Post post);
+    void RemoveRange(IEnumerable<Post> posts);
+
+    // ---- schedules: what a schedule generated ----
+
+    /// <summary>Queued posts of a schedule that are still in the future (tracked: the caller removes them).</summary>
+    Task<IReadOnlyList<Post>> ListFutureQueuedByScheduleAsync(Guid scheduleId, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>
+    /// The (TargetKey, SlotKey) of every post a schedule generated that was due at or after <paramref name="scheduledFrom"/>
+    /// (whatever its status): a new run skips these, so generating twice never doubles posts.
+    /// </summary>
+    Task<IReadOnlyList<(string TargetKey, string SlotKey)>> ListScheduleKeysAsync(Guid scheduleId, DateTimeOffset scheduledFrom, CancellationToken ct = default);
+    /// <summary>Posts of each schedule due in [from, to) (any status).</summary>
+    Task<Dictionary<Guid, int>> CountByScheduleAsync(IEnumerable<Guid> scheduleIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
+    /// <summary>The earliest queued post still to go out, per schedule (schedules without one are left out).</summary>
+    Task<Dictionary<Guid, DateTimeOffset>> NextQueuedAtByScheduleAsync(IEnumerable<Guid> scheduleIds, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>Posts of one round of a schedule (same SlotKey, every target).</summary>
+    Task<IReadOnlyList<Post>> ListBySlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default);
+    /// <summary>Posts of a round that are not finished: queued, waiting or being posted. 0 = the round is over.</summary>
+    Task<int> CountOpenInSlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default);
+
+    // ---- links: per-link caps, cooldown and "do not repeat" ----
+
+    /// <summary>Posts published to one link since a time (posts of connected accounts, tests included).</summary>
+    Task<int> CountPublishedToLinkSinceAsync(Guid linkId, DateTimeOffset since, CancellationToken ct = default);
+    /// <summary>The same for several links at once (links without a post are left out).</summary>
+    Task<Dictionary<Guid, int>> CountPublishedToLinksSinceAsync(IEnumerable<Guid> linkIds, DateTimeOffset since, CancellationToken ct = default);
+    /// <summary>When the link was last published to; null when never.</summary>
+    Task<DateTimeOffset?> LastPublishedToLinkAtAsync(Guid linkId, CancellationToken ct = default);
+    /// <summary>
+    /// The collection posts most recently used for each link, newest first, at most <paramref name="take"/> per link:
+    /// posts that went out or are still queued (failed and skipped ones were never seen by the group).
+    /// </summary>
+    Task<Dictionary<Guid, IReadOnlyList<Guid>>> ListRecentCollectionPostIdsByLinkAsync(IEnumerable<Guid> linkIds, int take, CancellationToken ct = default);
+
+    // ---- limits and health of the engine (connected accounts only, tests excluded from the failure rate) ----
+
+    /// <summary>Posts published in a workspace since a time, all platforms.</summary>
+    Task<int> CountPublishedInWorkspaceSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default);
+    /// <summary>Finished posts since a time (success, awaiting approval, failed) and how many of them failed.</summary>
+    Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default);
+    /// <summary>The newest finished outcomes of an account (success, awaiting approval, failed), newest first.</summary>
+    Task<IReadOnlyList<PostStatus>> ListRecentOutcomesAsync(Guid accountId, int take, CancellationToken ct = default);
+
+    // ---- reports (real posts only: accounts with a device, no test posts) ----
+
+    /// <summary>Finished posts (success, awaiting approval, failed) scheduled in [from, to), without their text.</summary>
+    Task<IReadOnlyList<PostOutcome>> ListOutcomesAsync(Guid workspaceId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
+    /// <summary>Successful posts made from each collection post (tests excluded): the "posted" count.</summary>
+    Task<Dictionary<Guid, int>> CountPostedByCollectionPostAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Posts published since a time per hour of the day (0-23) in a local calendar: the best-times suggestion.</summary>
+    Task<IReadOnlyDictionary<int, int>> CountPublishedByHourAsync(Guid workspaceId, DateTimeOffset since, int utcOffsetMinutes, CancellationToken ct = default);
 }
+
+/// <summary>A finished post without its text: what the reports count.</summary>
+public sealed record PostOutcome(
+    Guid Id, Guid AccountId, Platform Platform, Guid? LinkId, string Target, string? TargetUrl, Guid? CollectionPostId,
+    PostStatus Status, DateTimeOffset ScheduledAt, DateTimeOffset? PublishedAt);
 
 /// <summary>A library entry without its bytes.</summary>
 public sealed record MediaSummary(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt);
@@ -206,4 +262,87 @@ public interface IExtensionRepository
     /// <summary>Commands without a result yet (pending or sent), oldest first.</summary>
     Task<IReadOnlyList<DeviceCommand>> ListOpenCommandsAsync(Guid deviceId, CancellationToken ct = default);
     void Add(DeviceCommand command);
+}
+
+public interface ICollectionRepository
+{
+    /// <summary>In the order the web app shows them (SortOrder, then age).</summary>
+    Task<IReadOnlyList<PostCollection>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    Task<PostCollection?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>The highest SortOrder in the workspace; -1 when there is no collection.</summary>
+    Task<int> MaxSortOrderAsync(Guid workspaceId, CancellationToken ct = default);
+    void Add(PostCollection collection);
+    /// <summary>The collection's posts go with it (the database cascades).</summary>
+    void Remove(PostCollection collection);
+    void RemoveRange(IEnumerable<PostCollection> collections);
+}
+
+public interface ICollectionPostRepository
+{
+    /// <summary>Every post of the workspace, oldest first.</summary>
+    Task<IReadOnlyList<CollectionPost>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Posts of one collection, oldest first.</summary>
+    Task<IReadOnlyList<CollectionPost>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default);
+    Task<CollectionPost?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<CollectionPost>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    void Add(CollectionPost post);
+    void AddRange(IEnumerable<CollectionPost> posts);
+    void Remove(CollectionPost post);
+    void RemoveRange(IEnumerable<CollectionPost> posts);
+}
+
+public interface ILinkSetRepository
+{
+    Task<IReadOnlyList<LinkSet>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    Task<LinkSet?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<LinkSet?> GetByNameAsync(Guid workspaceId, string name, CancellationToken ct = default);
+    Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    Task<int> MaxSortOrderAsync(Guid workspaceId, CancellationToken ct = default);
+    void Add(LinkSet set);
+    /// <summary>The set's links go with it (the database cascades).</summary>
+    void Remove(LinkSet set);
+    void RemoveRange(IEnumerable<LinkSet> sets);
+}
+
+public interface ISetLinkRepository
+{
+    /// <summary>Every link of the workspace, by set then SortOrder.</summary>
+    Task<IReadOnlyList<SetLink>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>The links of one set in SortOrder.</summary>
+    Task<IReadOnlyList<SetLink>> ListBySetAsync(Guid workspaceId, Guid linkSetId, CancellationToken ct = default);
+    Task<SetLink?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<SetLink>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    Task<int> CountBySetAsync(Guid linkSetId, CancellationToken ct = default);
+    Task<int> MaxSortOrderAsync(Guid linkSetId, CancellationToken ct = default);
+    void Add(SetLink link);
+    void AddRange(IEnumerable<SetLink> links);
+    void Remove(SetLink link);
+    void RemoveRange(IEnumerable<SetLink> links);
+}
+
+public interface IScheduleRepository
+{
+    Task<IReadOnlyList<Schedule>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Active schedules of a workspace (the top-up works on these).</summary>
+    Task<IReadOnlyList<Schedule>> ListActiveAsync(Guid workspaceId, CancellationToken ct = default);
+    Task<Schedule?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Schedules that use a collection (a collection in use cannot be deleted).</summary>
+    Task<IReadOnlyList<Schedule>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default);
+    /// <summary>Schedules that use a link set (a link set in use cannot be deleted).</summary>
+    Task<IReadOnlyList<Schedule>> ListByLinkSetAsync(Guid workspaceId, Guid linkSetId, CancellationToken ct = default);
+    void Add(Schedule schedule);
+    void Remove(Schedule schedule);
+    void RemoveRange(IEnumerable<Schedule> schedules);
+}
+
+public interface IReportShareRepository
+{
+    Task<ReportShare?> GetByTokenAsync(string token, CancellationToken ct = default);
+    Task<int> CountActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>Deletes links that expired before <paramref name="before"/>.</summary>
+    Task DeleteExpiredAsync(DateTimeOffset before, CancellationToken ct = default);
+    void Add(ReportShare share);
 }

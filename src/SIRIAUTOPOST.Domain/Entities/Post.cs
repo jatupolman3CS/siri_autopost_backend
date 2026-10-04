@@ -8,6 +8,8 @@ public class Post : Entity
 {
     public const int MaxContentLength = 5000;
     public const int MaxTargetLength = 200;
+    public const int MaxTargetUrlLength = 300;
+    public const int MaxCodeLength = 100;
 
     public Guid WorkspaceId { get; private set; }
     public Guid AccountId { get; private set; }
@@ -29,7 +31,27 @@ public class Post : Entity
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
+    // Posts a schedule generated (or a test post) know where they came from. No foreign keys: the schedule, the
+    // collection post and the link may be deleted later, and the claim finds out when a link is gone.
+    public Guid? ScheduleId { get; private set; }
+    public Guid? CollectionPostId { get; private set; }
+    public Guid? LinkId { get; private set; }
+    /// <summary>"link:&lt;id&gt;" or "account:&lt;id&gt;": who the post is for within its schedule.</summary>
+    public string? TargetKey { get; private set; }
+    /// <summary>The planned slot in the schedule's local calendar, "yyyy-MM-ddTHH:mm".</summary>
+    public string? SlotKey { get; private set; }
+    /// <summary>The group address to post to; posts without one look the group up by name on the account.</summary>
+    public string? TargetUrl { get; private set; }
+    /// <summary>The group code that was written into the content.</summary>
+    public string? Code { get; private set; }
+    /// <summary>Sent from the test page: one real post, due at once.</summary>
+    public bool IsTest { get; private set; }
+
     private Post() { } // EF Core
+
+    public static string LinkTargetKey(Guid linkId) => "link:" + linkId.ToString("N");
+
+    public static string AccountTargetKey(Guid accountId) => "account:" + accountId.ToString("N");
 
     public static Post Schedule(
         Guid workspaceId, SocialAccount account, string target, string content,
@@ -51,6 +73,66 @@ public class Post : Entity
             MediaIds = mediaIds.Distinct().ToList(),
             ScheduledAt = at.ToUniversalTime(), // PostgreSQL timestamptz only stores UTC offsets
             Status = PostStatus.Queued,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+    }
+
+    /// <summary>
+    /// One post of a schedule's run. The content is already composed (spintax, code, footer, hashtags). The caller
+    /// decides which slots are in the future; the account's login state is checked when the post is claimed.
+    /// </summary>
+    public static Post FromSchedule(
+        Guid workspaceId, SocialAccount account, string target, string content, IEnumerable<Guid> mediaIds, DateTimeOffset at,
+        DateTimeOffset now, Guid scheduleId, Guid collectionPostId, Guid? linkId, string targetKey, string slotKey,
+        string? targetUrl, string? code)
+    {
+        if (account.WorkspaceId != workspaceId) throw new DomainException("บัญชีนี้ไม่ได้อยู่ในเวิร์กสเปซนี้");
+        var post = Compose(workspaceId, account, target, content, mediaIds, at.ToUniversalTime(), now, collectionPostId, linkId, targetUrl, code);
+        post.ScheduleId = scheduleId;
+        post.TargetKey = targetKey;
+        post.SlotKey = slotKey;
+        return post;
+    }
+
+    /// <summary>A real post from the test page, due now. The account must be connected through a browser.</summary>
+    public static Post Test(
+        Guid workspaceId, SocialAccount account, string target, string content, IEnumerable<Guid> mediaIds, DateTimeOffset now,
+        Guid? collectionPostId, Guid? linkId, string? targetUrl, string? code)
+    {
+        if (account.WorkspaceId != workspaceId) throw new DomainException("บัญชีนี้ไม่ได้อยู่ในเวิร์กสเปซนี้");
+        if (!account.IsConnected) throw new DomainException($"บัญชี {account.Name} ยังไม่ได้เชื่อมกับเครื่อง จับคู่เครื่องในหน้าทีมและเวิร์กสเปซก่อน");
+        var post = Compose(workspaceId, account, target, content, mediaIds, now.ToUniversalTime(), now, collectionPostId, linkId, targetUrl, code);
+        post.IsTest = true;
+        return post;
+    }
+
+    private static Post Compose(
+        Guid workspaceId, SocialAccount account, string target, string content, IEnumerable<Guid> mediaIds, DateTimeOffset at,
+        DateTimeOffset now, Guid? collectionPostId, Guid? linkId, string? targetUrl, string? code)
+    {
+        var text = (content ?? "").Trim();
+        if (text.Length == 0) throw new DomainException("กรุณาใส่ข้อความโพสต์");
+        if (text.Length > MaxContentLength) throw new DomainException($"ข้อความโพสต์ยาวเกิน {MaxContentLength} ตัวอักษร");
+        var url = string.IsNullOrWhiteSpace(targetUrl) ? null : targetUrl.Trim();
+        if (url is { Length: > MaxTargetUrlLength }) throw new DomainException($"ลิงก์ยาวเกิน {MaxTargetUrlLength} ตัวอักษร");
+        var c = string.IsNullOrWhiteSpace(code) ? null : code.Trim();
+        if (c is { Length: > MaxCodeLength }) throw new DomainException($"รหัสกลุ่มยาวเกิน {MaxCodeLength} ตัวอักษร");
+        var t = (target ?? "").Trim();
+        return new Post
+        {
+            WorkspaceId = workspaceId,
+            AccountId = account.Id,
+            Platform = account.Platform,
+            Target = t.Length > MaxTargetLength ? t[..MaxTargetLength] : t,
+            Content = text,
+            MediaIds = mediaIds.Distinct().ToList(),
+            ScheduledAt = at,
+            Status = PostStatus.Queued,
+            CollectionPostId = collectionPostId,
+            LinkId = linkId,
+            TargetUrl = url,
+            Code = c,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -156,6 +238,18 @@ public class Post : Entity
         FailureDetail = Cut(detail);
         ErrorDismissed = false;
         ClaimedByDeviceId = null;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Left out before it was sent (a link that was switched off or deleted, a group's daily cap): the reason is kept
+    /// in the failure detail. Only posts still waiting can be skipped.
+    /// </summary>
+    public void Skip(DateTimeOffset now, string reason)
+    {
+        if (Status is not (PostStatus.Queued or PostStatus.Waiting)) throw new DomainException("ข้ามได้เฉพาะโพสต์ที่ยังรอโพสต์");
+        Status = PostStatus.Skipped;
+        FailureDetail = Cut(reason);
         UpdatedAt = now;
     }
 

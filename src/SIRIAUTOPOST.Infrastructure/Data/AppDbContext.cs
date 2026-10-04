@@ -29,6 +29,12 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<DeviceLog> DeviceLogs => Set<DeviceLog>();
     public DbSet<DeviceCommand> DeviceCommands => Set<DeviceCommand>();
     public DbSet<DeviceEvent> DeviceEvents => Set<DeviceEvent>();
+    public DbSet<PostCollection> Collections => Set<PostCollection>();
+    public DbSet<CollectionPost> CollectionPosts => Set<CollectionPost>();
+    public DbSet<LinkSet> LinkSets => Set<LinkSet>();
+    public DbSet<SetLink> SetLinks => Set<SetLink>();
+    public DbSet<Schedule> Schedules => Set<Schedule>();
+    public DbSet<ReportShare> ReportShares => Set<ReportShare>();
 
     // Picks up every IEntityTypeConfiguration in Data/Configurations.
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>

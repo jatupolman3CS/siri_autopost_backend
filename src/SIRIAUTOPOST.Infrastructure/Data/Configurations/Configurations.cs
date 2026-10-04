@@ -1,6 +1,10 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.ChangeTracking;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using SIRIAUTOPOST.Domain.Entities;
+using SIRIAUTOPOST.Domain.ValueObjects;
 
 namespace SIRIAUTOPOST.Infrastructure.Data.Configurations;
 
@@ -35,8 +39,40 @@ public sealed class WorkspaceConfiguration : IEntityTypeConfiguration<Workspace>
         {
             o.ToJson("anti_ban");
             o.OwnsOne(x => x.Limits);
+            o.OwnsOne(x => x.Advanced);
         });
         b.OwnsOne(x => x.Offline, o => o.ToJson("offline"));
+        // Notification rules hold dictionaries (by set and link id), which owned JSON cannot map: a whole document.
+        b.Property(x => x.Notifications).HasColumnName("notifications").HasColumnType("jsonb")
+            .HasJsonConversion(() => new NotificationSettings());
+        b.Property(x => x.AutoReply).HasColumnName("auto_reply").HasColumnType("jsonb")
+            .HasJsonConversion(() => new AutoReplySettings());
+    }
+}
+
+/// <summary>Maps a class to one jsonb column through System.Text.Json (camelCase, snake_case enums), compared by content.</summary>
+internal static class JsonColumn
+{
+    public static readonly JsonSerializerOptions Options = new(JsonSerializerDefaults.Web)
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.SnakeCaseLower) },
+    };
+
+    public static string Write<T>(T value) => JsonSerializer.Serialize(value, Options);
+
+    public static T Read<T>(string json, Func<T> empty) where T : class =>
+        string.IsNullOrWhiteSpace(json) ? empty() : JsonSerializer.Deserialize<T>(json, Options) ?? empty();
+
+    public static PropertyBuilder<T> HasJsonConversion<T>(this PropertyBuilder<T> property, Func<T> empty) where T : class
+    {
+        property.HasConversion(
+            v => Write(v),
+            s => Read(s, empty),
+            new ValueComparer<T>(
+                (a, b) => Write(a) == Write(b),
+                v => Write(v).GetHashCode(),
+                v => Read(Write(v), empty)));
+        return property;
     }
 }
 
@@ -64,6 +100,14 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         b.Property(x => x.Target).HasMaxLength(Post.MaxTargetLength);
         b.Property(x => x.Content).HasMaxLength(Post.MaxContentLength).IsRequired();
         b.Property(x => x.FailureDetail).HasMaxLength(Post.MaxDetailLength);
+        b.Property(x => x.TargetKey).HasMaxLength(60);
+        b.Property(x => x.SlotKey).HasMaxLength(20);
+        b.Property(x => x.TargetUrl).HasMaxLength(Post.MaxTargetUrlLength);
+        b.Property(x => x.Code).HasMaxLength(Post.MaxCodeLength);
+        // A schedule's run is idempotent: one post per target and slot. Posts without a schedule are not constrained.
+        b.HasIndex(x => new { x.ScheduleId, x.TargetKey, x.SlotKey }).IsUnique().HasFilter("schedule_id IS NOT NULL");
+        b.HasIndex(x => new { x.ScheduleId, x.Status, x.ScheduledAt }).HasFilter("schedule_id IS NOT NULL");
+        b.HasIndex(x => new { x.LinkId, x.ScheduledAt }).HasFilter("link_id IS NOT NULL");
         b.HasIndex(x => new { x.WorkspaceId, x.ScheduledAt });
         b.HasIndex(x => new { x.AccountId, x.Status, x.ScheduledAt });
         b.HasIndex(x => x.ClaimedByDeviceId);
@@ -107,6 +151,7 @@ public sealed class DeviceConfiguration : IEntityTypeConfiguration<Device>
         b.Property(x => x.Browser).HasMaxLength(120);
         b.Property(x => x.Version).HasMaxLength(40);
         b.Property(x => x.KeyHash).HasMaxLength(64).IsRequired();
+        b.Property(x => x.AutoPauseReason).HasMaxLength(200);
         b.HasIndex(x => x.KeyHash).IsUnique();
         b.HasIndex(x => x.WorkspaceId);
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
@@ -280,5 +325,98 @@ public sealed class DeviceEventConfiguration : IEntityTypeConfiguration<DeviceEv
         b.HasIndex(x => new { x.WorkspaceId, x.Seq });
         b.HasIndex(x => new { x.DeviceId, x.Seq });
         // No foreign key: a "device.revoked" event outlives its device.
+    }
+}
+
+public sealed class PostCollectionConfiguration : IEntityTypeConfiguration<PostCollection>
+{
+    public void Configure(EntityTypeBuilder<PostCollection> b)
+    {
+        b.ToTable("POST_COLLECTIONS");
+        b.Property(x => x.Name).HasMaxLength(PostCollection.MaxNameLength).IsRequired();
+        b.Property(x => x.Description).HasMaxLength(PostCollection.MaxDescriptionLength);
+        b.Property(x => x.Icon).HasMaxLength(PostCollection.MaxIconLength);
+        b.HasIndex(x => new { x.WorkspaceId, x.SortOrder });
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        b.OwnsOne(x => x.Settings, o => o.ToJson("settings"));
+    }
+}
+
+public sealed class CollectionPostConfiguration : IEntityTypeConfiguration<CollectionPost>
+{
+    public void Configure(EntityTypeBuilder<CollectionPost> b)
+    {
+        b.ToTable("COLLECTION_POSTS");
+        b.Property(x => x.Text).HasMaxLength(CollectionPost.MaxTextLength).IsRequired();
+        b.HasIndex(x => new { x.CollectionId, x.CreatedAt });
+        b.HasIndex(x => x.WorkspaceId);
+        b.HasOne<PostCollection>().WithMany().HasForeignKey(x => x.CollectionId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class LinkSetConfiguration : IEntityTypeConfiguration<LinkSet>
+{
+    public void Configure(EntityTypeBuilder<LinkSet> b)
+    {
+        b.ToTable("LINK_SETS");
+        b.Property(x => x.Name).HasMaxLength(LinkSet.MaxNameLength).IsRequired();
+        b.HasIndex(x => new { x.WorkspaceId, x.SortOrder });
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        // PostAsAccountId and AccountIds point at accounts without foreign keys: an unbound account stays, but nothing breaks if one goes.
+    }
+}
+
+public sealed class SetLinkConfiguration : IEntityTypeConfiguration<SetLink>
+{
+    public void Configure(EntityTypeBuilder<SetLink> b)
+    {
+        b.ToTable("SET_LINKS");
+        b.Property(x => x.Name).HasMaxLength(SetLink.MaxNameLength);
+        b.Property(x => x.Url).HasMaxLength(SetLink.MaxUrlLength);
+        b.Property(x => x.Code).HasMaxLength(SetLink.MaxCodeLength);
+        b.HasIndex(x => new { x.LinkSetId, x.SortOrder });
+        b.HasIndex(x => x.WorkspaceId);
+        b.HasOne<LinkSet>().WithMany().HasForeignKey(x => x.LinkSetId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class ScheduleConfiguration : IEntityTypeConfiguration<Schedule>
+{
+    public void Configure(EntityTypeBuilder<Schedule> b)
+    {
+        b.ToTable("SCHEDULES");
+        b.Property(x => x.Name).HasMaxLength(Schedule.MaxNameLength).IsRequired();
+        b.Property(x => x.FirstTime).HasMaxLength(5);
+        b.Property(x => x.OnceTime).HasMaxLength(5);
+        b.Property(x => x.DripFrom).HasMaxLength(5);
+        b.Property(x => x.DripTo).HasMaxLength(5);
+        b.Property(x => x.Overrides).HasColumnType("jsonb")
+            .HasJsonConversion(() => new Dictionary<string, List<string>>());
+        b.HasIndex(x => new { x.WorkspaceId, x.Active });
+        b.HasIndex(x => x.CollectionId);
+        b.HasIndex(x => x.LinkSetId);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        // A collection or link set in use is refused by the handlers (422); the database says no as well. NO ACTION is
+        // checked at the end of the statement, so deleting a whole workspace (which cascades to both) still works.
+        b.HasOne<PostCollection>().WithMany().HasForeignKey(x => x.CollectionId).OnDelete(DeleteBehavior.NoAction);
+        b.HasOne<LinkSet>().WithMany().HasForeignKey(x => x.LinkSetId).OnDelete(DeleteBehavior.NoAction);
+    }
+}
+
+public sealed class ReportShareConfiguration : IEntityTypeConfiguration<ReportShare>
+{
+    public void Configure(EntityTypeBuilder<ReportShare> b)
+    {
+        b.ToTable("REPORT_SHARES");
+        b.Property(x => x.Token).HasMaxLength(ReportShare.TokenLength).IsRequired();
+        b.Property(x => x.Brand).HasMaxLength(ReportShare.MaxBrandLength).IsRequired();
+        b.Property(x => x.Period).HasMaxLength(10).IsRequired();
+        b.Property(x => x.SnapshotJson).HasColumnType("text").IsRequired();
+        b.HasIndex(x => x.Token).IsUnique();
+        b.HasIndex(x => x.WorkspaceId);
+        b.HasIndex(x => x.ExpiresAt);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
     }
 }

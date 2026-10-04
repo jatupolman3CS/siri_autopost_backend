@@ -22,6 +22,10 @@ public class Workspace : Entity
     public DateTimeOffset CreatedAt { get; private set; }
     public AntiBanSettings AntiBan { get; private set; } = new();
     public OfflineSettings Offline { get; private set; } = new();
+    /// <summary>Telegram and LINE notifications (a Pro feature); tokens are private.</summary>
+    public NotificationSettings Notifications { get; private set; } = new();
+    /// <summary>Auto-reply rules (a Pro feature); stored only.</summary>
+    public AutoReplySettings AutoReply { get; private set; } = new();
     /// <summary>False while the offline simulation holds the extension offline. Real presence comes from devices.</summary>
     public bool ExtensionOnline { get; private set; } = true;
 
@@ -37,16 +41,17 @@ public class Workspace : Entity
 
     public void UpdateAntiBan(AntiBanSettings settings, bool advancedAllowed)
     {
-        settings.Validate();
         if (!advancedAllowed)
         {
-            // Human-like behaviour is a Pro feature: keep what the workspace already has.
+            // Human-like behaviour and the advanced numbers are a Pro feature: keep what the workspace already has.
             settings.Typing = AntiBan.Typing;
             settings.Scroll = AntiBan.Scroll;
             settings.Shuffle = AntiBan.Shuffle;
             settings.AutoPause = AntiBan.AutoPause;
             settings.Warmup = AntiBan.Warmup;
+            settings.Advanced = AntiBan.Advanced.Clone(); // a copy: the old settings object is being replaced
         }
+        settings.Validate();
         AntiBan = settings;
     }
 
@@ -54,6 +59,18 @@ public class Workspace : Entity
     {
         settings.Validate();
         Offline = settings;
+    }
+
+    public void UpdateNotifications(NotificationSettings settings)
+    {
+        settings.Validate();
+        Notifications = settings;
+    }
+
+    public void UpdateAutoReply(AutoReplySettings settings)
+    {
+        settings.Validate();
+        AutoReply = settings;
     }
 
     public void SetExtensionOnline(bool online) => ExtensionOnline = online;

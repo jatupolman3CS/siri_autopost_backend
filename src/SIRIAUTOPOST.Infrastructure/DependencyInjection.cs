@@ -45,6 +45,12 @@ public static class DependencyInjection
         services.AddScoped<IPromoRepository, PromoRepository>();
         services.AddScoped<IPaymentEventRepository, PaymentEventRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
+        services.AddScoped<ICollectionRepository, CollectionRepository>();
+        services.AddScoped<ICollectionPostRepository, CollectionPostRepository>();
+        services.AddScoped<ILinkSetRepository, LinkSetRepository>();
+        services.AddScoped<ISetLinkRepository, SetLinkRepository>();
+        services.AddScoped<IScheduleRepository, ScheduleRepository>();
+        services.AddScoped<IReportShareRepository, ReportShareRepository>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();

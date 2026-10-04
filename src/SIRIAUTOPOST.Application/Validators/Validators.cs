@@ -1,7 +1,10 @@
 using FluentValidation;
+using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.Collections;
+using SIRIAUTOPOST.Application.Features.LinkSets;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Extension;
@@ -229,4 +232,183 @@ public sealed class UpdateDeviceCommandValidator : AbstractValidator<UpdateDevic
 {
     public UpdateDeviceCommandValidator() =>
         RuleFor(x => x.Name).MaximumLength(Device.MaxNameLength).WithMessage($"ชื่อเครื่องยาวเกิน {Device.MaxNameLength} ตัวอักษร");
+}
+
+// ---------- collections ----------
+
+public sealed class CreateCollectionCommandValidator : AbstractValidator<CreateCollectionCommand>
+{
+    public CreateCollectionCommandValidator()
+    {
+        RuleFor(x => x.Name).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("กรุณาใส่ชื่อชุดโพสต์")
+            .MaximumLength(PostCollection.MaxNameLength).WithMessage($"ชื่อชุดโพสต์ยาวเกิน {PostCollection.MaxNameLength} ตัวอักษร");
+        RuleFor(x => x.Description).MaximumLength(PostCollection.MaxDescriptionLength)
+            .WithMessage($"คำอธิบายยาวเกิน {PostCollection.MaxDescriptionLength} ตัวอักษร");
+    }
+}
+
+public sealed class UpdateCollectionCommandValidator : AbstractValidator<UpdateCollectionCommand>
+{
+    public UpdateCollectionCommandValidator()
+    {
+        RuleFor(x => x.Name).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("กรุณาใส่ชื่อชุดโพสต์")
+            .MaximumLength(PostCollection.MaxNameLength).WithMessage($"ชื่อชุดโพสต์ยาวเกิน {PostCollection.MaxNameLength} ตัวอักษร");
+        RuleFor(x => x.Description).MaximumLength(PostCollection.MaxDescriptionLength)
+            .WithMessage($"คำอธิบายยาวเกิน {PostCollection.MaxDescriptionLength} ตัวอักษร");
+        RuleFor(x => x.Icon).MaximumLength(PostCollection.MaxIconLength).WithMessage($"ไอคอนยาวเกิน {PostCollection.MaxIconLength} ตัวอักษร");
+        RuleFor(x => x.Settings).Cascade(CascadeMode.Stop).NotNull().WithMessage(Messages.BadValue)
+            .SetValidator(new CollectionSettingsValidator());
+    }
+}
+
+public sealed class CollectionSettingsValidator : AbstractValidator<CollectionSettingsDto>
+{
+    public CollectionSettingsValidator()
+    {
+        RuleFor(x => x.Hashtags).MaximumLength(CollectionSettings.MaxHashtagsLength)
+            .WithMessage($"แฮชแท็กยาวเกิน {CollectionSettings.MaxHashtagsLength} ตัวอักษร");
+        RuleFor(x => x.PageTags).MaximumLength(CollectionSettings.MaxPageTagsLength)
+            .WithMessage($"รายการแท็กเพจยาวเกิน {CollectionSettings.MaxPageTagsLength} ตัวอักษร");
+        RuleFor(x => x.Footer).MaximumLength(CollectionSettings.MaxFooterLength)
+            .WithMessage($"ข้อความส่วนท้ายยาวเกิน {CollectionSettings.MaxFooterLength} ตัวอักษร");
+        RuleFor(x => x.FooterPos).IsInEnum().WithMessage(Messages.BadValue);
+        RuleFor(x => x.WatermarkPos).IsInEnum().WithMessage(Messages.BadValue);
+    }
+}
+
+internal static class CollectionPostRules
+{
+    public static IRuleBuilderOptions<T, string> Text<T>(this IRuleBuilderInitial<T, string> rule) =>
+        rule.Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("กรุณาใส่ข้อความโพสต์")
+            .MaximumLength(CollectionPost.MaxTextLength).WithMessage($"ข้อความโพสต์ยาวเกิน {CollectionPost.MaxTextLength} ตัวอักษร");
+
+    public static IRuleBuilderOptions<T, IReadOnlyList<Guid>?> Media<T>(this IRuleBuilder<T, IReadOnlyList<Guid>?> rule) =>
+        rule.Must(m => m is null || m.Count <= CollectionPost.MaxMedia).WithMessage($"แนบสื่อได้ไม่เกิน {CollectionPost.MaxMedia} ไฟล์");
+}
+
+public sealed class AddCollectionPostCommandValidator : AbstractValidator<AddCollectionPostCommand>
+{
+    public AddCollectionPostCommandValidator()
+    {
+        RuleFor(x => x.Text).Text();
+        RuleFor(x => x.MediaIds).Media();
+    }
+}
+
+public sealed class AddCollectionPostsBatchCommandValidator : AbstractValidator<AddCollectionPostsBatchCommand>
+{
+    public AddCollectionPostsBatchCommandValidator()
+    {
+        RuleFor(x => x.Items).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ไม่มีโพสต์ให้เพิ่ม")
+            .Must(i => i.Count <= AddCollectionPostsBatchCommandHandler.MaxItems)
+            .WithMessage($"เพิ่มโพสต์ได้ครั้งละไม่เกิน {AddCollectionPostsBatchCommandHandler.MaxItems} โพสต์");
+        RuleForEach(x => x.Items).ChildRules(i =>
+        {
+            i.RuleFor(x => x.Text).Text();
+            i.RuleFor(x => x.MediaIds).Media();
+        });
+    }
+}
+
+public sealed class UpdateCollectionPostCommandValidator : AbstractValidator<UpdateCollectionPostCommand>
+{
+    public UpdateCollectionPostCommandValidator()
+    {
+        RuleFor(x => x.Text).Text();
+        RuleFor(x => x.MediaIds).Media();
+    }
+}
+
+public sealed class CollectionPostApprovalCommandValidator : AbstractValidator<CollectionPostApprovalCommand>
+{
+    public CollectionPostApprovalCommandValidator() => RuleFor(x => x.Action).IsInEnum().WithMessage("คำสั่งอนุมัติไม่ถูกต้อง");
+}
+
+// ---------- link sets ----------
+
+public sealed class CreateLinkSetCommandValidator : AbstractValidator<CreateLinkSetCommand>
+{
+    public CreateLinkSetCommandValidator() =>
+        RuleFor(x => x.Name).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("กรุณาใส่ชื่อชุดลิงก์")
+            .MaximumLength(LinkSet.MaxNameLength).WithMessage($"ชื่อชุดลิงก์ยาวเกิน {LinkSet.MaxNameLength} ตัวอักษร");
+}
+
+public sealed class UpdateLinkSetCommandValidator : AbstractValidator<UpdateLinkSetCommand>
+{
+    public UpdateLinkSetCommandValidator()
+    {
+        RuleFor(x => x.Name).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("กรุณาใส่ชื่อชุดลิงก์")
+            .MaximumLength(LinkSet.MaxNameLength).WithMessage($"ชื่อชุดลิงก์ยาวเกิน {LinkSet.MaxNameLength} ตัวอักษร");
+        RuleFor(x => x.AccountIds).Must(a => a is null || a.Count <= LinkSet.MaxAccounts)
+            .WithMessage($"เพิ่มบัญชีอื่นได้ไม่เกิน {LinkSet.MaxAccounts} บัญชีต่อชุด");
+    }
+}
+
+internal static class LinkRules
+{
+    public static IRuleBuilderOptions<T, string?> LinkName<T>(this IRuleBuilder<T, string?> rule) =>
+        rule.MaximumLength(SetLink.MaxNameLength).WithMessage($"ชื่อกลุ่มยาวเกิน {SetLink.MaxNameLength} ตัวอักษร");
+
+    public static IRuleBuilderOptions<T, string?> LinkUrl<T>(this IRuleBuilder<T, string?> rule) =>
+        rule.MaximumLength(SetLink.MaxUrlLength).WithMessage($"ลิงก์ยาวเกิน {SetLink.MaxUrlLength} ตัวอักษร");
+
+    public static IRuleBuilderOptions<T, string?> LinkCode<T>(this IRuleBuilder<T, string?> rule) =>
+        rule.MaximumLength(SetLink.MaxCodeLength).WithMessage($"รหัสกลุ่มยาวเกิน {SetLink.MaxCodeLength} ตัวอักษร");
+}
+
+public sealed class AddLinkCommandValidator : AbstractValidator<AddLinkCommand>
+{
+    public AddLinkCommandValidator()
+    {
+        RuleFor(x => x.Name).LinkName();
+        RuleFor(x => x.Url).LinkUrl();
+        RuleFor(x => x.Code).LinkCode();
+        RuleFor(x => x.DailyMax).InclusiveBetween(0, SetLink.MaxDailyMax)
+            .WithMessage($"เพดานต่อวันของกลุ่มต้องอยู่ระหว่าง 0–{SetLink.MaxDailyMax}");
+    }
+}
+
+public sealed class UpdateLinkCommandValidator : AbstractValidator<UpdateLinkCommand>
+{
+    public UpdateLinkCommandValidator()
+    {
+        RuleFor(x => x.Name).LinkName();
+        RuleFor(x => x.Url).LinkUrl();
+        RuleFor(x => x.Code).LinkCode();
+        RuleFor(x => x.DailyMax).InclusiveBetween(0, SetLink.MaxDailyMax)
+            .WithMessage($"เพดานต่อวันของกลุ่มต้องอยู่ระหว่าง 0–{SetLink.MaxDailyMax}");
+    }
+}
+
+public sealed class BulkAddLinksCommandValidator : AbstractValidator<BulkAddLinksCommand>
+{
+    public BulkAddLinksCommandValidator() =>
+        RuleFor(x => x.Text).Cascade(CascadeMode.Stop)
+            .Must(t => !string.IsNullOrWhiteSpace(t)).WithMessage("วางลิงก์กลุ่มอย่างน้อย 1 บรรทัด")
+            .MaximumLength(200_000).WithMessage("ข้อความยาวเกินไป");
+}
+
+public sealed class ImportAccountGroupsCommandValidator : AbstractValidator<ImportAccountGroupsCommand>
+{
+    public ImportAccountGroupsCommandValidator() =>
+        RuleFor(x => x.Urls).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("เลือกกลุ่มอย่างน้อย 1 กลุ่ม")
+            .Must(u => u.Count <= SyncDeviceGroupsCommandValidator.MaxGroups).WithMessage($"เลือกกลุ่มได้ไม่เกิน {SyncDeviceGroupsCommandValidator.MaxGroups} กลุ่ม");
+}
+
+public sealed class ImportLinksCsvCommandValidator : AbstractValidator<ImportLinksCsvCommand>
+{
+    public ImportLinksCsvCommandValidator()
+    {
+        RuleFor(x => x.Rows).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ไม่มีแถวข้อมูลให้นำเข้า")
+            .Must(r => r.Count <= ImportLinksCsvCommandHandler.MaxRows).WithMessage($"นำเข้าได้ครั้งละไม่เกิน {ImportLinksCsvCommandHandler.MaxRows:N0} แถว");
+        RuleForEach(x => x.Rows).NotNull().WithMessage(Messages.BadValue);
+    }
 }

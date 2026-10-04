@@ -24,6 +24,52 @@ public class PlatformLimits
     };
 }
 
+/// <summary>
+/// The numbers of the advanced anti-ban page (a Pro feature). Lower plans keep what the workspace has.
+/// MinGap, DailyAll, StopFailPct, AutoOffFails, FailStreak, RecentAvoid and Cooldown are enforced by the posting
+/// engine; BlockMin/BlockMax set how long a device pauses after Facebook blocks it; Focus is stored only.
+/// </summary>
+public class AdvancedAntiBanSettings
+{
+    /// <summary>Minimum minutes between two posts of one account (the larger of this and the smart delay applies).</summary>
+    public int MinGap { get; set; } = 2;
+    /// <summary>Posts per 24 hours over all platforms; 0 = no cap.</summary>
+    public int DailyAll { get; set; }
+    /// <summary>A Facebook block pauses the device for a random time between BlockMin and BlockMax hours.</summary>
+    public int BlockMin { get; set; } = 24;
+    public int BlockMax { get; set; } = 48;
+    /// <summary>Consecutive failed posts of an account that pause its device for 2-4 hours; 0 = off.</summary>
+    public int FailStreak { get; set; } = 4;
+    /// <summary>A link does not get one of the last N posts it already had; 0 = off.</summary>
+    public int RecentAvoid { get; set; } = 10;
+    /// <summary>Hours before the same link is posted to again; 0 = off.</summary>
+    public int Cooldown { get; set; }
+    /// <summary>Stored only: the extension does not use a focus window yet.</summary>
+    public bool Focus { get; set; } = true;
+    /// <summary>Consecutive failures that switch a link off; 0 = never.</summary>
+    public int AutoOffFails { get; set; } = 3;
+    /// <summary>Stop the engine when more than this percent of the last 24 hours' finished posts failed; 0 = off.</summary>
+    public int StopFailPct { get; set; } = 30;
+
+    public const int MaxHours = 168;
+
+    public AdvancedAntiBanSettings Clone() => (AdvancedAntiBanSettings)MemberwiseClone();
+
+    public void Validate()
+    {
+        if (MinGap is < 0 or > 60) throw new DomainException("ระยะห่างขั้นต่ำต้องอยู่ระหว่าง 0–60 นาที");
+        if (DailyAll is < 0 or > 500) throw new DomainException("เพดานรวมต่อวันต้องอยู่ระหว่าง 0–500 โพสต์");
+        if (BlockMin is < 1 or > MaxHours || BlockMax is < 1 or > MaxHours)
+            throw new DomainException($"เวลาพักเมื่อถูกบล็อกต้องอยู่ระหว่าง 1–{MaxHours} ชั่วโมง");
+        if (BlockMax < BlockMin) throw new DomainException("เวลาพักสูงสุดต้องไม่น้อยกว่าเวลาพักต่ำสุด");
+        if (FailStreak is < 0 or > 20) throw new DomainException("จำนวนโพสต์ล้มเหลวติดกันต้องอยู่ระหว่าง 0–20");
+        if (RecentAvoid is < 0 or > 50) throw new DomainException("จำนวนโพสต์ล่าสุดที่ไม่ซ้ำต้องอยู่ระหว่าง 0–50");
+        if (Cooldown is < 0 or > MaxHours) throw new DomainException($"เวลาพักต่อกลุ่มต้องอยู่ระหว่าง 0–{MaxHours} ชั่วโมง");
+        if (AutoOffFails is < 0 or > 20) throw new DomainException("จำนวนครั้งที่ล้มเหลวก่อนปิดกลุ่มต้องอยู่ระหว่าง 0–20");
+        if (StopFailPct is < 0 or > 100) throw new DomainException("เปอร์เซ็นต์ล้มเหลวที่หยุดระบบต้องอยู่ระหว่าง 0–100");
+    }
+}
+
 /// <summary>Smart delay, daily limits and human-like behaviour of the posting engine.</summary>
 public class AntiBanSettings
 {
@@ -39,6 +85,8 @@ public class AntiBanSettings
     public bool Shuffle { get; set; } = true;
     public bool AutoPause { get; set; } = true;
     public bool Warmup { get; set; }
+    /// <summary>The advanced numbers (Pro and above); see <see cref="AdvancedAntiBanSettings"/>.</summary>
+    public AdvancedAntiBanSettings Advanced { get; set; } = new();
 
     public void Validate()
     {
@@ -47,6 +95,7 @@ public class AntiBanSettings
         foreach (var p in Enum.GetValues<Platform>())
             if (Limits.For(p) is < 1 or > MaxDailyLimit)
                 throw new DomainException($"เพดานต่อวันต้องอยู่ระหว่าง 1–{MaxDailyLimit}");
+        Advanced.Validate();
     }
 }
 

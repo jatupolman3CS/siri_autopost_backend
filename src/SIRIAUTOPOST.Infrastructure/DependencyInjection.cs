@@ -6,6 +6,7 @@ using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Infrastructure.Auth;
 using SIRIAUTOPOST.Infrastructure.Data;
 using SIRIAUTOPOST.Infrastructure.Diagnostics;
+using SIRIAUTOPOST.Infrastructure.Notifications;
 using SIRIAUTOPOST.Infrastructure.Payments;
 using SIRIAUTOPOST.Infrastructure.Repositories;
 using SIRIAUTOPOST.Infrastructure.Seeding;
@@ -45,6 +46,12 @@ public static class DependencyInjection
         services.AddScoped<IPromoRepository, PromoRepository>();
         services.AddScoped<IPaymentEventRepository, PaymentEventRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
+        services.AddScoped<ICollectionRepository, CollectionRepository>();
+        services.AddScoped<ICollectionPostRepository, CollectionPostRepository>();
+        services.AddScoped<ILinkSetRepository, LinkSetRepository>();
+        services.AddScoped<ISetLinkRepository, SetLinkRepository>();
+        services.AddScoped<IScheduleRepository, ScheduleRepository>();
+        services.AddScoped<IReportShareRepository, ReportShareRepository>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();
@@ -54,6 +61,9 @@ public static class DependencyInjection
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IRandomSource, RandomSource>();
         services.AddSingleton<IDeviceSecrets, DeviceSecrets>();
+
+        // Notifications (Telegram / LINE): gateway, queue and background worker
+        services.AddNotifications(config);
 
         return services;
     }

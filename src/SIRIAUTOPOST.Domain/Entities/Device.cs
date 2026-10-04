@@ -19,6 +19,9 @@ public class Device : Entity
     public DateTimeOffset? LastSeenAt { get; private set; }
     /// <summary>Set in the web app: the device takes no posted jobs until it is turned off again.</summary>
     public bool JobsPaused { get; private set; }
+    /// <summary>The engine paused the device itself (Facebook blocked it, or too many posts failed) until this time.</summary>
+    public DateTimeOffset? AutoPausedUntil { get; private set; }
+    public string? AutoPauseReason { get; private set; }
 
     private Device() { } // EF Core
 
@@ -57,6 +60,33 @@ public class Device : Entity
     }
 
     public void SetJobsPaused(bool paused) => JobsPaused = paused;
+
+    /// <summary>The engine's own pause is in force: the device is told to take no jobs until it ends.</summary>
+    public bool IsAutoPaused(DateTimeOffset now) => AutoPausedUntil is { } until && until > now;
+
+    /// <summary>
+    /// Pauses the device until <paramref name="until"/>. A pause that is already longer stays. Returns true when
+    /// the device was not auto-paused before (so an event is due).
+    /// </summary>
+    public bool AutoPause(DateTimeOffset until, string reason, DateTimeOffset now)
+    {
+        if (until <= now) throw new DomainException("เวลาสิ้นสุดการพักต้องอยู่ในอนาคต");
+        var wasPaused = IsAutoPaused(now);
+        if (wasPaused && AutoPausedUntil >= until) return false;
+        AutoPausedUntil = until;
+        AutoPauseReason = Cut(reason.Trim(), 200);
+        return !wasPaused;
+    }
+
+    /// <summary>The pause is over (or the owner lifted it): clears it. Returns true when there was one to clear.</summary>
+    public bool EndAutoPause(DateTimeOffset now, bool force = false)
+    {
+        if (AutoPausedUntil is not { } until) return false;
+        if (!force && until > now) return false;
+        AutoPausedUntil = null;
+        AutoPauseReason = null;
+        return true;
+    }
 
     private static string Cut(string s, int max) => s.Length > max ? s[..max] : s;
 }

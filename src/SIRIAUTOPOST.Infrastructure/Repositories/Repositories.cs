@@ -168,6 +168,160 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     public void Add(Post post) => db.Posts.Add(post);
 
     public void Remove(Post post) => db.Posts.Remove(post);
+
+    public void RemoveRange(IEnumerable<Post> posts) => db.Posts.RemoveRange(posts);
+
+    // ---- schedules ----
+
+    public async Task<IReadOnlyList<Post>> ListFutureQueuedByScheduleAsync(Guid scheduleId, DateTimeOffset now, CancellationToken ct = default) =>
+        await db.Posts.Where(x => x.ScheduleId == scheduleId && x.Status == PostStatus.Queued && x.ScheduledAt > now).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Post>> ListOpenByScheduleAsync(Guid scheduleId, CancellationToken ct = default) =>
+        await db.Posts.Where(x => x.ScheduleId == scheduleId && (x.Status == PostStatus.Queued || x.Status == PostStatus.Waiting)).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Post>> ListFutureQueuedByLinkAsync(Guid linkId, DateTimeOffset now, CancellationToken ct = default) =>
+        await db.Posts.Where(x => x.LinkId == linkId && x.ScheduleId != null && x.Status == PostStatus.Queued && x.ScheduledAt > now).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<(string TargetKey, string SlotKey)>> ListScheduleKeysAsync(
+        Guid scheduleId, DateTimeOffset scheduledFrom, CancellationToken ct = default)
+    {
+        var rows = await db.Posts.AsNoTracking()
+            .Where(x => x.ScheduleId == scheduleId && x.ScheduledAt >= scheduledFrom)
+            .Select(x => new { x.TargetKey, x.SlotKey })
+            .ToListAsync(ct);
+        return rows.Select(r => (r.TargetKey ?? "", r.SlotKey ?? "")).ToList();
+    }
+
+    public async Task<Dictionary<Guid, int>> CountByScheduleAsync(
+        IEnumerable<Guid> scheduleIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        var ids = scheduleIds.Distinct().ToList();
+        return await db.Posts
+            .Where(x => x.ScheduleId != null && ids.Contains(x.ScheduleId.Value) && x.ScheduledAt >= from && x.ScheduledAt < to)
+            .GroupBy(x => x.ScheduleId!.Value)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+    }
+
+    public async Task<Dictionary<Guid, DateTimeOffset>> NextQueuedAtByScheduleAsync(
+        IEnumerable<Guid> scheduleIds, DateTimeOffset now, CancellationToken ct = default)
+    {
+        var ids = scheduleIds.Distinct().ToList();
+        return await db.Posts
+            .Where(x => x.ScheduleId != null && ids.Contains(x.ScheduleId.Value) && x.Status == PostStatus.Queued && x.ScheduledAt > now)
+            .GroupBy(x => x.ScheduleId!.Value)
+            .Select(g => new { g.Key, At = g.Min(p => p.ScheduledAt) })
+            .ToDictionaryAsync(x => x.Key, x => x.At, ct);
+    }
+
+    public Task<int> CountQueuedFutureAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default) =>
+        db.Posts.CountAsync(x => x.WorkspaceId == workspaceId && x.Status == PostStatus.Queued && x.ScheduledAt > now, ct);
+
+    public async Task<IReadOnlyList<Post>> ListBySlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default) =>
+        await db.Posts.AsNoTracking().Where(x => x.ScheduleId == scheduleId && x.SlotKey == slotKey).OrderBy(x => x.ScheduledAt).ToListAsync(ct);
+
+    public Task<int> CountOpenInSlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default) =>
+        db.Posts.CountAsync(x => x.ScheduleId == scheduleId && x.SlotKey == slotKey &&
+                                 (x.Status == PostStatus.Queued || x.Status == PostStatus.Waiting || x.Status == PostStatus.Posting), ct);
+
+    // ---- links ----
+
+    public Task<int> CountPublishedToLinkAsync(Guid linkId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default) =>
+        Real.CountAsync(x => x.LinkId == linkId &&
+                             ((x.PublishedAt != null && x.PublishedAt >= from && x.PublishedAt < to) ||
+                              (x.Status == PostStatus.Posting && x.ClaimedAt != null && x.ClaimedAt >= from && x.ClaimedAt < to)), ct);
+
+    public async Task<Dictionary<Guid, int>> CountPublishedToLinksSinceAsync(IEnumerable<Guid> linkIds, DateTimeOffset since, CancellationToken ct = default)
+    {
+        var ids = linkIds.Distinct().ToList();
+        return await Real
+            .Where(x => x.LinkId != null && ids.Contains(x.LinkId.Value) && x.PublishedAt != null && x.PublishedAt >= since)
+            .GroupBy(x => x.LinkId!.Value)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+    }
+
+    public Task<DateTimeOffset?> LastPublishedToLinkAtAsync(Guid linkId, CancellationToken ct = default) =>
+        db.Posts.Where(x => x.LinkId == linkId && x.PublishedAt != null).MaxAsync(x => x.PublishedAt, ct);
+
+    private sealed record RecentUse(Guid LinkId, Guid CollectionPostId);
+
+    public async Task<Dictionary<Guid, IReadOnlyList<Guid>>> ListRecentCollectionPostIdsByLinkAsync(
+        IEnumerable<Guid> linkIds, int take, CancellationToken ct = default)
+    {
+        var ids = linkIds.Distinct().ToArray();
+        var result = new Dictionary<Guid, IReadOnlyList<Guid>>();
+        if (ids.Length == 0 || take <= 0) return result;
+        // The newest N per link in one query. Statuses are stored by name; column names follow the snake_case convention.
+        var rows = await db.Database.SqlQuery<RecentUse>($"""
+            SELECT t.link_id, t.collection_post_id
+            FROM (
+                SELECT p.link_id, p.collection_post_id,
+                       row_number() OVER (PARTITION BY p.link_id ORDER BY p.scheduled_at DESC, p.id) AS rn
+                FROM "POSTS" p
+                WHERE p.link_id = ANY({ids}) AND p.collection_post_id IS NOT NULL
+                  AND p.status IN ('Queued', 'Waiting', 'Posting', 'Success', 'Pending')
+            ) t
+            WHERE t.rn <= {take}
+            ORDER BY t.link_id, t.rn
+            """).ToListAsync(ct);
+        foreach (var g in rows.GroupBy(r => r.LinkId)) result[g.Key] = g.Select(r => r.CollectionPostId).ToList();
+        return result;
+    }
+
+    // ---- limits and health ----
+
+    public Task<int> CountPublishedInWorkspaceSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default) =>
+        Real.CountAsync(x => x.WorkspaceId == workspaceId && x.PublishedAt != null && x.PublishedAt >= since, ct);
+
+    public async Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default)
+    {
+        var rows = await Real
+            .Where(x => x.WorkspaceId == workspaceId && !x.IsTest && x.UpdatedAt >= since &&
+                        x.ClaimedAt != null && (x.FailureCode == null || x.FailureCode != FailureCode.Quota) &&
+                        (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
+            .GroupBy(x => x.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+        return (rows.Sum(r => r.Count), rows.Where(r => r.Status == PostStatus.Failed).Sum(r => r.Count));
+    }
+
+    public async Task<IReadOnlyList<PostStatus>> ListRecentOutcomesAsync(Guid accountId, int take, CancellationToken ct = default) =>
+        await db.Posts.AsNoTracking()
+            .Where(x => x.AccountId == accountId &&
+                        x.ClaimedAt != null && (x.FailureCode == null || x.FailureCode != FailureCode.Quota) &&
+                        (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
+            .OrderByDescending(x => x.UpdatedAt)
+            .Select(x => x.Status)
+            .Take(take)
+            .ToListAsync(ct);
+
+    // ---- reports ----
+
+    public async Task<IReadOnlyList<PostOutcome>> ListOutcomesAsync(Guid workspaceId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default) =>
+        await Real.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && !x.IsTest && x.ScheduledAt >= from && x.ScheduledAt < to &&
+                        (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
+            .Select(x => new PostOutcome(x.Id, x.AccountId, x.Platform, x.LinkId, x.Target, x.TargetUrl, x.CollectionPostId, x.Status, x.ScheduledAt, x.PublishedAt))
+            .ToListAsync(ct);
+
+    public async Task<Dictionary<Guid, int>> CountPostedByCollectionPostAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.Posts
+            .Where(x => x.WorkspaceId == workspaceId && x.CollectionPostId != null && x.Status == PostStatus.Success && !x.IsTest)
+            .GroupBy(x => x.CollectionPostId!.Value)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+
+    public async Task<IReadOnlyDictionary<int, int>> CountPublishedByHourAsync(
+        Guid workspaceId, DateTimeOffset since, int utcOffsetMinutes, CancellationToken ct = default)
+    {
+        var times = await Real.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && !x.IsTest && x.PublishedAt != null && x.PublishedAt >= since)
+            .Select(x => x.PublishedAt!.Value)
+            .ToListAsync(ct);
+        var offset = TimeSpan.FromMinutes(utcOffsetMinutes);
+        return times.GroupBy(t => t.ToOffset(offset).Hour).ToDictionary(g => g.Key, g => g.Count());
+    }
 }
 
 public sealed class MediaRepository(AppDbContext db) : IMediaRepository
@@ -435,4 +589,165 @@ public sealed class DeviceEventRepository(AppDbContext db) : IDeviceEventReposit
     }
 
     public void Add(DeviceEvent e) => db.DeviceEvents.Add(e);
+}
+
+public sealed class CollectionRepository(AppDbContext db) : ICollectionRepository
+{
+    public async Task<IReadOnlyList<PostCollection>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.Collections.Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.SortOrder).ThenBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public Task<PostCollection?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.Collections.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
+        db.Collections.CountAsync(x => x.WorkspaceId == workspaceId, ct);
+
+    public async Task<int> MaxSortOrderAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.Collections.Where(x => x.WorkspaceId == workspaceId).MaxAsync(x => (int?)x.SortOrder, ct) ?? -1;
+
+    public void Add(PostCollection collection) => db.Collections.Add(collection);
+
+    public void Remove(PostCollection collection) => db.Collections.Remove(collection);
+
+    public void RemoveRange(IEnumerable<PostCollection> collections) => db.Collections.RemoveRange(collections);
+}
+
+public sealed class CollectionPostRepository(AppDbContext db) : ICollectionPostRepository
+{
+    public async Task<IReadOnlyList<CollectionPost>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.CollectionPosts.AsNoTracking().Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<CollectionPost>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default) =>
+        await db.CollectionPosts.Where(x => x.WorkspaceId == workspaceId && x.CollectionId == collectionId)
+            .OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).ToListAsync(ct);
+
+    public Task<CollectionPost?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.CollectionPosts.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public async Task<IReadOnlyList<CollectionPost>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
+    {
+        var list = ids.Distinct().ToList();
+        return await db.CollectionPosts.Where(x => x.WorkspaceId == workspaceId && list.Contains(x.Id)).ToListAsync(ct);
+    }
+
+    public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
+        db.CollectionPosts.CountAsync(x => x.WorkspaceId == workspaceId, ct);
+
+    public void Add(CollectionPost post) => db.CollectionPosts.Add(post);
+
+    public void AddRange(IEnumerable<CollectionPost> posts) => db.CollectionPosts.AddRange(posts);
+
+    public void Remove(CollectionPost post) => db.CollectionPosts.Remove(post);
+
+    public void RemoveRange(IEnumerable<CollectionPost> posts) => db.CollectionPosts.RemoveRange(posts);
+}
+
+public sealed class LinkSetRepository(AppDbContext db) : ILinkSetRepository
+{
+    public async Task<IReadOnlyList<LinkSet>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.LinkSets.Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.SortOrder).ThenBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public Task<LinkSet?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.LinkSets.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public Task<LinkSet?> GetByNameAsync(Guid workspaceId, string name, CancellationToken ct = default) =>
+        db.LinkSets.OrderBy(x => x.SortOrder).ThenBy(x => x.CreatedAt).FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Name == name, ct);
+
+    public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
+        db.LinkSets.CountAsync(x => x.WorkspaceId == workspaceId, ct);
+
+    public async Task<int> MaxSortOrderAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.LinkSets.Where(x => x.WorkspaceId == workspaceId).MaxAsync(x => (int?)x.SortOrder, ct) ?? -1;
+
+    public void Add(LinkSet set) => db.LinkSets.Add(set);
+
+    public void Remove(LinkSet set) => db.LinkSets.Remove(set);
+
+    public void RemoveRange(IEnumerable<LinkSet> sets) => db.LinkSets.RemoveRange(sets);
+}
+
+public sealed class SetLinkRepository(AppDbContext db) : ISetLinkRepository
+{
+    public async Task<IReadOnlyList<SetLink>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.SetLinks.Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.LinkSetId).ThenBy(x => x.SortOrder).ThenBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<SetLink>> ListBySetAsync(Guid workspaceId, Guid linkSetId, CancellationToken ct = default) =>
+        await db.SetLinks.Where(x => x.WorkspaceId == workspaceId && x.LinkSetId == linkSetId)
+            .OrderBy(x => x.SortOrder).ThenBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public Task<SetLink?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.SetLinks.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public async Task<IReadOnlyList<SetLink>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
+    {
+        var list = ids.Distinct().ToList();
+        return await db.SetLinks.Where(x => x.WorkspaceId == workspaceId && list.Contains(x.Id)).ToListAsync(ct);
+    }
+
+    public Task<int> CountBySetAsync(Guid linkSetId, CancellationToken ct = default) =>
+        db.SetLinks.CountAsync(x => x.LinkSetId == linkSetId, ct);
+
+    public async Task<int> MaxSortOrderAsync(Guid linkSetId, CancellationToken ct = default) =>
+        await db.SetLinks.Where(x => x.LinkSetId == linkSetId).MaxAsync(x => (int?)x.SortOrder, ct) ?? -1;
+
+    public void Add(SetLink link) => db.SetLinks.Add(link);
+
+    public void AddRange(IEnumerable<SetLink> links) => db.SetLinks.AddRange(links);
+
+    public void Remove(SetLink link) => db.SetLinks.Remove(link);
+
+    public void RemoveRange(IEnumerable<SetLink> links) => db.SetLinks.RemoveRange(links);
+}
+
+public sealed class ScheduleRepository(AppDbContext db) : IScheduleRepository
+{
+    public async Task<IReadOnlyList<Schedule>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.Schedules.Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Schedule>> ListActiveAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.Schedules.Where(x => x.WorkspaceId == workspaceId && x.Active).OrderBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public Task<Schedule?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.Schedules.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
+        db.Schedules.CountAsync(x => x.WorkspaceId == workspaceId, ct);
+
+    public async Task<IReadOnlyList<Schedule>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default) =>
+        await db.Schedules.Where(x => x.WorkspaceId == workspaceId && x.CollectionId == collectionId).OrderBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<Schedule>> ListByLinkSetAsync(Guid workspaceId, Guid linkSetId, CancellationToken ct = default) =>
+        await db.Schedules.Where(x => x.WorkspaceId == workspaceId && x.LinkSetId == linkSetId).OrderBy(x => x.CreatedAt).ToListAsync(ct);
+
+    public void Add(Schedule schedule) => db.Schedules.Add(schedule);
+
+    public void Remove(Schedule schedule) => db.Schedules.Remove(schedule);
+
+    public void RemoveRange(IEnumerable<Schedule> schedules) => db.Schedules.RemoveRange(schedules);
+}
+
+public sealed class ReportShareRepository(AppDbContext db) : IReportShareRepository
+{
+    public Task<ReportShare?> GetByTokenAsync(string token, CancellationToken ct = default) =>
+        db.ReportShares.AsNoTracking().FirstOrDefaultAsync(x => x.Token == token, ct);
+
+    public async Task<IReadOnlyList<ReportShareInfo>> ListActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default) =>
+        await db.ReportShares.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && x.ExpiresAt > now)
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new ReportShareInfo(x.Id, x.Token, x.Brand, x.Period, x.ShowLogo, x.CreatedAt, x.ExpiresAt))
+            .ToListAsync(ct);
+
+    public Task<ReportShare?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.ReportShares.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public Task<int> CountActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default) =>
+        db.ReportShares.CountAsync(x => x.WorkspaceId == workspaceId && x.ExpiresAt > now, ct);
+
+    public Task DeleteExpiredAsync(DateTimeOffset before, CancellationToken ct = default) =>
+        db.ReportShares.Where(x => x.ExpiresAt < before).ExecuteDeleteAsync(ct);
+
+    public void Add(ReportShare share) => db.ReportShares.Add(share);
+
+    public void Remove(ReportShare share) => db.ReportShares.Remove(share);
 }

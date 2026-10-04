@@ -138,3 +138,77 @@ public enum CommandStatus
     /// <summary>Nobody took it in time; it never runs.</summary>
     Expired,
 }
+
+/// <summary>Where a collection post is in the approval flow (only collections that require approval use it).</summary>
+public enum PostApproval
+{
+    Draft,
+    Pending,
+    Approved,
+}
+
+/// <summary>How a group link of a link set is doing.</summary>
+public enum LinkHealth
+{
+    Ok,
+    /// <summary>The group holds posts for admin approval.</summary>
+    Pending,
+    /// <summary>Switched off, by hand or automatically after repeated failures.</summary>
+    Off,
+}
+
+/// <summary>When a schedule posts. Weekend is Friday to Sunday, as the design labels it.</summary>
+public enum ScheduleMode
+{
+    Daily,
+    Weekdays,
+    Weekend,
+    /// <summary>Rounds every N hours from a first time.</summary>
+    Interval,
+    /// <summary>N posts spread between two times of day.</summary>
+    Drip,
+    Once,
+}
+
+public enum PostOrder
+{
+    Shuffle,
+    Rotate,
+}
+
+public enum FooterPosition
+{
+    End,
+    Top,
+}
+
+public enum WatermarkPosition
+{
+    Br,
+    Bl,
+    Tr,
+    C,
+}
+
+/// <summary>Where a notification goes. Default means "use the parent": the workspace's for a set, the set's for a group.</summary>
+public enum NotifyChannel
+{
+    Default,
+    Tg,
+    Line,
+    Both,
+    Off,
+}
+
+/// <summary>What a notification is about.</summary>
+public enum NotifyEvent
+{
+    Success,
+    Fail,
+    Shot,
+    Round,
+    StartStop,
+    Block,
+    Offline,
+    Quota,
+}

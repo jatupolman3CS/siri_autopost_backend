@@ -143,4 +143,13 @@ public class User : Entity
 
     /// <summary>Advanced anti-ban needs Pro or above.</summary>
     public bool HasAdvancedAntiBan => Plan is PlanKey.Pro or PlanKey.Agency;
+
+    /// <summary>Telegram and LINE notifications need Pro or above.</summary>
+    public bool HasNotifications => Plan is PlanKey.Pro or PlanKey.Agency;
+
+    /// <summary>Auto-reply rules need Pro or above.</summary>
+    public bool HasAutoReply => Plan is PlanKey.Pro or PlanKey.Agency;
+
+    /// <summary>Shareable client reports are an Agency feature.</summary>
+    public bool HasClientReports => Plan is PlanKey.Agency;
 }

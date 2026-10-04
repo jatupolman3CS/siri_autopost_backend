@@ -1,10 +1,17 @@
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
+using SIRIAUTOPOST.Application.Features.Backup;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.AutoReply;
+using SIRIAUTOPOST.Application.Features.Collections;
+using SIRIAUTOPOST.Application.Features.LinkSets;
+using SIRIAUTOPOST.Application.Features.Notifications;
+using SIRIAUTOPOST.Application.Features.Reports;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
@@ -12,7 +19,10 @@ using SIRIAUTOPOST.Application.Features.Events;
 using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
+using SIRIAUTOPOST.Application.Features.Schedules;
 using SIRIAUTOPOST.Application.Features.Workspaces;
+using SIRIAUTOPOST.Application.Common;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Application.Validators;
 
@@ -66,6 +76,63 @@ public static class DependencyInjection
         services.AddCommand<UploadMediaCommand, MediaDto, UploadMediaCommandHandler>();
         services.AddQuery<GetSnippetsQuery, IReadOnlyList<SnippetDto>, GetSnippetsQueryHandler>();
         services.AddCommand<CreateSnippetCommand, SnippetDto, CreateSnippetCommandHandler>();
+
+        // Notifications (Telegram / LINE), auto-reply rules and reports
+        services.AddQuery<GetNotificationsQuery, NotificationSettingsDto, GetNotificationsQueryHandler>();
+        services.AddCommand<UpdateNotificationsCommand, NotificationSettingsDto, UpdateNotificationsCommandHandler>();
+        services.AddCommand<SendTestNotificationCommand, NotifyTestResultDto, SendTestNotificationCommandHandler>();
+        services.AddCommand<FindTelegramChatsCommand, TelegramChatsDto, FindTelegramChatsCommandHandler>();
+        services.AddQuery<GetAutoReplyQuery, AutoReplyDto, GetAutoReplyQueryHandler>();
+        services.AddCommand<UpdateAutoReplyCommand, AutoReplyDto, UpdateAutoReplyCommandHandler>();
+        services.AddScoped<ReportComposer>();
+        services.AddQuery<GetReportQuery, ReportDto, GetReportQueryHandler>();
+        services.AddCommand<ShareReportCommand, ReportShareDto, ShareReportCommandHandler>();
+        services.AddQuery<GetSharedReportQuery, SharedReportDto, GetSharedReportQueryHandler>();
+        services.AddQuery<GetReportSharesQuery, IReadOnlyList<ReportShareSummaryDto>, GetReportSharesQueryHandler>();
+        services.AddCommand<RevokeReportShareCommand, Unit, RevokeReportShareCommandHandler>();
+
+        // Collections ("ชุดโพสต์")
+        services.AddQuery<GetCollectionsQuery, IReadOnlyList<CollectionDto>, GetCollectionsQueryHandler>();
+        services.AddCommand<CreateCollectionCommand, CollectionDto, CreateCollectionCommandHandler>();
+        services.AddCommand<UpdateCollectionCommand, CollectionDto, UpdateCollectionCommandHandler>();
+        services.AddCommand<DeleteCollectionCommand, Unit, DeleteCollectionCommandHandler>();
+        services.AddCommand<AddCollectionPostCommand, CollectionPostDto, AddCollectionPostCommandHandler>();
+        services.AddCommand<AddCollectionPostsBatchCommand, IReadOnlyList<CollectionPostDto>, AddCollectionPostsBatchCommandHandler>();
+        services.AddCommand<UpdateCollectionPostCommand, CollectionPostDto, UpdateCollectionPostCommandHandler>();
+        services.AddCommand<DeleteCollectionPostCommand, Unit, DeleteCollectionPostCommandHandler>();
+        services.AddCommand<CollectionPostApprovalCommand, CollectionPostDto, CollectionPostApprovalCommandHandler>();
+
+        // Link sets ("ชุดลิงก์กลุ่ม")
+        services.AddQuery<GetLinkSetsQuery, IReadOnlyList<LinkSetDto>, GetLinkSetsQueryHandler>();
+        services.AddCommand<CreateLinkSetCommand, LinkSetDto, CreateLinkSetCommandHandler>();
+        services.AddCommand<UpdateLinkSetCommand, LinkSetDto, UpdateLinkSetCommandHandler>();
+        services.AddCommand<DeleteLinkSetCommand, Unit, DeleteLinkSetCommandHandler>();
+        services.AddCommand<AddLinkCommand, SetLinkDto, AddLinkCommandHandler>();
+        services.AddCommand<UpdateLinkCommand, SetLinkDto, UpdateLinkCommandHandler>();
+        services.AddCommand<DeleteLinkCommand, Unit, DeleteLinkCommandHandler>();
+        services.AddCommand<EnableLinkCommand, SetLinkDto, EnableLinkCommandHandler>();
+        services.AddCommand<BulkAddLinksCommand, BulkLinksResultDto, BulkAddLinksCommandHandler>();
+        services.AddCommand<ImportAccountGroupsCommand, LinkSetDto, ImportAccountGroupsCommandHandler>();
+        services.AddCommand<ImportLinksCsvCommand, CsvImportResultDto, ImportLinksCsvCommandHandler>();
+        services.AddQuery<GetAccountGroupsQuery, IReadOnlyList<GroupLinkDto>, GetAccountGroupsQueryHandler>();
+
+        // Schedule engine: schedules, the materializer that queues their posts, test posts, backup and restore
+        services.AddScoped<ScheduleMaterializer>();
+        services.AddSingleton<TopUpThrottle>();
+        services.AddScoped<ScheduleTopUp>();
+        services.AddScoped<ScheduleViews>();
+        services.AddScoped<ScheduleSync>();
+        services.AddQuery<GetSchedulesQuery, IReadOnlyList<ScheduleDto>, GetSchedulesQueryHandler>();
+        services.AddCommand<CreateScheduleCommand, ScheduleCreatedDto, CreateScheduleCommandHandler>();
+        services.AddCommand<SetScheduleActiveCommand, ScheduleDto, SetScheduleActiveCommandHandler>();
+        services.AddCommand<DeleteScheduleCommand, Unit, DeleteScheduleCommandHandler>();
+        services.AddQuery<GetBestTimesQuery, IReadOnlyList<string>, GetBestTimesQueryHandler>();
+        services.AddCommand<CreateTestPostCommand, PostDto, CreateTestPostCommandHandler>();
+        services.AddQuery<GetBackupQuery, BackupDto, GetBackupQueryHandler>();
+        services.AddCommand<RestoreBackupCommand, RestoreResultDto, RestoreBackupCommandHandler>();
+
+        // Notifications: sends nothing until the infrastructure registers the real dispatcher
+        services.TryAddSingleton<INotificationDispatcher, NullNotificationDispatcher>();
 
         // Posting engine
         services.AddQuery<GetEngineSettingsQuery, EngineSettingsDto, GetEngineSettingsQueryHandler>();

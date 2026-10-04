@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using SIRIAUTOPOST.Domain.Entities;
+using SIRIAUTOPOST.Domain.Enums;
 
 namespace SIRIAUTOPOST.Application.Common;
 
@@ -19,6 +20,10 @@ public static class DeviceEvents
     /// <summary>A "post" event: the post's status changed (queued to posting, failed, skipped...).</summary>
     public static DeviceEvent PostChanged(Guid workspaceId, Guid deviceId, Post post, DateTimeOffset now) =>
         Make(workspaceId, deviceId, DeviceEventType.Post, new { postId = post.Id, status = post.Status, failureCode = post.FailureCode }, now);
+
+    /// <summary>A "links.changed" event: a link was switched off by the engine, switched on again, or went pending.</summary>
+    public static DeviceEvent LinksChanged(Guid workspaceId, Guid deviceId, Guid linkSetId, Guid linkId, LinkHealth health, DateTimeOffset now) =>
+        Make(workspaceId, deviceId, DeviceEventType.Links, new { linkSetId, linkId, health }, now);
 
     /// <summary>A payload that carries raw JSON text as one of its members (a state or a command result).</summary>
     public static DeviceEvent MakeRaw(Guid workspaceId, Guid deviceId, string type, string payloadJson, DateTimeOffset now) =>

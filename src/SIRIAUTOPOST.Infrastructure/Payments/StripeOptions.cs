@@ -8,7 +8,7 @@ public sealed class StripeOptions
     /// <summary>Secret API key (sk_test_... / sk_live_...). Empty switches payments off: paid plans cannot be bought.</summary>
     public string SecretKey { get; set; } = "";
 
-    /// <summary>Signing secret (whsec_...) of the webhook endpoint that points at POST /api/webhooks/stripe.</summary>
+    /// <summary>Signing secret (whsec_...) of the webhook endpoint. Multiple comma-separated secrets supported (e.g. for key rotation).</summary>
     public string WebhookSecret { get; set; } = "";
 
     /// <summary>

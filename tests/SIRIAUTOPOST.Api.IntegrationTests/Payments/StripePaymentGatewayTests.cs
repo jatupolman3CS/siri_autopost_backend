@@ -325,4 +325,30 @@ public class StripePaymentGatewayTests
         Assert.Null(await gateway.GetCardAsync("cus_1"));
         Assert.Empty(stub.Calls);
     }
+
+    [Fact]
+    public void Webhook_parser_accepts_multiple_comma_separated_secrets()
+    {
+        var secretA = "whsec_firstSecretKeyForTesting123456789";
+        var secretB = "whsec_secondSecretKeyForTesting987654321";
+        var parser = new StripeWebhookParser($"{secretA}, {secretB}");
+
+        var payload = StripeEvents.Event("customer.subscription.deleted", StripeEvents.Subscription("sub_1", "cus_1"));
+
+        // Signed with secret A
+        var sigA = StripeEvents.Signature(payload, secretA);
+        var evtA = parser.Parse(payload, sigA);
+        Assert.NotNull(evtA);
+        Assert.Equal("sub_1", Assert.IsType<SubscriptionChangedEvent>(evtA).SubscriptionId);
+
+        // Signed with secret B
+        var sigB = StripeEvents.Signature(payload, secretB);
+        var evtB = parser.Parse(payload, sigB);
+        Assert.NotNull(evtB);
+        Assert.Equal("sub_1", Assert.IsType<SubscriptionChangedEvent>(evtB).SubscriptionId);
+
+        // Signed with unknown secret fails
+        var sigBad = StripeEvents.Signature(payload, "whsec_wrongKey1234567890");
+        Assert.Throws<InvalidWebhookException>(() => parser.Parse(payload, sigBad));
+    }
 }

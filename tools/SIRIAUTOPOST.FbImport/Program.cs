@@ -34,12 +34,12 @@ if (postFiles.Count == 0) { Console.Error.WriteLine("ไม่พบ profile_pos
 // Media uris start with the archive's top folder name, so they resolve from the folder above it.
 var root = new DirectoryInfo(Path.GetDirectoryName(postFiles[0])!).Parent!.Parent!.FullName;
 
-var bucket = Env("AppSettings__R2__BucketName");
-var publicBase = Env("AppSettings__R2__PublicBaseUrl").TrimEnd('/');
+var bucket = Env("AppSettings__R2__BucketName") is { Length: > 0 } b1 ? b1 : Env("R2__BucketName");
+var publicBase = (Env("AppSettings__R2__PublicBaseUrl") is { Length: > 0 } pb1 ? pb1 : Env("R2__PublicBaseUrl")).TrimEnd('/');
 AmazonS3Client? s3 = null;
 if (!dry)
 {
-    var ep = Env("AppSettings__R2__Endpoint");
+    var ep = Env("AppSettings__R2__Endpoint") is { Length: > 0 } ep1 ? ep1 : Env("R2__Endpoint");
     var ak = Env("AppSettings__R2__AccessKeyId") is { Length: > 0 } a1 ? a1 : Env("R2__AccessKeyId");
     var sk = Env("AppSettings__R2__SecretAccessKey") is { Length: > 0 } s1 ? s1 : Env("R2__SecretAccessKey");
     if (ep == "" || bucket == "" || ak == "" || sk == "") { Console.Error.WriteLine("ขาดค่า R2: Endpoint/BucketName/AccessKeyId/SecretAccessKey"); return 1; }

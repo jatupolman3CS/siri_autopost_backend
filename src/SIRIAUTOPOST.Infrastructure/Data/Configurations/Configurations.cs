@@ -97,6 +97,9 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
     public void Configure(EntityTypeBuilder<Post> b)
     {
         b.ToTable("POSTS");
+        // Optimistic concurrency on PostgreSQL's own row version (the system column xmin; no DDL): two requests that read
+        // the same post cannot both change it, the second save fails with a ConcurrencyConflictException.
+        b.Property<uint>("xmin").IsRowVersion();
         b.Property(x => x.Target).HasMaxLength(Post.MaxTargetLength);
         b.Property(x => x.Content).HasMaxLength(Post.MaxContentLength).IsRequired();
         b.Property(x => x.FailureDetail).HasMaxLength(Post.MaxDetailLength);

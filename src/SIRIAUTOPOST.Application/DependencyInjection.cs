@@ -116,6 +116,7 @@ public static class DependencyInjection
 
         // Schedule engine: schedules, the materializer that queues their posts, test posts, backup and restore
         services.AddScoped<ScheduleMaterializer>();
+        services.AddSingleton<TopUpThrottle>();
         services.AddScoped<ScheduleTopUp>();
         services.AddScoped<ScheduleViews>();
         services.AddQuery<GetSchedulesQuery, IReadOnlyList<ScheduleDto>, GetSchedulesQueryHandler>();

@@ -273,17 +273,38 @@ public sealed class ClaimJobCommandHandler(
     public async Task<JobDto?> HandleAsync(ClaimJobCommand c, CancellationToken ct = default)
     {
         var now = clock.GetUtcNow();
-        // Schedules are kept a fortnight ahead; this is where they catch up with the clock (its own unit of work).
+        // Schedules are kept a fortnight ahead; this is where they catch up with the clock (its own transaction, and it
+        // never throws: a schedule that cannot be generated is logged and left for later).
         await topUp.EnsureAsync(current.WorkspaceId, ct);
-        var device = await DeviceAccess.RequireAsync(devices, current, ct);
-        if (device.Seen(null, now))
-            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
-        var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
+
+        JobDto? job = null;
+        Workspace? ws = null;
         var notes = new Notes();
-        var job = await NextAsync(device, ws, now, notes, ct);
-        if (job is not null)
-            events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Post, new { postId = job.PostId, status = PostStatus.Posting }, now));
-        await uow.SaveChangesAsync(ct);
+        try
+        {
+            // One claim of a device at a time: the lock is held until the commit, so two overlapping claims (a retry, a
+            // slow answer) cannot both hand out the same post or two posts at once. A post that still changes under a claim
+            // (the web app edited it) fails the save with a conflict instead.
+            await uow.ExecuteInTransactionAsync($"claim:{current.DeviceId:N}", async () =>
+            {
+                uow.DiscardChanges(); // what was loaded before the lock (the device at sign-in) may be out of date
+                var device = await DeviceAccess.RequireAsync(devices, current, ct);
+                if (device.Seen(null, now))
+                    events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
+                ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
+                job = await NextAsync(device, ws, now, notes, ct);
+                if (job is not null)
+                    events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Post, new { postId = job.PostId, status = PostStatus.Posting }, now));
+                await uow.SaveChangesAsync(ct);
+            }, ct);
+        }
+        catch (ConcurrencyConflictException)
+        {
+            // Another request changed a post this claim was settling, or the lock was not granted in time. Nothing was
+            // saved: there is no job now, and the device asks again in a moment.
+            uow.DiscardChanges();
+            return null;
+        }
 
         // Telling people comes after the save, and never fails the claim.
         var notices = new List<Notice>();
@@ -292,14 +313,14 @@ public sealed class ClaimJobCommandHandler(
         {
             try
             {
-                notices.AddRange(await EngineNotices.FinishedRoundsAsync(posts, schedules, ws.Id, notes.Slots, ct));
+                notices.AddRange(await EngineNotices.FinishedRoundsAsync(posts, schedules, ws!.Id, notes.Slots, ct));
             }
             catch (Exception)
             {
                 // A round summary is a courtesy.
             }
         }
-        await EngineNotices.SendAsync(notifier, ws.Id, notices, ct);
+        await EngineNotices.SendAsync(notifier, ws!.Id, notices, ct);
         return job;
     }
 

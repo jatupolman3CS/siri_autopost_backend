@@ -1,3 +1,4 @@
+﻿using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using SIRIAUTOPOST.Application.Common;
@@ -77,23 +78,43 @@ public class ScheduleTopUpTests
         public IScheduleRepository Schedules { get; } = Substitute.For<IScheduleRepository>();
         public IMediaRepository Media { get; } = Substitute.For<IMediaRepository>();
         public IUnitOfWork Uow { get; } = Substitute.For<IUnitOfWork>();
+        public TopUpThrottle Throttle { get; } = new();
         public List<Schedule> Active { get; } = [];
+
+        // What the database holds of each schedule: a save writes it, discarding the unsaved changes reads it back.
+        private readonly Dictionary<Guid, (DateOnly? Through, int Cursor)> saved = new();
 
         public Rig()
         {
             Workspaces.GetByIdAsync(World.Ws.Id, Arg.Any<CancellationToken>()).Returns(World.Ws);
             Schedules.ListActiveAsync(World.Ws.Id, Arg.Any<CancellationToken>()).Returns(_ => Active.Where(s => s.Active).ToList());
             Schedules.GetAsync(World.Ws.Id, Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(c => Active.FirstOrDefault(s => s.Id == c.ArgAt<Guid>(1)));
-            // Discarding the unsaved changes means the schedule is read again as it is in the database: not generated yet.
-            Uow.When(u => u.DiscardChanges()).Do(_ => Active.ForEach(s => s.ResetGenerated()));
+            Uow.SaveChangesAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            {
+                foreach (var s in Active) saved[s.Id] = (s.GeneratedThrough, s.Cursor);
+                return Task.FromResult(1);
+            });
+            Uow.When(u => u.DiscardChanges()).Do(_ =>
+            {
+                foreach (var s in Active)
+                {
+                    var (through, cursor) = saved.GetValueOrDefault(s.Id);
+                    if (through is { } day) s.MarkGenerated(day, cursor);
+                    else s.ResetGenerated();
+                }
+            });
+            // A transaction just runs its work (the real one commits it and holds the lock).
+            Uow.ExecuteInTransactionAsync(Arg.Any<string?>(), Arg.Any<Func<Task>>(), Arg.Any<CancellationToken>())
+                .Returns(c => c.ArgAt<Func<Task>>(1)());
         }
 
         public ScheduleTopUp TopUp(DateTimeOffset? now = null) =>
-            new(Workspaces, Schedules, World.Materializer(), Media, Uow, new FixedClock(now ?? Now));
+            new(Workspaces, Schedules, World.Materializer(), Media, Uow, new FixedClock(now ?? Now), Throttle, NullLogger<ScheduleTopUp>.Instance);
 
         public Schedule Add(Schedule s)
         {
             Active.Add(s);
+            saved[s.Id] = (s.GeneratedThrough, s.Cursor);
             return s;
         }
     }
@@ -204,7 +225,7 @@ public class ScheduleTopUpTests
         var result = await rig.TopUp().GenerateAsync(rig.World.Ws.Id, rig.Active[0].Id);
 
         Assert.True(result.Created > 0);
-        rig.Uow.Received(1).DiscardChanges();
+        rig.Uow.Received().DiscardChanges();
         await rig.Uow.Received(2).SaveChangesAsync(Arg.Any<CancellationToken>());
         await rig.Media.DidNotReceive().RecordUseAsync(Arg.Any<Guid>(), Arg.Any<IEnumerable<Guid>>(), Arg.Any<CancellationToken>()); // this collection has no media
     }
@@ -221,8 +242,8 @@ public class ScheduleTopUpTests
 
         var result = await rig.TopUp().GenerateAsync(rig.World.Ws.Id, rig.Active[0].Id);
 
-        Assert.Equal(0, result.Created);
-        rig.Uow.Received(2).DiscardChanges();
+        Assert.Equal((0, false), (result.Created, result.Advanced));
+        await rig.Uow.Received(ScheduleTopUp.Attempts).SaveChangesAsync(Arg.Any<CancellationToken>()); // three tries, then it leaves it to the other request
         await rig.Media.DidNotReceive().RecordUseAsync(Arg.Any<Guid>(), Arg.Any<IEnumerable<Guid>>(), Arg.Any<CancellationToken>()); // nothing was saved: no use to count
     }
 
@@ -232,5 +253,166 @@ public class ScheduleTopUpTests
         var rig = new Rig();
         Assert.Equal(0, (await rig.TopUp().GenerateAsync(rig.World.Ws.Id, Guid.NewGuid())).Created);
         Assert.Equal(0, (await rig.TopUp().GenerateAsync(Guid.NewGuid(), Guid.NewGuid())).Created);
+    }
+
+    // ---- concurrency: the lock, the retries, the catch-all and the throttle ----
+
+    [Fact]
+    public async Task A_run_takes_the_lock_of_its_schedule_and_reads_again_after_it()
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+
+        await rig.TopUp().GenerateAsync(rig.World.Ws.Id, s.Id);
+
+        await rig.Uow.Received(1).ExecuteInTransactionAsync($"schedule:{s.Id:N}", Arg.Any<Func<Task>>(), Arg.Any<CancellationToken>());
+        Received.InOrder(() =>
+        {
+            rig.Uow.DiscardChanges(); // what was read before the lock may be out of date
+            rig.Schedules.GetAsync(rig.World.Ws.Id, s.Id, Arg.Any<CancellationToken>());
+            rig.Uow.SaveChangesAsync(Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Theory]
+    [InlineData(typeof(ConcurrencyConflictException))]
+    [InlineData(typeof(DuplicateKeyException))]
+    public async Task A_run_that_loses_the_race_twice_still_goes_a_third_time(Type loser)
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+        var calls = 0;
+        rig.Uow.SaveChangesAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            ++calls < 3 ? throw (Exception)Activator.CreateInstance(loser, loser == typeof(DuplicateKeyException) ? "ix" : null)! : Task.FromResult(1));
+
+        var result = await rig.TopUp().GenerateAsync(rig.World.Ws.Id, s.Id);
+
+        Assert.Equal((3, true), (calls, result.Advanced));
+        Assert.True(result.Created > 0);
+    }
+
+    [Fact]
+    public async Task Inside_a_running_transaction_a_lost_race_is_left_to_the_outer_one_instead_of_retried()
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+        rig.Uow.InTransaction.Returns(true); // a failed save has left that transaction unusable: nothing can be retried inside it
+        rig.Uow.SaveChangesAsync(Arg.Any<CancellationToken>()).ThrowsAsync(new ConcurrencyConflictException());
+
+        await Assert.ThrowsAsync<ConcurrencyConflictException>(() => rig.TopUp().GenerateAsync(rig.World.Ws.Id, s.Id));
+
+        await rig.Uow.Received(1).SaveChangesAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_refusal_of_the_run_is_thrown_to_the_one_who_asked_for_it()
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+        rig.World.Posts.Clear();
+        rig.World.AddPost(new string('ก', 5000)); // the composed text (with the group's code) is too long
+        rig.World.SetLinks.ListBySetAsync(rig.World.Ws.Id, Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(_ => rig.World.Links.ToList());
+
+        await Assert.ThrowsAsync<DomainException>(() => rig.TopUp().GenerateAsync(rig.World.Ws.Id, s.Id));
+    }
+
+    [Fact]
+    public async Task The_top_up_never_throws_whatever_goes_wrong_and_the_others_are_still_made()
+    {
+        var rig = new Rig();
+        var poisoned = rig.Add(Schedule.Create(rig.World.Ws.Id, "เสีย", rig.World.Collection.Id, rig.World.Set.Id, ScheduleMode.Once, ["18:00"], 6, "09:00",
+            Today.AddDays(1), "23:59", PostOrder.Rotate, "09:00", "21:00", 3, 0, 0, null, -300, Now));
+        var fine = rig.Add(rig.World.NewSchedule());
+        // Poisoned the way an old row can be: a date that overflows when turned into UTC.
+        typeof(Schedule).GetProperty(nameof(Schedule.StartDate))!.SetValue(poisoned, DateOnly.MaxValue);
+
+        var created = await rig.TopUp().EnsureAsync(rig.World.Ws.Id); // no exception
+
+        Assert.Equal(14 * 2, created);
+        Assert.NotNull(fine.GeneratedThrough);
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("save")]
+    public async Task Database_errors_do_not_escape_the_top_up(string where)
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule(ScheduleMode.Once, start: Today.AddDays(-1))); // switched off: needs a save
+        if (where == "list") rig.Schedules.ListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("db down"));
+        else rig.Uow.SaveChangesAsync(Arg.Any<CancellationToken>()).ThrowsAsync(new InvalidOperationException("db down"));
+
+        Assert.Equal(0, await rig.TopUp().EnsureAsync(rig.World.Ws.Id));
+
+        rig.Uow.Received().DiscardChanges(); // the context is left clean for the claim that follows
+        Assert.NotNull(s);
+    }
+
+    [Fact]
+    public async Task A_cancelled_request_is_not_swallowed()
+    {
+        var rig = new Rig();
+        rig.Add(rig.World.NewSchedule());
+        using var cts = new CancellationTokenSource();
+        rig.Schedules.ListActiveAsync(Arg.Any<Guid>(), Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => rig.TopUp().EnsureAsync(rig.World.Ws.Id, cts.Token));
+    }
+
+    [Fact]
+    public async Task A_schedule_that_could_not_be_made_is_left_alone_for_ten_minutes_then_tried_again()
+    {
+        var rig = new Rig();
+        rig.World.Posts.Clear(); // nothing to post: the run cannot advance
+        var s = rig.Add(rig.World.NewSchedule());
+        var queries = () => rig.World.CollectionPosts.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ICollectionPostRepository.ListByCollectionAsync));
+
+        await rig.TopUp().EnsureAsync(rig.World.Ws.Id);
+        Assert.Equal(1, queries());
+        await rig.TopUp(Now.AddMinutes(5)).EnsureAsync(rig.World.Ws.Id); // claims keep coming: the schedule is not looked at again
+        await rig.TopUp(Now.AddMinutes(9)).EnsureAsync(rig.World.Ws.Id);
+        Assert.Equal(1, queries());
+
+        rig.World.AddPost("มีโพสต์แล้ว");
+        await rig.TopUp(Now.AddMinutes(11)).EnsureAsync(rig.World.Ws.Id); // the ten minutes are over
+        Assert.Equal(2, queries());
+        Assert.NotNull(s.GeneratedThrough);
+    }
+
+    [Fact]
+    public async Task A_schedule_that_failed_is_left_alone_too_and_creating_or_resuming_it_does_not_wait_for_the_throttle()
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+        var fail = true;
+        rig.Uow.SaveChangesAsync(Arg.Any<CancellationToken>()).Returns(_ => fail ? throw new InvalidOperationException("db down") : Task.FromResult(1));
+
+        Assert.Equal(0, await rig.TopUp().EnsureAsync(rig.World.Ws.Id));
+        Assert.True(rig.Throttle.IsDelayed(s.Id, Now.AddMinutes(1)));
+        await rig.Uow.Received(1).SaveChangesAsync(Arg.Any<CancellationToken>());
+        Assert.Equal(0, await rig.TopUp(Now.AddMinutes(1)).EnsureAsync(rig.World.Ws.Id)); // throttled: no new attempt
+        await rig.Uow.Received(1).SaveChangesAsync(Arg.Any<CancellationToken>());
+
+        fail = false;
+        var made = await rig.TopUp(Now.AddMinutes(1)).GenerateAsync(rig.World.Ws.Id, s.Id); // what the handlers call: no throttle
+        Assert.True(made.Created > 0);
+        Assert.False(rig.Throttle.IsDelayed(s.Id, Now.AddMinutes(1))); // and a success lifts the hold
+    }
+
+    [Fact]
+    public void The_throttle_holds_a_schedule_for_ten_minutes_and_forgets_it_after_that()
+    {
+        var throttle = new TopUpThrottle();
+        var id = Guid.NewGuid();
+        Assert.False(throttle.IsDelayed(id, Now));
+
+        throttle.Hold(id, Now);
+
+        Assert.True(throttle.IsDelayed(id, Now.AddMinutes(9)));
+        Assert.False(throttle.IsDelayed(id, Now.AddMinutes(10)));
+        Assert.False(throttle.IsDelayed(id, Now.AddMinutes(1))); // forgotten for good once it ran out
+        throttle.Hold(id, Now);
+        throttle.Clear(id);
+        Assert.False(throttle.IsDelayed(id, Now.AddMinutes(1)));
     }
 }

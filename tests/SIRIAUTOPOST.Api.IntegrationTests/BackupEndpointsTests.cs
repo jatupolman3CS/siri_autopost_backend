@@ -299,6 +299,49 @@ public class BackupEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_file_with_a_null_entry_where_a_whole_one_belongs_is_a_400_and_changes_nothing()
+    {
+        var rich = await RichAsync();
+        using var shop = rich.Shop;
+        var good = await BackupAsync(shop);
+        var snapshot = await SnapshotAsync(shop);
+
+        async Task Refused(Action<System.Text.Json.Nodes.JsonNode> punch)
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(JsonSerializer.Serialize(good, Json))!;
+            punch(node);
+            var res = await shop.Owner.PostAsync($"{shop.Api}/restore", new StringContent(node.ToJsonString(), System.Text.Encoding.UTF8, "application/json"));
+            Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+            Assert.Equal(snapshot, await SnapshotAsync(shop));
+        }
+
+        await Refused(n => n["collections"]![0] = null);
+        await Refused(n => n["collections"]![0]!["posts"]![0] = null);
+        await Refused(n => n["linkSets"]![0] = null);
+        await Refused(n => n["linkSets"]![0]!["links"]![0] = null);
+        await Refused(n => n["schedules"]![0] = null);
+        await Refused(n => n["schedules"]![0]!["times"]![0] = null);
+        await Refused(n => n["notificationRules"]!["sets"]![0] = null);
+        await Refused(n => n["autoReply"]!["rules"]![0] = null);
+    }
+
+    [Fact]
+    public async Task A_file_whose_default_channel_says_default_restores_as_telegram_like_a_new_workspace()
+    {
+        var rich = await RichAsync();
+        using var shop = rich.Shop;
+        var file = await BackupAsync(shop);
+
+        (await RestoreAsync(shop, file with { NotificationRules = file.NotificationRules! with { Channel = NotifyChannel.Default } })).EnsureSuccessStatusCode();
+
+        await factory.WithDbAsync(async db =>
+        {
+            var ws = await db.Workspaces.SingleAsync(w => w.Id == shop.Ws);
+            Assert.Equal(NotifyChannel.Tg, ws.Notifications.Channel); // "follow the parent" has no meaning for the workspace itself
+        });
+    }
+
+    [Fact]
     public async Task A_file_that_does_not_pass_changes_nothing()
     {
         var rich = await RichAsync();

@@ -53,6 +53,17 @@ public class PostComposerTests
     }
 
     [Fact]
+    public void Spin_resolves_a_post_with_hundreds_of_groups_completely()
+    {
+        var text = string.Join(" ", Enumerable.Range(0, 300).Select(i => $"{{a{i}|b{i}}}"));
+        var spun = PostComposer.Spin(text, Always(0.0));
+        Assert.DoesNotContain("{", spun);
+        Assert.DoesNotContain("|", spun);
+        Assert.StartsWith("a0 a1 a2", spun);
+        Assert.EndsWith("a299", spun);
+    }
+
+    [Fact]
     public void Spin_leaves_the_code_tag_and_plain_braces_alone()
     {
         Assert.Equal("{{code}} {x} a", PostComposer.Spin("{{code}} {x} {a|b}", Always(0.0)));

@@ -149,7 +149,8 @@ public sealed class CreateScheduleCommandHandler(
 }
 
 /// <summary>
-/// Pauses or resumes a schedule. Pausing drops its posts that are still queued in the future; resuming makes the next
+/// Pauses or resumes a schedule. Pausing drops all its posts that are still waiting for a browser (queued, due or not,
+/// and held ones; never one being posted or finished); resuming makes the next
 /// fortnight again (and is refused, leaving the schedule paused, when the posts would not fit in the workspace's queue).
 /// </summary>
 public sealed record SetScheduleActiveCommand(Guid WorkspaceId, Guid ScheduleId, bool Active) : ICommand<ScheduleDto>;
@@ -168,7 +169,7 @@ public sealed class SetScheduleActiveCommandHandler(
         {
             if (!c.Active)
             {
-                posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(schedule.Id, now, ct));
+                posts.RemoveRange(await posts.ListOpenByScheduleAsync(schedule.Id, ct));
                 schedule.SetActive(false);
                 await uow.SaveChangesAsync(ct);
             }
@@ -187,19 +188,21 @@ public sealed class SetScheduleActiveCommandHandler(
     }
 }
 
-/// <summary>Deletes a schedule and its posts that are still queued in the future (what already went out stays in the history).</summary>
+/// <summary>
+/// Deletes a schedule and all its posts that are still waiting for a browser (queued, due or not, and held ones). What is
+/// being posted or already went out stays in the history.
+/// </summary>
 public sealed record DeleteScheduleCommand(Guid WorkspaceId, Guid ScheduleId) : ICommand<Unit>;
 
 public sealed class DeleteScheduleCommandHandler(
-    IWorkspaceRepository workspaces, IScheduleRepository schedules, IPostRepository posts, ICurrentUser current, IUnitOfWork uow,
-    TimeProvider clock)
+    IWorkspaceRepository workspaces, IScheduleRepository schedules, IPostRepository posts, ICurrentUser current, IUnitOfWork uow)
     : ICommandHandler<DeleteScheduleCommand, Unit>
 {
     public async Task<Unit> HandleAsync(DeleteScheduleCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var schedule = await schedules.GetAsync(ws.Id, c.ScheduleId, ct) ?? throw new NotFoundException("ตารางโพสต์", c.ScheduleId);
-        posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(schedule.Id, clock.GetUtcNow(), ct));
+        posts.RemoveRange(await posts.ListOpenByScheduleAsync(schedule.Id, ct));
         schedules.Remove(schedule);
         await uow.SaveChangesAsync(ct);
         return Unit.Value;

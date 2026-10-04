@@ -99,5 +99,18 @@ public sealed class RestoreBackupCommandValidator : AbstractValidator<RestoreBac
         RuleFor(x => x.Backup).Cascade(CascadeMode.Stop)
             .NotNull().WithMessage("ไม่พบข้อมูลไฟล์สำรอง")
             .Must(b => b.Collections is not null && b.LinkSets is not null && b.Schedules is not null)
-            .WithMessage("ไฟล์สำรองไม่สมบูรณ์ ต้องมีชุดโพสต์ ชุดลิงก์ และตารางโพสต์ (ใส่รายการว่างได้)");
+            .WithMessage("ไฟล์สำรองไม่สมบูรณ์ ต้องมีชุดโพสต์ ชุดลิงก์ และตารางโพสต์ (ใส่รายการว่างได้)")
+            .Must(HasNoHoles)
+            .WithMessage("ไฟล์สำรองไม่สมบูรณ์ มีรายการที่เป็นค่าว่าง (null) อยู่ในชุดโพสต์ โพสต์ ชุดลิงก์ ลิงก์ ตารางโพสต์ หรือกฎต่าง ๆ");
+
+    /// <summary>A hand-edited file may hold a null where a whole entry should be; the handler assumes every entry is there.</summary>
+    private static bool HasNoHoles(BackupDto b) =>
+        b.Collections.All(c => c is { Posts: not null, Settings: not null } && c.Posts.All(p => p is not null))
+        && b.LinkSets.All(s => s is { Links: not null } && s.Links.All(l => l is not null))
+        && b.Schedules.All(s => s is { Times: not null } && s.Times.All(t => t is not null)
+            && (s.Overrides is null || s.Overrides.Values.All(v => v is not null && v.All(t => t is not null))))
+        && (b.NotificationRules is null
+            || (b.NotificationRules.Events is not null && b.NotificationRules.Sets is not null
+                && b.NotificationRules.Sets.All(r => r is not null && (r.Groups is null || r.Groups.All(g => g is not null)))))
+        && (b.AutoReply is null || (b.AutoReply.Rules is not null && b.AutoReply.Rules.All(r => r is not null)));
 }

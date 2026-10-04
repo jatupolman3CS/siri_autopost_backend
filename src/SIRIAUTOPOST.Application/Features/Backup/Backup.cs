@@ -208,7 +208,7 @@ public sealed class RestoreBackupCommandHandler(
         await uow.ExecuteInTransactionAsync($"restore:{ws.Id:N}", async () =>
         {
             var oldSchedules = await schedules.ListAsync(ws.Id, ct);
-            foreach (var s in oldSchedules) posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(s.Id, now, ct));
+            foreach (var s in oldSchedules) posts.RemoveRange(await posts.ListOpenByScheduleAsync(s.Id, ct));
             schedules.RemoveRange(oldSchedules);
             collections.RemoveRange(await collections.ListAsync(ws.Id, ct));
             linkSets.RemoveRange(await linkSets.ListAsync(ws.Id, ct));
@@ -286,7 +286,8 @@ public sealed class RestoreBackupCommandHandler(
             Line = current.Line,
             CommandsOn = current.CommandsOn,
             CommandsUsers = current.CommandsUsers,
-            Channel = rules.Channel,
+            // "Default" means "follow the parent" and the workspace has none: a hand-edited file keeps the setting a new workspace has.
+            Channel = rules.Channel == NotifyChannel.Default ? NotifyChannel.Tg : rules.Channel,
             Events = rules.Events.ToSettings(),
         };
         foreach (var rule in rules.Sets ?? [])

@@ -82,12 +82,16 @@ public sealed class CreateLinkSetCommandHandler(
     }
 }
 
+/// <summary>
+/// Renames a set and says which account posts it and which others do. When that changes, the posts its schedules already
+/// queued for the future are removed (or, for an account that was only added, the schedules fill in what is missing).
+/// </summary>
 public sealed record UpdateLinkSetCommand(Guid WorkspaceId, Guid LinkSetId, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds)
     : ICommand<LinkSetDto>;
 
 public sealed class UpdateLinkSetCommandHandler(
     IWorkspaceRepository workspaces, ILinkSetRepository sets, IAccountRepository accounts, ISetLinkRepository links,
-    IScheduleRepository schedules, ICurrentUser current, IUnitOfWork uow)
+    IScheduleRepository schedules, ScheduleSync sync, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateLinkSetCommand, LinkSetDto>
 {
     public async Task<LinkSetDto> HandleAsync(UpdateLinkSetCommand c, CancellationToken ct = default)
@@ -96,7 +100,12 @@ public sealed class UpdateLinkSetCommandHandler(
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var accountIds = (c.AccountIds ?? []).Distinct().ToList();
         LinkSetAccounts.EnsureValid(c.PostAsAccountId, accountIds, await accounts.ListAsync(c.WorkspaceId, ct));
+        var (poster, others) = (set.PostAsAccountId, set.AccountIds.ToList());
         set.Update(c.Name, c.PostAsAccountId, accountIds);
+        var removed = others.Except(set.AccountIds).Any();
+        var added = set.AccountIds.Except(others).Any();
+        if (poster != set.PostAsAccountId || removed) await sync.SetChangedAsync(c.WorkspaceId, set.Id, dropQueued: true, clock.GetUtcNow(), ct);
+        else if (added) await sync.SetChangedAsync(c.WorkspaceId, set.Id, dropQueued: false, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
         return await LinkSetLookups.ViewAsync(set, links, schedules, ct);
     }
@@ -126,7 +135,8 @@ public sealed class DeleteLinkSetCommandHandler(
 public sealed record AddLinkCommand(Guid WorkspaceId, Guid LinkSetId, string? Name, string? Url, string? Code, int? DailyMax) : ICommand<SetLinkDto>;
 
 public sealed class AddLinkCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AddLinkCommand, SetLinkDto>
 {
     public async Task<SetLinkDto> HandleAsync(AddLinkCommand c, CancellationToken ct = default)
@@ -138,6 +148,7 @@ public sealed class AddLinkCommandHandler(
         var link = SetLink.Create(c.WorkspaceId, set.Id, c.Name, c.Url, c.Code, c.DailyMax ?? 0, clock.GetUtcNow(),
             existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1);
         links.Add(link);
+        if (link.IsUsable) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct); // the set's schedules make its posts at the next top-up
         await uow.SaveChangesAsync(ct);
         return SetLinkDto.From(link, link.IsValid && existing.Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
     }
@@ -146,8 +157,13 @@ public sealed class AddLinkCommandHandler(
 public sealed record UpdateLinkCommand(
     Guid WorkspaceId, Guid LinkSetId, Guid LinkId, string? Name, string? Url, string? Code, int DailyMax, bool Enabled) : ICommand<SetLinkDto>;
 
+/// <summary>
+/// Edits a link. A link that is switched off, or posts to another address or with another code, loses the posts its
+/// schedules queued for the future (they would go the old way); one that is switched on or newly usable gets its posts at
+/// the next top-up.
+/// </summary>
 public sealed class UpdateLinkCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IAccountRepository accounts,
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IAccountRepository accounts, ScheduleSync sync,
     IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateLinkCommand, SetLinkDto>
 {
@@ -157,9 +173,13 @@ public sealed class UpdateLinkCommandHandler(
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var link = await LinkSetLookups.RequireLinkAsync(links, c.WorkspaceId, set.Id, c.LinkId, ct);
         var (enabled, health) = (link.Enabled, link.Health);
+        var (usable, url, code) = (link.IsUsable, link.Url, link.Code);
         link.Edit(c.Name, c.Url, c.Code, c.DailyMax, c.Enabled);
-        if (link.Enabled != enabled || link.Health != health)
-            await LinkSetLookups.AnnounceAsync(set, link, accounts, events, clock.GetUtcNow(), ct);
+        var now = clock.GetUtcNow();
+        if (link.Enabled != enabled || link.Health != health) await LinkSetLookups.AnnounceAsync(set, link, accounts, events, now, ct);
+        var moved = link.Url != url || link.Code != code;
+        if (usable && (!link.IsUsable || moved)) await sync.LinksChangedAsync(c.WorkspaceId, set.Id, [link.Id], now, ct);
+        else if (link.IsUsable && !usable) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
         await uow.SaveChangesAsync(ct);
         var others = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
         return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
@@ -169,7 +189,8 @@ public sealed class UpdateLinkCommandHandler(
 public sealed record DeleteLinkCommand(Guid WorkspaceId, Guid LinkSetId, Guid LinkId) : ICommand<Unit>;
 
 public sealed class DeleteLinkCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ICurrentUser current, IUnitOfWork uow)
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<DeleteLinkCommand, Unit>
 {
     public async Task<Unit> HandleAsync(DeleteLinkCommand c, CancellationToken ct = default)
@@ -178,6 +199,7 @@ public sealed class DeleteLinkCommandHandler(
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var link = await LinkSetLookups.RequireLinkAsync(links, c.WorkspaceId, set.Id, c.LinkId, ct);
         links.Remove(link);
+        await sync.LinksChangedAsync(c.WorkspaceId, set.Id, [link.Id], clock.GetUtcNow(), ct); // its queued posts go with it
         await uow.SaveChangesAsync(ct);
         return Unit.Value;
     }
@@ -187,7 +209,7 @@ public sealed class DeleteLinkCommandHandler(
 public sealed record EnableLinkCommand(Guid WorkspaceId, Guid LinkSetId, Guid LinkId) : ICommand<SetLinkDto>;
 
 public sealed class EnableLinkCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IAccountRepository accounts,
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IAccountRepository accounts, ScheduleSync sync,
     IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<EnableLinkCommand, SetLinkDto>
 {
@@ -198,6 +220,7 @@ public sealed class EnableLinkCommandHandler(
         var link = await LinkSetLookups.RequireLinkAsync(links, c.WorkspaceId, set.Id, c.LinkId, ct);
         link.Enable();
         await LinkSetLookups.AnnounceAsync(set, link, accounts, events, clock.GetUtcNow(), ct);
+        if (link.IsUsable) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct); // back in the set: its schedules make its posts again
         await uow.SaveChangesAsync(ct);
         var others = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
         return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
@@ -211,7 +234,7 @@ public sealed class EnableLinkCommandHandler(
 public sealed record BulkAddLinksCommand(Guid WorkspaceId, Guid LinkSetId, string Text) : ICommand<BulkLinksResultDto>;
 
 public sealed class BulkAddLinksCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IScheduleRepository schedules,
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IScheduleRepository schedules, ScheduleSync sync,
     ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<BulkAddLinksCommand, BulkLinksResultDto>
 {
@@ -227,6 +250,7 @@ public sealed class BulkAddLinksCommandHandler(
         var (added, duplicates, recoded, invalid) = (0, 0, 0, 0);
         var order = existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1;
         var created = new List<SetLink>();
+        var recodedLinks = new List<Guid>();
         foreach (var raw in c.Text.Split('\n'))
         {
             var line = raw.Trim();
@@ -241,6 +265,7 @@ public sealed class BulkAddLinksCommandHandler(
                 if (code.Length > 0 && code != old.Code)
                 {
                     old.Edit(old.Name, old.Url, code, old.DailyMax, old.Enabled);
+                    recodedLinks.Add(old.Id);
                     recoded++;
                 }
                 continue;
@@ -252,6 +277,9 @@ public sealed class BulkAddLinksCommandHandler(
         }
         LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
         links.AddRange(created);
+        // A link with a new code posts differently from now on; new links are posted to at the next top-up.
+        if (recodedLinks.Count > 0) await sync.LinksChangedAsync(c.WorkspaceId, set.Id, recodedLinks, now, ct);
+        else if (created.Count > 0) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
         await uow.SaveChangesAsync(ct);
         return new BulkLinksResultDto(added, duplicates, recoded, invalid, await LinkSetLookups.ViewAsync(set, links, schedules, ct));
     }
@@ -276,7 +304,7 @@ public sealed record ImportAccountGroupsCommand(Guid WorkspaceId, Guid LinkSetId
 
 public sealed class ImportAccountGroupsCommandHandler(
     IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IAccountRepository accounts,
-    IScheduleRepository schedules, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IScheduleRepository schedules, ScheduleSync sync, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ImportAccountGroupsCommand, LinkSetDto>
 {
     public async Task<LinkSetDto> HandleAsync(ImportAccountGroupsCommand c, CancellationToken ct = default)
@@ -302,6 +330,7 @@ public sealed class ImportAccountGroupsCommandHandler(
         }
         LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
         links.AddRange(created);
+        if (created.Count > 0) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
         await uow.SaveChangesAsync(ct);
         return await LinkSetLookups.ViewAsync(set, links, schedules, ct);
     }
@@ -311,8 +340,8 @@ public sealed class ImportAccountGroupsCommandHandler(
 public sealed record ImportLinksCsvCommand(Guid WorkspaceId, IReadOnlyList<CsvLinkRow> Rows) : ICommand<CsvImportResultDto>;
 
 public sealed class ImportLinksCsvCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ICurrentUser current, IUnitOfWork uow,
-    TimeProvider clock)
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ImportLinksCsvCommand, CsvImportResultDto>
 {
     public const int MaxRows = 5000;
@@ -360,6 +389,7 @@ public sealed class ImportLinksCsvCommandHandler(
         foreach (var g in newLinks.GroupBy(l => l.LinkSetId))
             LinkSetLookups.EnsureRoomForLinks(urlsOf[g.Key].Count - g.Count(), g.Count());
         links.AddRange(newLinks);
+        foreach (var setId in newLinks.Select(l => l.LinkSetId).Distinct()) await sync.LinksAddedAsync(c.WorkspaceId, setId, ct);
         await uow.SaveChangesAsync(ct);
         return new CsvImportResultDto(addedLinks, createdSets, invalid);
     }

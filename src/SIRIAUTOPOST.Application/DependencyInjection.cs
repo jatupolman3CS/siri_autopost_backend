@@ -121,6 +121,7 @@ public static class DependencyInjection
         services.AddSingleton<TopUpThrottle>();
         services.AddScoped<ScheduleTopUp>();
         services.AddScoped<ScheduleViews>();
+        services.AddScoped<ScheduleSync>();
         services.AddQuery<GetSchedulesQuery, IReadOnlyList<ScheduleDto>, GetSchedulesQueryHandler>();
         services.AddCommand<CreateScheduleCommand, ScheduleCreatedDto, CreateScheduleCommandHandler>();
         services.AddCommand<SetScheduleActiveCommand, ScheduleDto, SetScheduleActiveCommandHandler>();

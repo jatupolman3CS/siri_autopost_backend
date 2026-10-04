@@ -47,7 +47,9 @@ public class EngineConcurrencyTests(ApiFactory factory)
             var future = all.Where(p => p.ScheduledAt > shop.Now).ToList();
             // Exactly the fortnight ahead, once: no slot twice.
             Assert.Equal(future.Count, future.Select(p => (p.LinkId, p.ScheduledAt.ToOffset(TimeSpan.FromMinutes(Bangkok)).ToString("yyyy-MM-ddTHH:mm"))).Distinct().Count());
-            Assert.InRange(future.Count, 12 * perDay, 14 * perDay);
+            // The targets of a slot follow each other minutes apart, so a slot that began before now (the evening's, when the test
+            // runs after midnight Bangkok time) can still have posts to come: allow one slot's worth on top of the fortnight.
+            Assert.InRange(future.Count, 12 * perDay, 14 * perDay + 60);
         }
     }
 

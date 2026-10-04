@@ -24,7 +24,11 @@ public static partial class PostComposer
 
     public static bool HasSpin(string? text) => SpinGroup().IsMatch(text ?? "");
 
-    /// <summary>Resolves every {a|b|c}, innermost first, picking an option uniformly.</summary>
+    /// <summary>
+    /// Resolves every {a|b|c}, innermost first, picking an option uniformly. Each round settles all the groups that have
+    /// no braces inside at once, so the rounds only count how deep the nesting goes (a post with hundreds of groups is
+    /// resolved completely, as the preview in the web app does).
+    /// </summary>
     public static string Spin(string? text, Func<double> rnd)
     {
         var s = text ?? "";
@@ -36,7 +40,7 @@ public static partial class PostComposer
                 var options = m.Groups[1].Value.Split('|');
                 var index = (int)Math.Floor(rnd() * options.Length);
                 return options[Math.Clamp(index, 0, options.Length - 1)];
-            }, 1);
+            });
         }
         return s;
     }

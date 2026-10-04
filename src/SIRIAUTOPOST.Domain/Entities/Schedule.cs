@@ -248,6 +248,12 @@ public class Schedule : Entity
         Cursor = Math.Max(0, cursor);
     }
 
+    /// <summary>
+    /// The next top-up looks at the whole horizon again (its posts are keyed by target and slot, so what is already queued
+    /// is kept and only what is missing is made). Rotate's position stays. For when what the schedule posts to changed.
+    /// </summary>
+    public void InvalidateGenerated() => GeneratedThrough = null;
+
     /// <summary>The next materialising run starts from today again (for a restored schedule).</summary>
     public void ResetGenerated()
     {

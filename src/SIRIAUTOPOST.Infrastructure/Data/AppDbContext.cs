@@ -46,6 +46,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
         b.Properties<Enum>().HaveConversion<string>().HaveMaxLength(30);
     }
 
+    public void DiscardChanges() => ChangeTracker.Clear();
+
     /// <summary>
     /// Saves, then hands the device events written in this save (now with their Seq) to the streams waiting for
     /// them. Publishing after the commit means a stream never announces something that was rolled back, and a

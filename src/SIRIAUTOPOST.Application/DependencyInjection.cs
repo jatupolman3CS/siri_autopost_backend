@@ -5,6 +5,7 @@ using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
+using SIRIAUTOPOST.Application.Features.Backup;
 using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.AutoReply;
 using SIRIAUTOPOST.Application.Features.Collections;
@@ -18,6 +19,7 @@ using SIRIAUTOPOST.Application.Features.Events;
 using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
+using SIRIAUTOPOST.Application.Features.Schedules;
 using SIRIAUTOPOST.Application.Features.Workspaces;
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.Interfaces;
@@ -111,6 +113,19 @@ public static class DependencyInjection
         services.AddCommand<ImportAccountGroupsCommand, LinkSetDto, ImportAccountGroupsCommandHandler>();
         services.AddCommand<ImportLinksCsvCommand, CsvImportResultDto, ImportLinksCsvCommandHandler>();
         services.AddQuery<GetAccountGroupsQuery, IReadOnlyList<GroupLinkDto>, GetAccountGroupsQueryHandler>();
+
+        // Schedule engine: schedules, the materializer that queues their posts, test posts, backup and restore
+        services.AddScoped<ScheduleMaterializer>();
+        services.AddScoped<ScheduleTopUp>();
+        services.AddScoped<ScheduleViews>();
+        services.AddQuery<GetSchedulesQuery, IReadOnlyList<ScheduleDto>, GetSchedulesQueryHandler>();
+        services.AddCommand<CreateScheduleCommand, ScheduleCreatedDto, CreateScheduleCommandHandler>();
+        services.AddCommand<SetScheduleActiveCommand, ScheduleDto, SetScheduleActiveCommandHandler>();
+        services.AddCommand<DeleteScheduleCommand, Unit, DeleteScheduleCommandHandler>();
+        services.AddQuery<GetBestTimesQuery, IReadOnlyList<string>, GetBestTimesQueryHandler>();
+        services.AddCommand<CreateTestPostCommand, PostDto, CreateTestPostCommandHandler>();
+        services.AddQuery<GetBackupQuery, BackupDto, GetBackupQueryHandler>();
+        services.AddCommand<RestoreBackupCommand, RestoreResultDto, RestoreBackupCommandHandler>();
 
         // Notifications: sends nothing until the infrastructure registers the real dispatcher
         services.TryAddSingleton<INotificationDispatcher, NullNotificationDispatcher>();

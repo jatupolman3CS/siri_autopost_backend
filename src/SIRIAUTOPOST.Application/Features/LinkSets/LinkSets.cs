@@ -233,8 +233,8 @@ public sealed class BulkAddLinksCommandHandler(
             if (line.Length == 0) continue;
             var parts = line.Split('|').Select(p => p.Trim()).ToArray();
             var url = FacebookGroupUrl.Normalize(parts[0]);
-            if (url is null) { invalid++; continue; }
             var code = parts.Length > 1 ? parts[1] : "";
+            if (url is null || !SetLink.Fits(url, code)) { invalid++; continue; }
             if (byUrl.TryGetValue(url, out var old))
             {
                 duplicates++;
@@ -295,9 +295,9 @@ public sealed class ImportAccountGroupsCommandHandler(
         var created = new List<SetLink>();
         foreach (var pick in c.Urls.Select(u => FacebookGroupUrl.Normalize(u)))
         {
-            if (pick is null || !groups.TryGetValue(pick, out var group) || !have.Add(pick)) continue;
+            if (pick is null || !SetLink.Fits(pick, null) || !groups.TryGetValue(pick, out var group) || !have.Add(pick)) continue;
             // The extension names a group by its address when it has no name: let the address give the name instead.
-            var name = group.Name == group.Url ? null : group.Name;
+            var name = group.Name == group.Url || group.Name.Length > SetLink.MaxNameLength ? null : group.Name;
             created.Add(SetLink.Create(c.WorkspaceId, set.Id, name, pick, null, 0, now, order++));
         }
         LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
@@ -335,7 +335,12 @@ public sealed class ImportLinksCsvCommandHandler(
         {
             var setName = (row.Set ?? "").Trim();
             var url = FacebookGroupUrl.Normalize(row.Url);
-            if (setName.Length == 0 || setName.Length > LinkSet.MaxNameLength || url is null) { invalid++; continue; }
+            var name = (row.Name ?? "").Trim();
+            if (setName.Length == 0 || setName.Length > LinkSet.MaxNameLength || url is null || !SetLink.Fits(url, row.Code) || name.Length > SetLink.MaxNameLength)
+            {
+                invalid++;
+                continue;
+            }
             if (!byName.TryGetValue(setName, out var set))
             {
                 set = LinkSet.Create(c.WorkspaceId, setName, null, now, nextSet++);
@@ -347,7 +352,7 @@ public sealed class ImportLinksCsvCommandHandler(
             if (!urls.Add(url)) continue; // already in the set: skipped, not an error
             var order = orders.GetValueOrDefault(set.Id);
             orders[set.Id] = order + 1;
-            newLinks.Add(SetLink.Create(c.WorkspaceId, set.Id, row.Name, url, row.Code, 0, now, order));
+            newLinks.Add(SetLink.Create(c.WorkspaceId, set.Id, name, url, row.Code, 0, now, order));
             addedLinks++;
         }
         if (all.Count + createdSets > LinkSet.MaxPerWorkspace)

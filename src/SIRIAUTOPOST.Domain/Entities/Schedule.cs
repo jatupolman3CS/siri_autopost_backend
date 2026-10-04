@@ -75,21 +75,27 @@ public class Schedule : Entity
         if (!Enum.IsDefined(mode)) throw new DomainException("รูปแบบตารางไม่ถูกต้อง");
         if (!Enum.IsDefined(order)) throw new DomainException("ลำดับโพสต์ไม่ถูกต้อง");
         if (utcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
-        if (everyHours is < 1 or > 24) throw new DomainException("ความถี่ต้องอยู่ระหว่าง 1–24 ชั่วโมง");
-        if (dripCount is < 1 or > 12) throw new DomainException("จำนวนโพสต์ต่อวันต้องอยู่ระหว่าง 1–12");
         if (!BumpOptions.Contains(bumpHours)) throw new DomainException("ตัวเลือกดันโพสต์ไม่ถูกต้อง");
         if (!AutoDeleteOptions.Contains(autoDeleteDays)) throw new DomainException("ตัวเลือกลบโพสต์อัตโนมัติไม่ถูกต้อง");
+
+        // Fields that belong to another mode are not checked: they fall back to their defaults when they do not make sense.
+        var interval = mode == ScheduleMode.Interval;
+        var drip = mode == ScheduleMode.Drip;
+        if (interval && everyHours is < 1 or > 24) throw new DomainException("ความถี่ต้องอยู่ระหว่าง 1–24 ชั่วโมง");
+        if (drip && dripCount is < 1 or > 12) throw new DomainException("จำนวนโพสต์ต่อวันต้องอยู่ระหว่าง 1–12");
+        if (!interval && everyHours is < 1 or > 24) everyHours = 6;
+        if (!drip && dripCount is < 1 or > 12) dripCount = 3;
 
         var cleanTimes = CleanTimes(times ?? []);
         if (cleanTimes.Count > MaxTimes) throw new DomainException($"เลือกเวลาได้ไม่เกิน {MaxTimes} เวลา");
         if (mode is ScheduleMode.Daily or ScheduleMode.Weekdays or ScheduleMode.Weekend && cleanTimes.Count == 0)
             throw new DomainException("เลือกเวลาโพสต์อย่างน้อย 1 เวลา");
 
-        var first = Time(firstTime, "09:00", "เวลาเริ่มต้นไม่ถูกต้อง");
-        var once = Time(onceTime, "14:00", "เวลาโพสต์ไม่ถูกต้อง");
-        var from = Time(dripFrom, "09:00", "เวลาเริ่มช่วงไม่ถูกต้อง");
-        var to = Time(dripTo, "21:00", "เวลาสิ้นสุดช่วงไม่ถูกต้อง");
-        if (mode == ScheduleMode.Drip && TimeOfDay.Parse(from)! > TimeOfDay.Parse(to)!)
+        var first = Time(firstTime, "09:00", "เวลาเริ่มต้นไม่ถูกต้อง", interval);
+        var once = Time(onceTime, "14:00", "เวลาโพสต์ไม่ถูกต้อง", mode == ScheduleMode.Once);
+        var from = Time(dripFrom, "09:00", "เวลาเริ่มช่วงไม่ถูกต้อง", drip);
+        var to = Time(dripTo, "21:00", "เวลาสิ้นสุดช่วงไม่ถูกต้อง", drip);
+        if (drip && TimeOfDay.Parse(from)! > TimeOfDay.Parse(to)!)
             throw new DomainException("เวลาเริ่มช่วงต้องไม่เกินเวลาสิ้นสุด");
 
         return new Schedule
@@ -205,10 +211,11 @@ public class Schedule : Entity
         Cursor = 0;
     }
 
-    private static string Time(string? value, string fallback, string error)
+    private static string Time(string? value, string fallback, string error, bool relevant)
     {
         var v = string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
-        return TimeOfDay.Parse(v) is { } m ? TimeOfDay.Format(m) : throw new DomainException(error);
+        if (TimeOfDay.Parse(v) is { } m) return TimeOfDay.Format(m);
+        return relevant ? throw new DomainException(error) : fallback;
     }
 
     private static List<string> CleanTimes(IEnumerable<string> times)

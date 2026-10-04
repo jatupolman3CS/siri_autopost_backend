@@ -92,6 +92,10 @@ public class SetLink : Entity
 
     public bool IsValid => FacebookGroupUrl.IsValid(Url);
 
+    /// <summary>Would this normalised address and code fit? (Bulk and CSV imports count a row that does not as invalid.)</summary>
+    public static bool Fits(string normalizedUrl, string? code) =>
+        normalizedUrl.Length <= MaxUrlLength && (code ?? "").Trim().Length <= MaxCodeLength;
+
     /// <summary>The group's slug, empty when the address is not valid.</summary>
     public string Slug => FacebookGroupUrl.Slug(Url) ?? "";
 
@@ -154,7 +158,12 @@ public class SetLink : Entity
         var u = normalized ?? raw;
         var c = (code ?? "").Trim();
         var n = (name ?? "").Trim();
-        if (n.Length == 0 && normalized is not null) n = FacebookGroupUrl.NameFromSlug(FacebookGroupUrl.Slug(normalized)!);
+        if (n.Length == 0 && normalized is not null)
+        {
+            // A name made from the address is cut to fit rather than refused: the person did not type it.
+            n = FacebookGroupUrl.NameFromSlug(FacebookGroupUrl.Slug(normalized)!);
+            if (n.Length > MaxNameLength) n = n[..MaxNameLength];
+        }
         if (u.Length > MaxUrlLength) throw new DomainException($"ลิงก์ยาวเกิน {MaxUrlLength} ตัวอักษร");
         if (n.Length > MaxNameLength) throw new DomainException($"ชื่อกลุ่มยาวเกิน {MaxNameLength} ตัวอักษร");
         if (c.Length > MaxCodeLength) throw new DomainException($"รหัสกลุ่มยาวเกิน {MaxCodeLength} ตัวอักษร");

@@ -241,9 +241,9 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
         var ids = linkIds.Distinct().ToArray();
         var result = new Dictionary<Guid, IReadOnlyList<Guid>>();
         if (ids.Length == 0 || take <= 0) return result;
-        // The newest N per link in one query. Statuses are stored by name.
+        // The newest N per link in one query. Statuses are stored by name; column names follow the snake_case convention.
         var rows = await db.Database.SqlQuery<RecentUse>($"""
-            SELECT t.link_id AS "LinkId", t.collection_post_id AS "CollectionPostId"
+            SELECT t.link_id, t.collection_post_id
             FROM (
                 SELECT p.link_id, p.collection_post_id,
                        row_number() OVER (PARTITION BY p.link_id ORDER BY p.scheduled_at DESC, p.id) AS rn

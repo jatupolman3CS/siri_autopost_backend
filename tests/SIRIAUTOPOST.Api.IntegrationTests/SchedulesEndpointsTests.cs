@@ -498,6 +498,23 @@ public class SchedulesEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task Claims_that_arrive_together_after_days_have_passed_top_up_once_and_nobody_gets_an_error()
+    {
+        using var shop = await factory.ShopAsync(links: 2);
+        var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
+        var created = await shop.CreateScheduleAsync(Daily(slot));
+        shop.Wait(TimeSpan.FromDays(3));
+
+        // Eight claims race to fill the same three days: the unique index lets one of them win each slot.
+        var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(_ => shop.Device.PostAsync("/api/device/jobs/claim", null)));
+
+        Assert.All(results, r => Assert.True(r.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.OK, r.StatusCode.ToString()));
+        var added = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.ScheduledAt > created.LastAt).ToList();
+        Assert.Equal(3 * 2, added.Count);
+        Assert.Equal(6, added.Select(p => (p.LinkId, LocalDay(p.ScheduledAt))).Distinct().Count());
+    }
+
+    [Fact]
     public async Task A_schedule_that_is_paused_is_not_topped_up_and_a_once_schedule_whose_day_has_passed_is_switched_off()
     {
         using var shop = await factory.ShopAsync(links: 1);

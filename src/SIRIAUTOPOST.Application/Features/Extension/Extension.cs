@@ -105,7 +105,7 @@ public sealed record SendDeviceCommandCommand(Guid WorkspaceId, Guid DeviceId, s
 
 public sealed class SendDeviceCommandCommandHandler(
     IWorkspaceRepository workspaces, IDeviceRepository devices, IExtensionRepository ext, IDeviceEventRepository events,
-    IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IUserRepository users, INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SendDeviceCommandCommand, DeviceCommandDto>
 {
     public async Task<DeviceCommandDto> HandleAsync(SendDeviceCommandCommand c, CancellationToken ct = default)
@@ -121,6 +121,11 @@ public sealed class SendDeviceCommandCommandHandler(
         ext.Add(cmd);
         events.Add(CommandEvents.Of(cmd, now)); // wakes a device waiting in a long sync
         await uow.SaveChangesAsync(ct);
+        // Starting and stopping posting from the web is a "start / stop" notification (best effort, never fails the command).
+        if (c.Cmd is "start" or "stop")
+            await notifier.NotifyAsync(
+                NotifyEvent.StartStop, ws.Id, null, null,
+                c.Cmd == "start" ? $"สั่งเริ่มโพสต์อัตโนมัติจากเว็บ: เครื่อง {device.Name}" : $"สั่งหยุดโพสต์อัตโนมัติจากเว็บ: เครื่อง {device.Name}", ct);
         return DeviceCommandDto.From(cmd);
     }
 }

@@ -6,8 +6,11 @@ using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.AutoReply;
 using SIRIAUTOPOST.Application.Features.Collections;
 using SIRIAUTOPOST.Application.Features.LinkSets;
+using SIRIAUTOPOST.Application.Features.Notifications;
+using SIRIAUTOPOST.Application.Features.Reports;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
@@ -71,6 +74,18 @@ public static class DependencyInjection
         services.AddCommand<UploadMediaCommand, MediaDto, UploadMediaCommandHandler>();
         services.AddQuery<GetSnippetsQuery, IReadOnlyList<SnippetDto>, GetSnippetsQueryHandler>();
         services.AddCommand<CreateSnippetCommand, SnippetDto, CreateSnippetCommandHandler>();
+
+        // Notifications (Telegram / LINE), auto-reply rules and reports
+        services.AddQuery<GetNotificationsQuery, NotificationSettingsDto, GetNotificationsQueryHandler>();
+        services.AddCommand<UpdateNotificationsCommand, NotificationSettingsDto, UpdateNotificationsCommandHandler>();
+        services.AddCommand<SendTestNotificationCommand, NotifyTestResultDto, SendTestNotificationCommandHandler>();
+        services.AddCommand<FindTelegramChatsCommand, TelegramChatsDto, FindTelegramChatsCommandHandler>();
+        services.AddQuery<GetAutoReplyQuery, AutoReplyDto, GetAutoReplyQueryHandler>();
+        services.AddCommand<UpdateAutoReplyCommand, AutoReplyDto, UpdateAutoReplyCommandHandler>();
+        services.AddScoped<ReportComposer>();
+        services.AddQuery<GetReportQuery, ReportDto, GetReportQueryHandler>();
+        services.AddCommand<ShareReportCommand, ReportShareDto, ShareReportCommandHandler>();
+        services.AddQuery<GetSharedReportQuery, SharedReportDto, GetSharedReportQueryHandler>();
 
         // Collections ("ชุดโพสต์")
         services.AddQuery<GetCollectionsQuery, IReadOnlyList<CollectionDto>, GetCollectionsQueryHandler>();

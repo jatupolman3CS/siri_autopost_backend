@@ -1,5 +1,6 @@
 using System.Globalization;
 using FluentValidation;
+using FluentValidation.Results;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Backup;
 using SIRIAUTOPOST.Application.Features.Schedules;
@@ -62,10 +63,13 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
     }
 }
 
+/// <summary>Checks the request; its errors carry the form's own field names ("times", "startDate"), not "request.times".</summary>
 public sealed class CreateScheduleCommandValidator : AbstractValidator<CreateScheduleCommand>
 {
-    public CreateScheduleCommandValidator() =>
-        RuleFor(x => x.Request).Cascade(CascadeMode.Stop).NotNull().WithMessage(Messages.BadValue).SetValidator(new SaveScheduleRequestValidator());
+    public override Task<ValidationResult> ValidateAsync(ValidationContext<CreateScheduleCommand> context, CancellationToken cancellation = default) =>
+        context.InstanceToValidate.Request is { } request
+            ? new SaveScheduleRequestValidator().ValidateAsync(request, cancellation)
+            : Task.FromResult(new ValidationResult([new ValidationFailure("request", Messages.BadValue)]));
 }
 
 public sealed class CreateTestPostCommandValidator : AbstractValidator<CreateTestPostCommand>

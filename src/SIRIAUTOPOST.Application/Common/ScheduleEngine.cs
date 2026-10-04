@@ -129,7 +129,8 @@ public sealed class ScheduleMaterializer(
                 for (var i = 0; i < members.Count; i++)
                 {
                     // The ones of a slot follow each other: the first at the slot, the rest after the smart delay.
-                    if (i > 0) at = at.AddMinutes(anti.Min + random.NextDouble() * (anti.Max - anti.Min));
+                    // (whole seconds: the database keeps microseconds and a time should read back as it was made)
+                    if (i > 0) at = at.AddSeconds(Math.Round((anti.Min + random.NextDouble() * (anti.Max - anti.Min)) * 60));
                     if (at > now && !existing.Contains((members[i].TargetKey, slotKey))) fresh.Add((members[i], at));
                 }
                 if (fresh.Count == 0) continue;

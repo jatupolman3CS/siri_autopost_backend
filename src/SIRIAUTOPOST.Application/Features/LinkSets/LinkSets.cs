@@ -139,7 +139,7 @@ public sealed class AddLinkCommandHandler(
             existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1);
         links.Add(link);
         await uow.SaveChangesAsync(ct);
-        return SetLinkDto.From(link, link.IsValid && existing.Any(l => l.Url == link.Url));
+        return SetLinkDto.From(link, link.IsValid && existing.Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
     }
 }
 
@@ -162,7 +162,7 @@ public sealed class UpdateLinkCommandHandler(
             await LinkSetLookups.AnnounceAsync(set, link, accounts, events, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
         var others = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
-        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => l.Url == link.Url));
+        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
     }
 }
 
@@ -200,7 +200,7 @@ public sealed class EnableLinkCommandHandler(
         await LinkSetLookups.AnnounceAsync(set, link, accounts, events, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
         var others = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
-        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => l.Url == link.Url));
+        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
     }
 }
 
@@ -221,7 +221,7 @@ public sealed class BulkAddLinksCommandHandler(
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var now = clock.GetUtcNow();
         var existing = (await links.ListBySetAsync(c.WorkspaceId, set.Id, ct)).ToList();
-        var byUrl = new Dictionary<string, SetLink>();
+        var byUrl = new Dictionary<string, SetLink>(FacebookGroupUrl.Comparer);
         foreach (var l in existing) byUrl.TryAdd(l.Url, l);
 
         var (added, duplicates, recoded, invalid) = (0, 0, 0, 0);
@@ -284,12 +284,12 @@ public sealed class ImportAccountGroupsCommandHandler(
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var account = await accounts.GetAsync(c.WorkspaceId, c.AccountId, ct) ?? throw new NotFoundException("บัญชี", c.AccountId);
-        var groups = new Dictionary<string, GroupLink>();
+        var groups = new Dictionary<string, GroupLink>(FacebookGroupUrl.Comparer);
         foreach (var g in account.GroupLinks)
             if (FacebookGroupUrl.Normalize(g.Url) is { } url) groups.TryAdd(url, g);
 
         var existing = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
-        var have = existing.Select(l => l.Url).ToHashSet();
+        var have = existing.Select(l => l.Url).ToHashSet(FacebookGroupUrl.Comparer);
         var now = clock.GetUtcNow();
         var order = existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1;
         var created = new List<SetLink>();
@@ -325,7 +325,7 @@ public sealed class ImportLinksCsvCommandHandler(
         var byName = new Dictionary<string, LinkSet>();
         foreach (var s in all) byName.TryAdd(s.Name, s);
         var existingLinks = (await links.ListAsync(c.WorkspaceId, ct)).GroupBy(l => l.LinkSetId).ToList();
-        var urlsOf = existingLinks.ToDictionary(g => g.Key, g => g.Select(l => l.Url).ToHashSet());
+        var urlsOf = existingLinks.ToDictionary(g => g.Key, g => g.Select(l => l.Url).ToHashSet(FacebookGroupUrl.Comparer));
         var orders = existingLinks.ToDictionary(g => g.Key, g => g.Max(l => l.SortOrder) + 1);
         var nextSet = await sets.MaxSortOrderAsync(c.WorkspaceId, ct) + 1;
 
@@ -348,7 +348,7 @@ public sealed class ImportLinksCsvCommandHandler(
                 byName[setName] = set;
                 createdSets++;
             }
-            var urls = urlsOf.TryGetValue(set.Id, out var u) ? u : urlsOf[set.Id] = [];
+            var urls = urlsOf.TryGetValue(set.Id, out var u) ? u : urlsOf[set.Id] = new HashSet<string>(FacebookGroupUrl.Comparer);
             if (!urls.Add(url)) continue; // already in the set: skipped, not an error
             var order = orders.GetValueOrDefault(set.Id);
             orders[set.Id] = order + 1;

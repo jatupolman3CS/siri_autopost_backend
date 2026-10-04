@@ -271,7 +271,7 @@ public sealed class RestoreBackupCommandHandler(
                 continue;
             }
             var url = FacebookGroupUrl.Normalize(k) ?? k;
-            if (links.FirstOrDefault(l => l.Url == url) is { } link) result[Schedule.LinkKey(link.Id)] = times;
+            if (links.FirstOrDefault(l => FacebookGroupUrl.Same(l.Url, url)) is { } link) result[Schedule.LinkKey(link.Id)] = times;
         }
         return result;
     }
@@ -297,7 +297,7 @@ public sealed class RestoreBackupCommandHandler(
             foreach (var group in rule.Groups ?? [])
             {
                 var url = FacebookGroupUrl.Normalize(group.Url) ?? (group.Url ?? "").Trim();
-                if (linksOfSet[set.Id].FirstOrDefault(l => l.Url == url) is { } link)
+                if (linksOfSet[set.Id].FirstOrDefault(l => FacebookGroupUrl.Same(l.Url, url)) is { } link)
                     own.Groups[link.Id] = new GroupNotifyRule { Channel = group.Channel, Events = group.Events?.ToSettings() };
             }
             result.Sets[set.Id] = own;

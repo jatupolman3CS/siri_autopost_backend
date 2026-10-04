@@ -467,6 +467,22 @@ public class ScheduleMaterializerTests
     }
 
     [Fact]
+    public async Task The_same_group_spelled_in_another_case_gets_one_post_per_slot_not_two()
+    {
+        var w = new SchedulingWorld(links: 0, posts: 1);
+        w.AddLink("ABC", "C1");
+        w.AddLink("abc", "C2"); // the same group: Facebook does not tell the two spellings apart
+        w.AddLink("other", "C3");
+        var s = w.NewSchedule();
+
+        var result = await w.RunAsync(s, Today, Today);
+
+        Assert.Equal(2, result.Created); // today's 18:00, two groups
+        Assert.Equal(["C1", "C3"], w.Added.Select(p => p.Code).Order());
+        Assert.Equal("https://www.facebook.com/groups/ABC", w.Added.First(p => p.Code == "C1").TargetUrl); // the first one keeps its spelling
+    }
+
+    [Fact]
     public async Task A_run_that_would_take_the_workspace_over_its_queue_limit_is_refused_and_says_how_many_are_queued()
     {
         var w = new SchedulingWorld(links: 2, posts: 1);

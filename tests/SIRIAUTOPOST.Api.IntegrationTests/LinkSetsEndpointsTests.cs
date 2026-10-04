@@ -87,6 +87,75 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task Addresses_that_differ_only_in_case_are_one_group_whichever_way_they_come_in()
+    {
+        var (client, _, ws) = await factory.SignUpAsync();
+        var (device, pair) = await factory.PairDeviceAsync(client, ws);
+        (await device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "ตลาด", url = "https://www.facebook.com/groups/MARKET" } } })).EnsureSuccessStatusCode();
+        var set = await client.CreateLinkSetAsync(ws);
+
+        // One at a time: the later one is flagged, and both keep the case they were typed in.
+        var first = await client.AddLinkAsync(ws, set.Id, "facebook.com/groups/ABC", "A");
+        var second = await client.AddLinkAsync(ws, set.Id, "facebook.com/groups/abc", "B");
+        Assert.Equal(("https://www.facebook.com/groups/ABC", false), (first.Url, first.Duplicate));
+        Assert.Equal(("https://www.facebook.com/groups/abc", true), (second.Url, second.Duplicate));
+        Assert.Equal([false, true], (await client.LinkSetsAsync(ws)).Single().Links.Select(l => l.Duplicate));
+
+        // Editing a link into a copy of another one in another case flags it too.
+        var third = await client.AddLinkAsync(ws, set.Id, "facebook.com/groups/third");
+        var edited = await (await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}/links/{third.Id}",
+            new { name = "สาม", url = "facebook.com/groups/aBc", code = "", dailyMax = 0, enabled = true }, Json)).ReadAsync<SetLinkDto>();
+        Assert.True(edited.Duplicate);
+
+        // Pasted: a known address in another case is a duplicate that recodes it; so is a repeat inside the paste.
+        var bulk = await (await client.PostAsJsonAsync($"{Sets(ws)}/{set.Id}/links/bulk",
+            new { text = "facebook.com/groups/aBC | NEW\nfacebook.com/groups/Zed | Z1\nfacebook.com/groups/zED | Z2" }, Json)).ReadAsync<BulkLinksResultDto>();
+        Assert.Equal((1, 2, 2, 0), (bulk.Added, bulk.Duplicates, bulk.Recoded, bulk.Invalid));
+        Assert.Equal("NEW", bulk.Set.Links[0].Code); // the first of the two spellings of abc
+        Assert.Equal(("https://www.facebook.com/groups/Zed", "Z2"), (bulk.Set.Links[^1].Url, bulk.Set.Links[^1].Code));
+
+        // CSV rows are skipped the same way, in the set and inside the file.
+        var csv = await (await client.PostAsJsonAsync($"{Sets(ws)}/import-csv", new
+        {
+            rows = new[]
+            {
+                new { set = "ชุดใหม่", name = "", url = "facebook.com/groups/Row", code = "" },
+                new { set = "ชุดใหม่", name = "", url = "facebook.com/groups/ROW", code = "" },
+            },
+        }, Json)).ReadAsync<CsvImportResultDto>();
+        Assert.Equal((1, 1, 0), (csv.Links, csv.Sets, csv.Invalid));
+
+        // Importing the browser's groups: a group the set has in another case is not added again, and one it lacks is found in any case.
+        var inOtherCase = await (await client.PostAsJsonAsync($"{Sets(ws)}/{set.Id}/links/import", new { accountId = pair.AccountId, urls = new[] { "https://www.facebook.com/groups/market" } }, Json))
+            .ReadAsync<LinkSetDto>();
+        Assert.Equal("https://www.facebook.com/groups/market", inOtherCase.Links[^1].Url); // synced as MARKET, picked as market: found
+        var again = await (await client.PostAsJsonAsync($"{Sets(ws)}/{set.Id}/links/import", new { accountId = pair.AccountId, urls = new[] { "https://www.facebook.com/groups/MARKET" } }, Json))
+            .ReadAsync<LinkSetDto>();
+        Assert.Equal(inOtherCase.Links.Count, again.Links.Count); // already there, in the other case
+    }
+
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    [InlineData("-")]
+    [InlineData("_.-")]
+    public async Task A_slug_with_no_letter_or_digit_is_not_a_group(string slug)
+    {
+        var (client, _, ws) = await factory.SignUpAsync();
+        var set = await client.CreateLinkSetAsync(ws);
+
+        var link = await client.AddLinkAsync(ws, set.Id, $"https://www.facebook.com/groups/{slug}");
+
+        Assert.False(link.Valid);
+        Assert.Equal($"https://www.facebook.com/groups/{slug}", link.Url); // kept as typed, shown red, never used
+        var bulk = await (await client.PostAsJsonAsync($"{Sets(ws)}/{set.Id}/links/bulk", new { text = $"facebook.com/groups/{slug} | X" }, Json)).ReadAsync<BulkLinksResultDto>();
+        Assert.Equal((0, 1), (bulk.Added, bulk.Invalid));
+        var csv = await (await client.PostAsJsonAsync($"{Sets(ws)}/import-csv", new { rows = new[] { new { set = "ใหม่", name = "", url = $"facebook.com/groups/{slug}", code = "" } } }, Json))
+            .ReadAsync<CsvImportResultDto>();
+        Assert.Equal((0, 1), (csv.Links, csv.Invalid));
+    }
+
+    [Fact]
     public async Task A_link_is_edited_switched_off_and_enabled_again()
     {
         var (client, _, ws) = await factory.SignUpAsync();

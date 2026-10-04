@@ -1,6 +1,7 @@
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Services;
 using SIRIAUTOPOST.Domain.ValueObjects;
 
 namespace SIRIAUTOPOST.Application.DTOs;
@@ -72,7 +73,7 @@ public sealed record LinkSetDto(
 {
     public static LinkSetDto From(LinkSet set, IReadOnlyList<SetLink> links, int scheduleCount)
     {
-        var seen = new HashSet<string>();
+        var seen = new HashSet<string>(FacebookGroupUrl.Comparer); // /groups/ABC and /groups/abc are one group
         var dtos = links.Select(l => SetLinkDto.From(l, l.IsValid && !seen.Add(l.Url))).ToList();
         return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount);
     }

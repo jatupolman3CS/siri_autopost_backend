@@ -29,7 +29,7 @@ public static class ScheduleTargets
         var poster = LinkSetAccounts.PostingAccount(set, accounts);
         var linkAccount = poster is { IsConnected: true, Platform: Platform.Fb } ? poster : null;
         var list = new List<ScheduleTarget>();
-        var seen = new HashSet<string>();
+        var seen = new HashSet<string>(FacebookGroupUrl.Comparer);
         foreach (var link in links)
         {
             if (!link.IsUsable || !seen.Add(link.Url)) continue;

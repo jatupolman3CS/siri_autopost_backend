@@ -186,6 +186,24 @@ public class SchedulesEndpointsTests(ApiFactory factory)
         Assert.All(await shop.PostsAsync(created.Schedule.Id), p => Assert.True(string.CompareOrdinal(LocalDay(p.ScheduledAt), start) >= 0));
     }
 
+    [Fact]
+    public async Task A_group_listed_twice_in_another_case_gets_one_post_per_slot()
+    {
+        using var shop = await factory.ShopAsync(links: 1);
+        await shop.Owner.AddLinkAsync(shop.Ws, shop.Set.Id, "https://www.facebook.com/groups/CaseGroup", "C1");
+        await shop.Owner.AddLinkAsync(shop.Ws, shop.Set.Id, "https://www.facebook.com/groups/casegroup", "C2"); // the same group
+        await shop.Owner.AddLinkAsync(shop.Ws, shop.Set.Id, "https://www.facebook.com/groups/CASEGROUP", "C3"); // and again
+        var (slot, ahead) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
+
+        var created = await shop.CreateScheduleAsync(Daily(slot));
+
+        Assert.Equal(2, created.Schedule.TargetCount); // the first link and the first spelling of CaseGroup
+        Assert.Equal((ahead ? 14 : 13) * 2, created.Created);
+        var posts = await shop.PostsAsync(created.Schedule.Id);
+        Assert.Equal(["C0", "C1"], posts.Select(p => p.Code).Distinct().Order()); // the shop's own link and the first spelling
+        Assert.DoesNotContain(posts, p => p.Code is "C2" or "C3");
+    }
+
     [Theory]
     [InlineData("weekdays")]
     [InlineData("weekend")]

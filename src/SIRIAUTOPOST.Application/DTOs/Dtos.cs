@@ -195,12 +195,15 @@ public sealed record ExtensionStateDto(bool Online, int Affected);
 /// <param name="Online">Called in within the last 100 seconds.</param>
 /// <param name="AccountId">The Facebook account this browser posts with.</param>
 /// <param name="JobsPaused">Set in the web app: the browser takes no posts scheduled on the web.</param>
+/// <param name="AutoPausedUntil">The engine paused the browser itself (Facebook blocked it, or posts kept failing) until then; null when it is not paused.</param>
+/// <param name="AutoPauseReason">Why, in Thai, while <paramref name="AutoPausedUntil"/> is set.</param>
 public sealed record DeviceDto(
     Guid Id, string Name, string Browser, string Version, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online, Guid? AccountId,
-    bool JobsPaused)
+    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null)
 {
     public static DeviceDto From(Device d, Guid? accountId, DateTimeOffset now) =>
-        new(d.Id, d.Name, d.Browser, d.Version, d.CreatedAt, d.LastSeenAt, d.IsOnline(now), accountId, d.JobsPaused);
+        new(d.Id, d.Name, d.Browser, d.Version, d.CreatedAt, d.LastSeenAt, d.IsOnline(now), accountId, d.JobsPaused,
+            d.IsAutoPaused(now) ? d.AutoPausedUntil : null, d.IsAutoPaused(now) ? d.AutoPauseReason : null);
 }
 
 /// <param name="MaxDevices">The owner's plan limit; null = unlimited.</param>
@@ -210,10 +213,11 @@ public sealed record PairingCodeDto(string Code, DateTimeOffset ExpiresAt, int? 
 public sealed record PairResultDto(string DeviceKey, Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid AccountId);
 
 /// <param name="Online">False while the offline simulation holds the workspace offline: take no jobs.</param>
-/// <param name="JobsPaused">Paused in the web app: take no jobs (state and settings still sync).</param>
+/// <param name="JobsPaused">Paused in the web app, or by the engine itself (<paramref name="AutoPausedUntil"/>): take no jobs (state and settings still sync).</param>
+/// <param name="AutoPausedUntil">The engine's own pause (a Facebook block, posts that kept failing) lasts until then; null when there is none.</param>
 public sealed record DeviceStatusDto(
     Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid? AccountId, int Groups, bool Online, AntiBanDto AntiBan,
-    bool JobsPaused);
+    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null);
 
 public sealed record GroupLinkDto(string Name, string Url);
 

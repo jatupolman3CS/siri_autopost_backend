@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Library;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
 
@@ -34,10 +35,10 @@ public sealed class LibraryController : ControllerBase
     [HttpGet("media/{mediaId:guid}/content")]
     [Produces("application/octet-stream")]
     public async Task<IActionResult> Content(
-        Guid wsId, Guid mediaId, [FromServices] IQueryHandler<GetMediaContentQuery, MediaContent> handler, [FromServices] IHttpClientFactory http, CancellationToken ct)
+        Guid wsId, Guid mediaId, [FromServices] IQueryHandler<GetMediaContentQuery, MediaContent> handler, [FromServices] IHttpClientFactory http, [FromServices] IObjectStorage storage, CancellationToken ct)
     {
         var m = await handler.HandleAsync(new GetMediaContentQuery(wsId, mediaId), ct);
-        return await this.ToResultAsync(m, http, ct);
+        return await this.ToResultAsync(m, http, storage, ct);
     }
 
     [HttpGet("snippets")]

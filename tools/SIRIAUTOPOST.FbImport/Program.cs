@@ -91,8 +91,8 @@ if (!dry)
                 var nk = "media/" + m.Key["facebook/".Length..];
                 // The same file can belong to several posts, so it may already have been moved.
                 if (!await Exists(s3!, bucket, nk))
-                    await s3.CopyObjectAsync(new CopyObjectRequest { SourceBucket = bucket, SourceKey = m.Key, DestinationBucket = bucket, DestinationKey = nk });
-                await s3.DeleteObjectAsync(bucket, m.Key);
+                    await s3!.CopyObjectAsync(new CopyObjectRequest { SourceBucket = bucket, SourceKey = m.Key, DestinationBucket = bucket, DestinationKey = nk });
+                await s3!.DeleteObjectAsync(bucket, m.Key);
                 m.Key = nk;
                 moved++;
             }
@@ -202,20 +202,25 @@ await db.SaveChangesAsync();
         {
             if (!lib.TryGetValue(m.Key, out var f))
             {
-                f = MediaFile.CreateExternal(workspaceId, Path.GetFileNameWithoutExtension(m.Key), m.ContentType, m.Size, m.Url, now);
+                f = MediaFile.CreateExternal(workspaceId, Path.GetFileNameWithoutExtension(m.Key), m.ContentType, m.Size, "r2://" + m.Key, now);
                 db.Media.Add(f);
                 lib[m.Key] = f;
                 newMedia++;
             }
-            else if (f.ExternalUrl != m.Url) f.MoveTo(m.Url);
+            else if (f.ExternalUrl != "r2://" + m.Key) f.MoveTo("r2://" + m.Key); // the API reads the private bucket itself
             ids.Add(f.Id);
         }
+        ids = ids.Distinct().ToList();
         if (!existing.Add(text + "|" + string.Join(",", ids))) continue;
         db.CollectionPosts.Add(CollectionPost.Create(coll, text, ids, ip.PostedAt));
         newPosts++;
     }
     await db.SaveChangesAsync();
-    Console.WriteLine($"ชุดโพสต์ในเว็บ \"{CollName}\": โพสต์ใหม่ {newPosts} (ตัดข้อความที่ยาวเกิน {tooLong}), ไฟล์ในคลังใหม่ {newMedia}");
+    // Remove copies made by an earlier run (same text and media): keep the oldest.
+    var dups = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).OrderBy(x => x.CreatedAt).ThenBy(x => x.UpdatedAt).ToListAsync())
+        .GroupBy(x => x.Text + "|" + string.Join(",", x.MediaIds)).SelectMany(g => g.Skip(1)).ToList();
+    if (dups.Count > 0) { db.CollectionPosts.RemoveRange(dups); await db.SaveChangesAsync(); }
+    Console.WriteLine($"ชุดโพสต์ในเว็บ \"{CollName}\": รวม {await db.CollectionPosts.CountAsync(x => x.CollectionId == coll.Id)} โพสต์, ลบซ้ำ {dups.Count}, โพสต์ใหม่ {newPosts} (ตัดข้อความที่ยาวเกิน {tooLong}), ไฟล์ในคลังใหม่ {newMedia}");
 }
 
 // 1) A campaign ("ชุดโพสต์") in the device's extension settings: one post per distinct text + media set.

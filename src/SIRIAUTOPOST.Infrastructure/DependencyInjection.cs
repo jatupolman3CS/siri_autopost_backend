@@ -31,6 +31,7 @@ public static class DependencyInjection
         services.AddScoped<IAccountRepository, AccountRepository>();
         services.AddScoped<IPostRepository, PostRepository>();
         services.AddScoped<IMediaRepository, MediaRepository>();
+        services.AddSingleton<IObjectStorage, R2ObjectStorage>();
         services.AddScoped<ISnippetRepository, SnippetRepository>();
         services.AddScoped<IDeviceRepository, DeviceRepository>();
         services.AddScoped<IDevicePairingRepository, DevicePairingRepository>();

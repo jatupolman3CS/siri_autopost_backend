@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Library;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
 
@@ -12,6 +13,8 @@ namespace SIRIAUTOPOST.Api.Controllers;
 public sealed class LibraryController : ControllerBase
 {
     public sealed record CreateSnippetRequest(string Title, string Text);
+    public sealed record FolderRequest(string Name);
+    public sealed record MoveMediaRequest(IReadOnlyList<Guid> MediaIds, Guid? FolderId);
 
     [HttpGet("media")]
     public Task<IReadOnlyList<MediaDto>> Media(
@@ -24,21 +27,50 @@ public sealed class LibraryController : ControllerBase
     [RequestSizeLimit(MediaFile.MaxBytes + 1024 * 1024)]
     [RequestFormLimits(MultipartBodyLengthLimit = MediaFile.MaxBytes + 1024 * 1024)]
     public async Task<MediaDto> Upload(
-        Guid wsId, IFormFile file, [FromServices] ICommandHandler<UploadMediaCommand, MediaDto> handler, CancellationToken ct)
+        Guid wsId, IFormFile file, [FromForm] Guid? folderId, [FromServices] ICommandHandler<UploadMediaCommand, MediaDto> handler, CancellationToken ct)
     {
         using var ms = new MemoryStream();
         await file.CopyToAsync(ms, ct);
-        return await handler.HandleAsync(new UploadMediaCommand(wsId, file.FileName, file.ContentType, ms.ToArray()), ct);
+        return await handler.HandleAsync(new UploadMediaCommand(wsId, file.FileName, file.ContentType, ms.ToArray(), folderId), ct);
     }
 
     [HttpGet("media/{mediaId:guid}/content")]
     [Produces("application/octet-stream")]
     public async Task<IActionResult> Content(
-        Guid wsId, Guid mediaId, [FromServices] IQueryHandler<GetMediaContentQuery, MediaContent> handler, CancellationToken ct)
+        Guid wsId, Guid mediaId, [FromServices] IQueryHandler<GetMediaContentQuery, MediaContent> handler, [FromServices] IHttpClientFactory http, [FromServices] IObjectStorage storage, CancellationToken ct)
     {
         var m = await handler.HandleAsync(new GetMediaContentQuery(wsId, mediaId), ct);
-        return File(m.Data, m.ContentType, m.Name);
+        return await this.ToResultAsync(m, http, storage, ct);
     }
+
+    [HttpGet("media-folders")]
+    public Task<IReadOnlyList<MediaFolderDto>> Folders(
+        Guid wsId, [FromServices] IQueryHandler<GetMediaFoldersQuery, IReadOnlyList<MediaFolderDto>> handler, CancellationToken ct) =>
+        handler.HandleAsync(new GetMediaFoldersQuery(wsId), ct);
+
+    [HttpPost("media-folders")]
+    public Task<MediaFolderDto> CreateFolder(
+        Guid wsId, FolderRequest r, [FromServices] ICommandHandler<CreateMediaFolderCommand, MediaFolderDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new CreateMediaFolderCommand(wsId, r.Name), ct);
+
+    [HttpPut("media-folders/{folderId:guid}")]
+    public Task<MediaFolderDto> RenameFolder(
+        Guid wsId, Guid folderId, FolderRequest r, [FromServices] ICommandHandler<RenameMediaFolderCommand, MediaFolderDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new RenameMediaFolderCommand(wsId, folderId, r.Name), ct);
+
+    [HttpDelete("media-folders/{folderId:guid}")]
+    public async Task<IActionResult> DeleteFolder(
+        Guid wsId, Guid folderId, [FromServices] ICommandHandler<DeleteMediaFolderCommand, Unit> handler, CancellationToken ct)
+    {
+        await handler.HandleAsync(new DeleteMediaFolderCommand(wsId, folderId), ct);
+        return NoContent();
+    }
+
+    /// <summary>Moves files into a folder (or out of every folder with a null folderId).</summary>
+    [HttpPost("media/move")]
+    public Task<IReadOnlyList<MediaDto>> Move(
+        Guid wsId, MoveMediaRequest r, [FromServices] ICommandHandler<MoveMediaCommand, IReadOnlyList<MediaDto>> handler, CancellationToken ct) =>
+        handler.HandleAsync(new MoveMediaCommand(wsId, r.MediaIds, r.FolderId), ct);
 
     [HttpGet("snippets")]
     public Task<IReadOnlyList<SnippetDto>> Snippets(

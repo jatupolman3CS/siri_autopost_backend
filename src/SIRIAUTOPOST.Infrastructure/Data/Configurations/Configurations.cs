@@ -128,6 +128,18 @@ public sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFile>
         b.ToTable("MEDIA_FILES");
         b.Property(x => x.Name).HasMaxLength(200).IsRequired();
         b.Property(x => x.ContentType).HasMaxLength(100);
+        b.Property(x => x.ExternalUrl).HasMaxLength(2000);
+        b.HasIndex(x => new { x.WorkspaceId, x.FolderId });
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class MediaFolderConfiguration : IEntityTypeConfiguration<MediaFolder>
+{
+    public void Configure(EntityTypeBuilder<MediaFolder> b)
+    {
+        b.ToTable("MEDIA_FOLDERS");
+        b.Property(x => x.Name).HasMaxLength(MediaFolder.MaxNameLength).IsRequired();
         b.HasIndex(x => x.WorkspaceId);
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
     }

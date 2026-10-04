@@ -625,7 +625,7 @@ public sealed class GetDeviceMediaQueryHandler(ICurrentDevice current, IMediaRep
     public async Task<MediaContent> HandleAsync(GetDeviceMediaQuery q, CancellationToken ct = default)
     {
         var file = await media.GetAsync(current.WorkspaceId, q.MediaId, ct) ?? throw new NotFoundException("ไฟล์", q.MediaId);
-        return new MediaContent(file.Name, file.ContentType, file.Data);
+        return new MediaContent(file.Name, file.ContentType, file.Data, file.ExternalUrl);
     }
 }
 

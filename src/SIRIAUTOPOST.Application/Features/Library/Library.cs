@@ -30,20 +30,25 @@ public sealed class GetMediaContentQueryHandler(IWorkspaceRepository workspaces,
     {
         await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         var file = await media.GetAsync(q.WorkspaceId, q.MediaId, ct) ?? throw new NotFoundException("ไฟล์", q.MediaId);
-        return new MediaContent(file.Name, file.ContentType, file.Data);
+        return new MediaContent(file.Name, file.ContentType, file.Data, file.ExternalUrl);
     }
 }
 
-public sealed record UploadMediaCommand(Guid WorkspaceId, string FileName, string ContentType, byte[] Data) : ICommand<MediaDto>;
+public sealed record UploadMediaCommand(Guid WorkspaceId, string FileName, string ContentType, byte[] Data, Guid? FolderId = null) : ICommand<MediaDto>;
 
 public sealed class UploadMediaCommandHandler(
-    IWorkspaceRepository workspaces, IMediaRepository media, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IMediaRepository media, IMediaFolderRepository folders, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UploadMediaCommand, MediaDto>
 {
     public async Task<MediaDto> HandleAsync(UploadMediaCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var file = MediaFile.Create(c.WorkspaceId, c.FileName, c.ContentType, c.Data, clock.GetUtcNow());
+        if (c.FolderId is { } fid)
+        {
+            if (await folders.GetAsync(c.WorkspaceId, fid, ct) is null) throw new NotFoundException("โฟลเดอร์", fid);
+            file.MoveToFolder(fid);
+        }
         media.Add(file);
         await uow.SaveChangesAsync(ct);
         return MediaDto.From(file);

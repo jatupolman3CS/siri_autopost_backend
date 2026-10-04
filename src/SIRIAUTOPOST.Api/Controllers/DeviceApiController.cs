@@ -7,6 +7,7 @@ using SIRIAUTOPOST.Api.Extensions;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Extension;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 
 namespace SIRIAUTOPOST.Api.Controllers;
@@ -68,10 +69,10 @@ public sealed class DeviceApiController : ControllerBase
     [HttpGet("media/{mediaId:guid}")]
     [Produces("application/octet-stream")]
     public async Task<IActionResult> Media(
-        Guid mediaId, [FromServices] IQueryHandler<GetDeviceMediaQuery, MediaContent> handler, CancellationToken ct)
+        Guid mediaId, [FromServices] IQueryHandler<GetDeviceMediaQuery, MediaContent> handler, [FromServices] IHttpClientFactory http, [FromServices] IObjectStorage storage, CancellationToken ct)
     {
         var m = await handler.HandleAsync(new GetDeviceMediaQuery(mediaId), ct);
-        return File(m.Data, m.ContentType, m.Name);
+        return await this.ToResultAsync(m, http, storage, ct);
     }
 
     // ---------- the extension's own campaigns, edited in the web app ----------

@@ -14,6 +14,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<SocialAccount> Accounts => Set<SocialAccount>();
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<MediaFile> Media => Set<MediaFile>();
+    public DbSet<MediaFolder> MediaFolders => Set<MediaFolder>();
     public DbSet<Snippet> Snippets => Set<Snippet>();
     public DbSet<ImportedPost> ImportedPosts => Set<ImportedPost>();
     public DbSet<Device> Devices => Set<Device>();

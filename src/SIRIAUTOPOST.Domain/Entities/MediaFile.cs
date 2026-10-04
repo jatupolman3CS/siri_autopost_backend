@@ -14,10 +14,39 @@ public class MediaFile : Entity
     public MediaKind Kind { get; private set; }
     public long Size { get; private set; }
     public byte[] Data { get; private set; } = [];
+    /// <summary>Set when the file lives in object storage (Data is then empty) and is served from this address.</summary>
+    public string? ExternalUrl { get; private set; }
     public int UsedCount { get; private set; }
+    /// <summary>The library folder the file is in; null = not in a folder.</summary>
+    public Guid? FolderId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
     private MediaFile() { } // EF Core
+
+    /// <summary>A library entry for a file that already sits in object storage; only its address is kept.</summary>
+    public static MediaFile CreateExternal(Guid workspaceId, string name, string contentType, long size, string url, DateTimeOffset now)
+    {
+        var type = (contentType ?? "").Trim().ToLowerInvariant();
+        var kind = type.StartsWith("image/") ? MediaKind.Image
+            : type.StartsWith("video/") ? MediaKind.Video
+            : throw new DomainException("รองรับเฉพาะไฟล์รูปภาพและวิดีโอ");
+        var n = Path.GetFileNameWithoutExtension((name ?? "").Trim());
+        return new MediaFile
+        {
+            WorkspaceId = workspaceId,
+            Name = string.IsNullOrEmpty(n) ? "file" : n.Length > 200 ? n[..200] : n,
+            ContentType = type,
+            Kind = kind,
+            Size = size,
+            ExternalUrl = url,
+            CreatedAt = now,
+        };
+    }
+
+    public void MoveToFolder(Guid? folderId) => FolderId = folderId;
+
+    /// <summary>Points the file at a new address (the storage's public address changed).</summary>
+    public void MoveTo(string url) => ExternalUrl = url;
 
     public static MediaFile Create(Guid workspaceId, string name, string contentType, byte[] data, DateTimeOffset now)
     {

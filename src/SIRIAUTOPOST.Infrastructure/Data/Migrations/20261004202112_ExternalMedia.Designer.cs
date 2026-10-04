@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SIRIAUTOPOST.Infrastructure.Data;
@@ -12,9 +13,11 @@ using SIRIAUTOPOST.Infrastructure.Data;
 namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20261004202112_ExternalMedia")]
+    partial class ExternalMedia
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -626,10 +629,6 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(2000)")
                         .HasColumnName("external_url");
 
-                    b.Property<Guid?>("FolderId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("folder_id");
-
                     b.Property<string>("Kind")
                         .IsRequired()
                         .HasMaxLength(30)
@@ -657,40 +656,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.HasKey("Id")
                         .HasName("pk_media_files");
 
-                    b.HasIndex("WorkspaceId", "FolderId")
-                        .HasDatabaseName("ix_media_files_workspace_id_folder_id");
+                    b.HasIndex("WorkspaceId")
+                        .HasDatabaseName("ix_media_files_workspace_id");
 
                     b.ToTable("MEDIA_FILES", (string)null);
-                });
-
-            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.MediaFolder", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid")
-                        .HasColumnName("id");
-
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("created_at");
-
-                    b.Property<string>("Name")
-                        .IsRequired()
-                        .HasMaxLength(80)
-                        .HasColumnType("character varying(80)")
-                        .HasColumnName("name");
-
-                    b.Property<Guid>("WorkspaceId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("workspace_id");
-
-                    b.HasKey("Id")
-                        .HasName("pk_media_folders");
-
-                    b.HasIndex("WorkspaceId")
-                        .HasDatabaseName("ix_media_folders_workspace_id");
-
-                    b.ToTable("MEDIA_FOLDERS", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PlanSetting", b =>
@@ -1832,16 +1801,6 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_media_files_workspaces_workspace_id");
-                });
-
-            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.MediaFolder", b =>
-                {
-                    b.HasOne("SIRIAUTOPOST.Domain.Entities.Workspace", null)
-                        .WithMany()
-                        .HasForeignKey("WorkspaceId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired()
-                        .HasConstraintName("fk_media_folders_workspaces_workspace_id");
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Post", b =>

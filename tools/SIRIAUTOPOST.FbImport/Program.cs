@@ -34,12 +34,12 @@ if (postFiles.Count == 0) { Console.Error.WriteLine("ไม่พบ profile_pos
 // Media uris start with the archive's top folder name, so they resolve from the folder above it.
 var root = new DirectoryInfo(Path.GetDirectoryName(postFiles[0])!).Parent!.Parent!.FullName;
 
-var bucket = Env("AppSettings__R2__BucketName");
-var publicBase = Env("AppSettings__R2__PublicBaseUrl").TrimEnd('/');
+var bucket = Env("AppSettings__R2__BucketName") is { Length: > 0 } b1 ? b1 : Env("R2__BucketName");
+var publicBase = (Env("AppSettings__R2__PublicBaseUrl") is { Length: > 0 } pb1 ? pb1 : Env("R2__PublicBaseUrl")).TrimEnd('/');
 AmazonS3Client? s3 = null;
 if (!dry)
 {
-    var ep = Env("AppSettings__R2__Endpoint");
+    var ep = Env("AppSettings__R2__Endpoint") is { Length: > 0 } ep1 ? ep1 : Env("R2__Endpoint");
     var ak = Env("AppSettings__R2__AccessKeyId") is { Length: > 0 } a1 ? a1 : Env("R2__AccessKeyId");
     var sk = Env("AppSettings__R2__SecretAccessKey") is { Length: > 0 } s1 ? s1 : Env("R2__SecretAccessKey");
     if (ep == "" || bucket == "" || ak == "" || sk == "") { Console.Error.WriteLine("ขาดค่า R2: Endpoint/BucketName/AccessKeyId/SecretAccessKey"); return 1; }
@@ -70,6 +70,8 @@ else
     workspaceId = ws.Id;
 }
 Console.WriteLine($"workspace {workspaceId}{(dry ? " (dry-run)" : "")}");
+foreach (var w2 in await db.Workspaces.Select(x => new { x.Id, x.Name, x.OwnerId }).ToListAsync())
+    Console.WriteLine($"  workspace ในระบบ: {w2.Id} {w2.Name}{(w2.Id == workspaceId ? "  <-- ใช้อันนี้" : "")}");
 
 // Rows and objects written by the first version used "facebook" as source and key prefix; move them.
 if (!dry)
@@ -89,8 +91,8 @@ if (!dry)
                 var nk = "media/" + m.Key["facebook/".Length..];
                 // The same file can belong to several posts, so it may already have been moved.
                 if (!await Exists(s3!, bucket, nk))
-                    await s3.CopyObjectAsync(new CopyObjectRequest { SourceBucket = bucket, SourceKey = m.Key, DestinationBucket = bucket, DestinationKey = nk });
-                await s3.DeleteObjectAsync(bucket, m.Key);
+                    await s3!.CopyObjectAsync(new CopyObjectRequest { SourceBucket = bucket, SourceKey = m.Key, DestinationBucket = bucket, DestinationKey = nk });
+                await s3!.DeleteObjectAsync(bucket, m.Key);
                 m.Key = nk;
                 moved++;
             }
@@ -173,6 +175,58 @@ if (publicBase != "")
     foreach (var ip in all)
         ip.ReplaceMedia(ip.Media.Select(m => { m.Url = publicBase + "/" + m.Key; return m; }).ToList());
 await db.SaveChangesAsync();
+
+// 0) The web app's "ชุดโพสต์": a collection of posts whose media are library files that point at the bucket.
+{
+    const string CollName = "นำเข้าจากไฟล์เก่า";
+    var now = DateTimeOffset.UtcNow;
+    var coll = await db.Collections.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Name == CollName);
+    if (coll is null)
+    {
+        coll = PostCollection.Create(workspaceId, CollName, "โพสต์และรูปที่นำเข้าจากไฟล์ส่งออก", now, await db.Collections.CountAsync(x => x.WorkspaceId == workspaceId));
+        db.Collections.Add(coll);
+    }
+    // The imported files go into their own library folder.
+    var folder = await db.MediaFolders.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Name == CollName);
+    if (folder is null) { folder = MediaFolder.Create(workspaceId, CollName, now); db.MediaFolders.Add(folder); }
+    static string KeyOf(string url) { var i = url.IndexOf("/media/", StringComparison.Ordinal); return i < 0 ? url : url[(i + 1)..]; }
+    var lib = new Dictionary<string, MediaFile>();
+    foreach (var f in await db.Media.Where(x => x.WorkspaceId == workspaceId && x.ExternalUrl != null).ToListAsync()) lib[KeyOf(f.ExternalUrl!)] = f;
+    int newMedia = 0, newPosts = 0, tooLong = 0;
+    var existing = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).ToListAsync())
+        .Select(x => x.Text + "|" + string.Join(",", x.MediaIds)).ToHashSet();
+    foreach (var ip in all.AsEnumerable().Reverse())
+    {
+        var text = ip.Text.Trim();
+        if (text.Length == 0) continue;
+        if (text.Length > CollectionPost.MaxTextLength) { text = text[..CollectionPost.MaxTextLength]; tooLong++; }
+        var ids = new List<Guid>();
+        foreach (var m in ip.Media.Take(CollectionPost.MaxMedia))
+        {
+            if (!lib.TryGetValue(m.Key, out var f))
+            {
+                f = MediaFile.CreateExternal(workspaceId, Path.GetFileNameWithoutExtension(m.Key), m.ContentType, m.Size, "r2://" + m.Key, now);
+                f.MoveToFolder(folder.Id);
+                db.Media.Add(f);
+                lib[m.Key] = f;
+                newMedia++;
+            }
+            else if (f.ExternalUrl != "r2://" + m.Key) f.MoveTo("r2://" + m.Key); // the API reads the private bucket itself
+            ids.Add(f.Id);
+        }
+        ids = ids.Distinct().ToList();
+        if (!existing.Add(text + "|" + string.Join(",", ids))) continue;
+        db.CollectionPosts.Add(CollectionPost.Create(coll, text, ids, ip.PostedAt));
+        newPosts++;
+    }
+    foreach (var f in lib.Values) if (f.FolderId is null) f.MoveToFolder(folder.Id);
+    await db.SaveChangesAsync();
+    // Remove copies made by an earlier run (same text and media): keep the oldest.
+    var dups = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).OrderBy(x => x.CreatedAt).ThenBy(x => x.UpdatedAt).ToListAsync())
+        .GroupBy(x => x.Text + "|" + string.Join(",", x.MediaIds)).SelectMany(g => g.Skip(1)).ToList();
+    if (dups.Count > 0) { db.CollectionPosts.RemoveRange(dups); await db.SaveChangesAsync(); }
+    Console.WriteLine($"ชุดโพสต์ในเว็บ \"{CollName}\": รวม {await db.CollectionPosts.CountAsync(x => x.CollectionId == coll.Id)} โพสต์, ลบซ้ำ {dups.Count}, โพสต์ใหม่ {newPosts} (ตัดข้อความที่ยาวเกิน {tooLong}), ไฟล์ในคลังใหม่ {newMedia}");
+}
 
 // 1) A campaign ("ชุดโพสต์") in the device's extension settings: one post per distinct text + media set.
 var device = opt.TryGetValue("device", out var dv)

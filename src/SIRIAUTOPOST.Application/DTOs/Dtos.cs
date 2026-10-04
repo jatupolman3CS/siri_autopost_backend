@@ -120,7 +120,8 @@ public sealed record MediaDto(Guid Id, string Name, string ContentType, MediaKin
     public static MediaDto From(MediaFile m) => new(m.Id, m.Name, m.ContentType, m.Kind, m.Size, m.UsedCount, m.CreatedAt);
 }
 
-public sealed record MediaContent(string Name, string ContentType, byte[] Data);
+/// <summary>A file to send back. <c>ExternalUrl</c> set: the bytes are not in the database, fetch them from there.</summary>
+public sealed record MediaContent(string Name, string ContentType, byte[] Data, string? ExternalUrl = null);
 
 public sealed record SnippetDto(Guid Id, string Title, string Text, int UsedCount)
 {

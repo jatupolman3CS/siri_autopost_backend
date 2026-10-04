@@ -29,6 +29,7 @@ public static class ServiceCollectionExtensions
         services.AddInfrastructure(config);
 
         services.AddHttpContextAccessor();
+        services.AddHttpClient();
         services.AddScoped<ICurrentUser, CurrentUser>();
         services.AddScoped<IAppUrls, AppUrls>();
         services.AddSingleton<ExtensionPackage>();

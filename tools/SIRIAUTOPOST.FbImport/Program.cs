@@ -70,6 +70,8 @@ else
     workspaceId = ws.Id;
 }
 Console.WriteLine($"workspace {workspaceId}{(dry ? " (dry-run)" : "")}");
+foreach (var w2 in await db.Workspaces.Select(x => new { x.Id, x.Name, x.OwnerId }).ToListAsync())
+    Console.WriteLine($"  workspace ในระบบ: {w2.Id} {w2.Name}{(w2.Id == workspaceId ? "  <-- ใช้อันนี้" : "")}");
 
 // Rows and objects written by the first version used "facebook" as source and key prefix; move them.
 if (!dry)
@@ -173,6 +175,48 @@ if (publicBase != "")
     foreach (var ip in all)
         ip.ReplaceMedia(ip.Media.Select(m => { m.Url = publicBase + "/" + m.Key; return m; }).ToList());
 await db.SaveChangesAsync();
+
+// 0) The web app's "ชุดโพสต์": a collection of posts whose media are library files that point at the bucket.
+{
+    const string CollName = "นำเข้าจากไฟล์เก่า";
+    var now = DateTimeOffset.UtcNow;
+    var coll = await db.Collections.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Name == CollName);
+    if (coll is null)
+    {
+        coll = PostCollection.Create(workspaceId, CollName, "โพสต์และรูปที่นำเข้าจากไฟล์ส่งออก", now, await db.Collections.CountAsync(x => x.WorkspaceId == workspaceId));
+        db.Collections.Add(coll);
+    }
+    static string KeyOf(string url) { var i = url.IndexOf("/media/", StringComparison.Ordinal); return i < 0 ? url : url[(i + 1)..]; }
+    var lib = new Dictionary<string, MediaFile>();
+    foreach (var f in await db.Media.Where(x => x.WorkspaceId == workspaceId && x.ExternalUrl != null).ToListAsync()) lib[KeyOf(f.ExternalUrl!)] = f;
+    int newMedia = 0, newPosts = 0, tooLong = 0;
+    var existing = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).ToListAsync())
+        .Select(x => x.Text + "|" + string.Join(",", x.MediaIds)).ToHashSet();
+    foreach (var ip in all.AsEnumerable().Reverse())
+    {
+        var text = ip.Text.Trim();
+        if (text.Length == 0) continue;
+        if (text.Length > CollectionPost.MaxTextLength) { text = text[..CollectionPost.MaxTextLength]; tooLong++; }
+        var ids = new List<Guid>();
+        foreach (var m in ip.Media.Take(CollectionPost.MaxMedia))
+        {
+            if (!lib.TryGetValue(m.Key, out var f))
+            {
+                f = MediaFile.CreateExternal(workspaceId, Path.GetFileNameWithoutExtension(m.Key), m.ContentType, m.Size, m.Url, now);
+                db.Media.Add(f);
+                lib[m.Key] = f;
+                newMedia++;
+            }
+            else if (f.ExternalUrl != m.Url) f.MoveTo(m.Url);
+            ids.Add(f.Id);
+        }
+        if (!existing.Add(text + "|" + string.Join(",", ids))) continue;
+        db.CollectionPosts.Add(CollectionPost.Create(coll, text, ids, ip.PostedAt));
+        newPosts++;
+    }
+    await db.SaveChangesAsync();
+    Console.WriteLine($"ชุดโพสต์ในเว็บ \"{CollName}\": โพสต์ใหม่ {newPosts} (ตัดข้อความที่ยาวเกิน {tooLong}), ไฟล์ในคลังใหม่ {newMedia}");
+}
 
 // 1) A campaign ("ชุดโพสต์") in the device's extension settings: one post per distinct text + media set.
 var device = opt.TryGetValue("device", out var dv)

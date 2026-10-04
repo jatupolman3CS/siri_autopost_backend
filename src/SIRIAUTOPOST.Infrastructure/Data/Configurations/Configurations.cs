@@ -128,6 +128,7 @@ public sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFile>
         b.ToTable("MEDIA_FILES");
         b.Property(x => x.Name).HasMaxLength(200).IsRequired();
         b.Property(x => x.ContentType).HasMaxLength(100);
+        b.Property(x => x.ExternalUrl).HasMaxLength(2000);
         b.HasIndex(x => x.WorkspaceId);
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
     }

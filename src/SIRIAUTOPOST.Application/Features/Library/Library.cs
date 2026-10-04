@@ -30,7 +30,7 @@ public sealed class GetMediaContentQueryHandler(IWorkspaceRepository workspaces,
     {
         await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         var file = await media.GetAsync(q.WorkspaceId, q.MediaId, ct) ?? throw new NotFoundException("ไฟล์", q.MediaId);
-        return new MediaContent(file.Name, file.ContentType, file.Data);
+        return new MediaContent(file.Name, file.ContentType, file.Data, file.ExternalUrl);
     }
 }
 

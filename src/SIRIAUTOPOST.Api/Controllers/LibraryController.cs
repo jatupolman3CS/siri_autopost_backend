@@ -34,10 +34,10 @@ public sealed class LibraryController : ControllerBase
     [HttpGet("media/{mediaId:guid}/content")]
     [Produces("application/octet-stream")]
     public async Task<IActionResult> Content(
-        Guid wsId, Guid mediaId, [FromServices] IQueryHandler<GetMediaContentQuery, MediaContent> handler, CancellationToken ct)
+        Guid wsId, Guid mediaId, [FromServices] IQueryHandler<GetMediaContentQuery, MediaContent> handler, [FromServices] IHttpClientFactory http, CancellationToken ct)
     {
         var m = await handler.HandleAsync(new GetMediaContentQuery(wsId, mediaId), ct);
-        return File(m.Data, m.ContentType, m.Name);
+        return await this.ToResultAsync(m, http, ct);
     }
 
     [HttpGet("snippets")]

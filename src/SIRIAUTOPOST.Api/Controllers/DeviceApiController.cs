@@ -68,10 +68,10 @@ public sealed class DeviceApiController : ControllerBase
     [HttpGet("media/{mediaId:guid}")]
     [Produces("application/octet-stream")]
     public async Task<IActionResult> Media(
-        Guid mediaId, [FromServices] IQueryHandler<GetDeviceMediaQuery, MediaContent> handler, CancellationToken ct)
+        Guid mediaId, [FromServices] IQueryHandler<GetDeviceMediaQuery, MediaContent> handler, [FromServices] IHttpClientFactory http, CancellationToken ct)
     {
         var m = await handler.HandleAsync(new GetDeviceMediaQuery(mediaId), ct);
-        return File(m.Data, m.ContentType, m.Name);
+        return await this.ToResultAsync(m, http, ct);
     }
 
     // ---------- the extension's own campaigns, edited in the web app ----------

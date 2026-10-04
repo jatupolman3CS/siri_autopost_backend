@@ -254,7 +254,8 @@ public class BackupEndpointsTests(ApiFactory factory)
         var set = (await shop.Owner.LinkSetsAsync(shop.Ws)).Single(s => s.Name == "ชุดหลัก");
         var alpha = set.Links.Single(l => l.Url == Alpha);
         var morning = schedules[0];
-        Assert.Equal([alpha.Id.ToString("N"), $"account:{rich.Instagram.Id:N}"], morning.Overrides.Keys.Order());
+        // Both sides sorted: the keys are random ids, so neither has a fixed order.
+        Assert.Equal(new[] { alpha.Id.ToString("N"), $"account:{rich.Instagram.Id:N}" }.Order(), morning.Overrides.Keys.Order());
         Assert.Equal(["12:00"], morning.Overrides[alpha.Id.ToString("N")]);
         Assert.Equal((set.Id, 3), (morning.LinkSetId, morning.TargetCount)); // two usable links and the other account
 

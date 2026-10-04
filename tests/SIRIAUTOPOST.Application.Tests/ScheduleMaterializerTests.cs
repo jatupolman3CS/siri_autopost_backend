@@ -1,4 +1,4 @@
-using NSubstitute;
+﻿using NSubstitute;
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
@@ -464,6 +464,37 @@ public class ScheduleMaterializerTests
         Assert.Contains("2,000", ex.Message);
         Assert.Empty(w.Added);
         Assert.Null(s.GeneratedThrough);
+    }
+
+    [Fact]
+    public async Task A_run_that_would_take_the_workspace_over_its_queue_limit_is_refused_and_says_how_many_are_queued()
+    {
+        var w = new SchedulingWorld(links: 2, posts: 1);
+        var s = w.NewSchedule(); // 2 links x 14 days = 28 posts
+        w.PostRepo.CountQueuedFutureAsync(w.Ws.Id, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(9_973);
+
+        var ex = await Assert.ThrowsAsync<QueueFullException>(() => w.RunAsync(s, Today, Today.AddDays(13)));
+
+        Assert.Equal((9_973, 28), (ex.Queued, ex.Adding));
+        Assert.Contains("9,973", ex.Message);
+        Assert.Contains("10,000", ex.Message);
+        Assert.Empty(w.Added);
+        Assert.Null(s.GeneratedThrough);
+        Assert.Equal(0, s.Cursor);
+    }
+
+    [Fact]
+    public async Task Filling_the_queue_exactly_is_allowed_and_a_run_that_makes_nothing_is_never_refused()
+    {
+        var w = new SchedulingWorld(links: 2, posts: 1);
+        var s = w.NewSchedule();
+        w.PostRepo.CountQueuedFutureAsync(w.Ws.Id, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(9_972);
+
+        Assert.Equal(28, (await w.RunAsync(s, Today, Today.AddDays(13))).Created); // 9,972 + 28 = 10,000
+
+        w.PostRepo.CountQueuedFutureAsync(w.Ws.Id, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(10_000);
+        w.ExistingKeys.AddRange(w.Added.Select(p => (p.TargetKey!, p.SlotKey!))); // everything is there already
+        Assert.Equal(0, (await w.RunAsync(s, Today, Today.AddDays(13))).Created);
     }
 
     [Fact]

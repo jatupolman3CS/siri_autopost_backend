@@ -203,29 +203,34 @@ public sealed class RestoreBackupCommandHandler(
         if (b.AutoReply is { } reply && owner.HasAutoReply) ws.UpdateAutoReply(BuildAutoReply(reply, newCollections));
 
         // ---- replace ----
-        var oldSchedules = await schedules.ListAsync(ws.Id, ct);
-        foreach (var s in oldSchedules) posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(s.Id, now, ct));
-        schedules.RemoveRange(oldSchedules);
-        collections.RemoveRange(await collections.ListAsync(ws.Id, ct));
-        linkSets.RemoveRange(await linkSets.ListAsync(ws.Id, ct));
-        foreach (var collection in newCollections.Values) collections.Add(collection);
-        collectionPosts.AddRange(newPosts);
-        foreach (var set in newSets.Values) linkSets.Add(set);
-        setLinks.AddRange(newLinks);
-        foreach (var s in newSchedules) schedules.Add(s);
-        await uow.SaveChangesAsync(ct);
-
-        foreach (var s in newSchedules.Where(s => s.Active))
+        // One restore of a workspace at a time, and all or nothing: when the posts of the new schedules do not fit in the
+        // workspace's queue (QueueFullException) the whole restore is rolled back and refused.
+        await uow.ExecuteInTransactionAsync($"restore:{ws.Id:N}", async () =>
         {
-            try
+            var oldSchedules = await schedules.ListAsync(ws.Id, ct);
+            foreach (var s in oldSchedules) posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(s.Id, now, ct));
+            schedules.RemoveRange(oldSchedules);
+            collections.RemoveRange(await collections.ListAsync(ws.Id, ct));
+            linkSets.RemoveRange(await linkSets.ListAsync(ws.Id, ct));
+            foreach (var collection in newCollections.Values) collections.Add(collection);
+            collectionPosts.AddRange(newPosts);
+            foreach (var set in newSets.Values) linkSets.Add(set);
+            setLinks.AddRange(newLinks);
+            foreach (var s in newSchedules) schedules.Add(s);
+            await uow.SaveChangesAsync(ct);
+
+            foreach (var s in newSchedules.Where(s => s.Active))
             {
-                await topUp.GenerateAsync(ws.Id, s.Id, ct);
+                try
+                {
+                    await topUp.GenerateAsync(ws.Id, s.Id, ct);
+                }
+                catch (DomainException ex) when (ex is not QueueFullException)
+                {
+                    // The restore itself is done; a schedule that cannot be queued now is tried again with the next claim.
+                }
             }
-            catch (DomainException)
-            {
-                // The restore itself is done; a schedule that cannot be queued now is tried again with the next claim.
-            }
-        }
+        }, ct);
         return new RestoreResultDto(newCollections.Count, newSets.Count, newSchedules.Count);
     }
 
@@ -236,13 +241,19 @@ public sealed class RestoreBackupCommandHandler(
             if (!seen.Add(name)) throw new DomainException($"{what}ซ้ำกันในไฟล์: \"{name}\"");
     }
 
+    /// <summary>
+    /// The start date of a restored schedule. A date further ahead than a new schedule may start is refused. One that is
+    /// in the past is moved up to yesterday: a backup is restored later than it was made, and nothing before today is
+    /// ever queued, so the schedule behaves the same (a Once schedule whose day has passed stays over).
+    /// </summary>
     private static DateOnly ParseDate(string? text, int utcOffsetMinutes, DateTimeOffset now, string schedule)
     {
-        if (string.IsNullOrWhiteSpace(text))
-            return DateOnly.FromDateTime(now.ToOffset(TimeSpan.FromMinutes(Math.Clamp(utcOffsetMinutes, -840, 840))).DateTime);
-        return DateOnly.TryParseExact(text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
-            ? d
-            : throw new DomainException($"วันที่เริ่มของตาราง \"{schedule}\" ไม่ถูกต้อง ใช้รูปแบบ ปปปป-ดด-วว");
+        var (min, max) = Schedule.StartDateRange(now, utcOffsetMinutes);
+        if (string.IsNullOrWhiteSpace(text)) return Schedule.LocalDayOf(now, utcOffsetMinutes);
+        if (!DateOnly.TryParseExact(text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d))
+            throw new DomainException($"วันที่เริ่มของตาราง \"{schedule}\" ไม่ถูกต้อง ใช้รูปแบบ ปปปป-ดด-วว");
+        if (d > max) throw new DomainException($"ตาราง \"{schedule}\": {Schedule.StartDateMessage(min, max)}");
+        return d < min ? min : d;
     }
 
     /// <summary>A link's address in the file becomes the key of the link made from it; an account key stays when the set has the account.</summary>

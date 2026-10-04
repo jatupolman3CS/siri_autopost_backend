@@ -1,5 +1,6 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Domain.Entities;
@@ -100,4 +101,33 @@ internal static class WorkflowTestSupport
     public static async Task<AccountDto> AccountOfAsync(this HttpClient client, Guid ws, Platform platform, bool connected = false) =>
         (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!
             .First(a => a.Platform == platform && a.Connected == connected);
+
+    public const string FillerTarget = "ตัวเต็ม";
+
+    /// <summary>
+    /// Makes the workspace's queue hold <paramref name="count"/> more posts that are still to go out (a month ahead, so no
+    /// claim touches them), straight in the database: the API would need hours of schedules to get there.
+    /// </summary>
+    public static async Task FillQueueAsync(this ApiFactory factory, Guid ws, Guid accountId, int count)
+    {
+        var now = DateTimeOffset.UtcNow;
+        for (var done = 0; done < count; done += 2000)
+        {
+            await factory.WithDbAsync(async db =>
+            {
+                var account = await db.Accounts.AsNoTracking().SingleAsync(a => a.Id == accountId);
+                db.Posts.AddRange(Enumerable.Range(0, Math.Min(2000, count - done))
+                    .Select(i => Post.Schedule(ws, account, FillerTarget, "ข้อความ", [], now.AddDays(30).AddSeconds(i), now)));
+                await db.SaveChangesAsync();
+            });
+        }
+    }
+
+    /// <summary>Takes the posts <see cref="FillQueueAsync"/> made out of the queue again.</summary>
+    public static Task EmptyFillerAsync(this ApiFactory factory, Guid ws) =>
+        factory.WithDbAsync(db => db.Posts.Where(p => p.WorkspaceId == ws && p.Target == FillerTarget).ExecuteDeleteAsync());
+
+    /// <summary>Queued posts of the workspace that are still in the future at <paramref name="now"/> (the API's clock): what the queue limit counts.</summary>
+    public static Task<int> QueuedAsync(this ApiFactory factory, Guid ws, DateTimeOffset now) =>
+        factory.WithDbAsync(db => db.Posts.CountAsync(p => p.WorkspaceId == ws && p.Status == PostStatus.Queued && p.ScheduledAt > now));
 }

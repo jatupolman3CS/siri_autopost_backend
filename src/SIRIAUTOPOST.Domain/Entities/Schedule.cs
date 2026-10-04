@@ -1,3 +1,4 @@
+using System.Globalization;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Exceptions;
 using SIRIAUTOPOST.Domain.Services;
@@ -16,6 +17,15 @@ public class Schedule : Entity
     public const int HorizonDays = 14;
     /// <summary>One materialising run refuses to create more posts than this.</summary>
     public const int MaxPostsPerRun = 2000;
+    /// <summary>
+    /// A workspace holds at most this many queued posts that are still in the future (every source counted). A run that
+    /// would go beyond is refused when someone asks for it, and left for later by the background top-up.
+    /// </summary>
+    public const int MaxQueuedPerWorkspace = 10_000;
+    /// <summary>A start date may be this many days before the schedule's today (a browser a day behind)...</summary>
+    public const int StartDateDaysBack = 1;
+    /// <summary>...and this many days after it (a year ahead, leap year included).</summary>
+    public const int StartDateDaysAhead = 366;
     public const int MaxTimes = 48;
     public static readonly int[] BumpOptions = [0, 6, 12, 24];
     public static readonly int[] AutoDeleteOptions = [0, 3, 7, 14];
@@ -75,6 +85,7 @@ public class Schedule : Entity
         if (!Enum.IsDefined(mode)) throw new DomainException("รูปแบบตารางไม่ถูกต้อง");
         if (!Enum.IsDefined(order)) throw new DomainException("ลำดับโพสต์ไม่ถูกต้อง");
         if (utcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
+        EnsureStartDate(startDate, now, utcOffsetMinutes);
         if (!BumpOptions.Contains(bumpHours)) throw new DomainException("ตัวเลือกดันโพสต์ไม่ถูกต้อง");
         if (!AutoDeleteOptions.Contains(autoDeleteDays)) throw new DomainException("ตัวเลือกลบโพสต์อัตโนมัติไม่ถูกต้อง");
 
@@ -121,6 +132,31 @@ public class Schedule : Entity
             CreatedAt = now,
         };
     }
+
+    /// <summary>"Today" in a calendar that is <paramref name="utcOffsetMinutes"/> ahead of UTC.</summary>
+    public static DateOnly LocalDayOf(DateTimeOffset now, int utcOffsetMinutes) =>
+        DateOnly.FromDateTime(now.ToOffset(TimeSpan.FromMinutes(Math.Clamp(utcOffsetMinutes, -840, 840))).DateTime);
+
+    /// <summary>The first and last start date a new schedule may have: from yesterday to 366 days ahead, in its own calendar.</summary>
+    public static (DateOnly Min, DateOnly Max) StartDateRange(DateTimeOffset now, int utcOffsetMinutes)
+    {
+        var today = LocalDayOf(now, utcOffsetMinutes);
+        return (today.AddDays(-StartDateDaysBack), today.AddDays(StartDateDaysAhead));
+    }
+
+    /// <summary>
+    /// A start date far outside the range is no use (and one near <c>9999-12-31</c> breaks every calculation that follows
+    /// it), so it is refused.
+    /// </summary>
+    public static void EnsureStartDate(DateOnly startDate, DateTimeOffset now, int utcOffsetMinutes)
+    {
+        var (min, max) = StartDateRange(now, utcOffsetMinutes);
+        if (startDate < min || startDate > max) throw new DomainException(StartDateMessage(min, max));
+    }
+
+    public static string StartDateMessage(DateOnly min, DateOnly max) =>
+        $"วันที่เริ่มต้องอยู่ระหว่าง {min.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)} ถึง {max.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)} " +
+        $"(ตั้งแต่เมื่อวานถึง {StartDateDaysAhead} วันข้างหน้า)";
 
     /// <summary>The posting times of one day, ascending ("HH:mm").</summary>
     public IReadOnlyList<string> Slots()
@@ -176,7 +212,7 @@ public class Schedule : Entity
     }
 
     /// <summary>"Today" in the schedule's calendar.</summary>
-    public DateOnly LocalDay(DateTimeOffset now) => DateOnly.FromDateTime(now.ToOffset(TimeSpan.FromMinutes(UtcOffsetMinutes)).DateTime);
+    public DateOnly LocalDay(DateTimeOffset now) => LocalDayOf(now, UtcOffsetMinutes);
 
     /// <summary>A local day and time of day ("HH:mm") as a UTC instant.</summary>
     public DateTimeOffset ToUtc(DateOnly localDay, string hhmm)

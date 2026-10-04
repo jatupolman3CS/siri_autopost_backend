@@ -339,6 +339,61 @@ public class BackupEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_start_date_beyond_a_year_ahead_is_refused_and_an_old_one_is_moved_up_to_yesterday()
+    {
+        var rich = await RichAsync();
+        using var shop = rich.Shop;
+        var good = await BackupAsync(shop);
+        var snapshot = await SnapshotAsync(shop);
+
+        var far = await RestoreAsync(shop, good with { Schedules = [good.Schedules[0] with { StartDate = "9999-12-31" }] });
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, far.StatusCode);
+        var title = (await far.Content.ReadFromJsonAsync<ProblemDetails>(Json))!.Title!;
+        Assert.Contains(good.Schedules[0].Name, title);
+        Assert.Contains(ToLocalDay(shop.Now.AddDays(366), 420), title); // it says how far ahead is allowed
+        Assert.Equal(snapshot, await SnapshotAsync(shop));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await RestoreAsync(shop, good with { Schedules = [good.Schedules[0] with { StartDate = ToLocalDay(shop.Now.AddDays(367), 420) }] })).StatusCode);
+
+        // A backup is restored later than it was made: dates in the past are what a daily schedule normally has.
+        var old = await RestoreAsync(shop, good with { Schedules = good.Schedules.Select(x => x with { StartDate = "2020-01-01" }).ToList() });
+
+        old.EnsureSuccessStatusCode();
+        var schedules = await shop.SchedulesAsync();
+        Assert.All(schedules, x => Assert.Equal(ToLocalDay(shop.Now.AddDays(-1), 420), x.StartDate));
+        Assert.NotEmpty(await shop.PostsAsync(schedules[0].Id)); // the daily schedule still queues its posts
+        var claim = await shop.Device.PostAsync("/api/device/jobs/claim", null); // and the engine goes on
+        Assert.True(claim.StatusCode is HttpStatusCode.NoContent or HttpStatusCode.OK, claim.StatusCode.ToString());
+    }
+
+    [Fact]
+    public async Task A_restore_whose_posts_do_not_fit_in_the_workspaces_queue_is_refused_whole_and_one_that_fits_goes_through()
+    {
+        using var shop = await factory.ShopAsync(links: 2);
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["18:00"], Offset: 420, Name: "ตารางเดียว"));
+        var good = await BackupAsync(shop);
+        var own = (await shop.PostsAsync(created.Schedule.Id)).Count; // a restore deletes these and makes about as many again
+        var demo = await factory.QueuedAsync(shop.Ws, shop.Now) - own;
+        await factory.FillQueueAsync(shop.Ws, shop.Pair.AccountId, 9_990 - demo); // everything but the schedule: 9,990
+        var snapshot = await SnapshotAsync(shop);
+
+        var refused = await RestoreAsync(shop, good);
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        var title = (await refused.Content.ReadFromJsonAsync<ProblemDetails>(Json))!.Title!;
+        Assert.Contains("9,990", title); // what the queue holds once the old schedule's posts are gone
+        Assert.Contains("10,000", title);
+        Assert.Equal(snapshot, await SnapshotAsync(shop)); // the old schedule and its posts are as they were
+
+        await factory.EmptyFillerAsync(shop.Ws);
+        await factory.FillQueueAsync(shop.Ws, shop.Pair.AccountId, 9_900 - demo);
+        (await RestoreAsync(shop, good)).EnsureSuccessStatusCode();
+        var schedule = Assert.Single(await shop.SchedulesAsync());
+        Assert.NotEqual(created.Schedule.Id, schedule.Id);
+        Assert.NotEmpty(await shop.PostsAsync(schedule.Id));
+    }
+
+    [Fact]
     public async Task An_empty_file_clears_the_workflow_and_leaves_the_settings_alone()
     {
         var rich = await RichAsync();

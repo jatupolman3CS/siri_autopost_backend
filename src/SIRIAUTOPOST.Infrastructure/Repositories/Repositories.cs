@@ -208,6 +208,9 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
             .ToDictionaryAsync(x => x.Key, x => x.At, ct);
     }
 
+    public Task<int> CountQueuedFutureAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default) =>
+        db.Posts.CountAsync(x => x.WorkspaceId == workspaceId && x.Status == PostStatus.Queued && x.ScheduledAt > now, ct);
+
     public async Task<IReadOnlyList<Post>> ListBySlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default) =>
         await db.Posts.AsNoTracking().Where(x => x.ScheduleId == scheduleId && x.SlotKey == slotKey).OrderBy(x => x.ScheduledAt).ToListAsync(ct);
 

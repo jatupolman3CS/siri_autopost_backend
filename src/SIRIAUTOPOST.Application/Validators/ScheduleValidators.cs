@@ -25,6 +25,15 @@ internal static class ScheduleRules
     public static bool IsTimeList(IReadOnlyList<string>? times) =>
         times is null || (times.Count <= Schedule.MaxTimes && times.All(TimeOfDay.IsValid));
 
+    /// <summary>A start date that is a date but lies outside the range a schedule may start in (see <see cref="Schedule.StartDateRange"/>).</summary>
+    public static bool IsStartDateInRange(string? text, int utcOffsetMinutes, DateTimeOffset now)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return true; // empty = today
+        if (!DateOnly.TryParseExact(text.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)) return true; // the date rule says so
+        var (min, max) = Schedule.StartDateRange(now, utcOffsetMinutes);
+        return date >= min && date <= max;
+    }
+
     public static bool IsOverrideKey(string? key)
     {
         var k = (key ?? "").Trim();
@@ -35,7 +44,7 @@ internal static class ScheduleRules
 
 public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveScheduleRequest>
 {
-    public SaveScheduleRequestValidator()
+    public SaveScheduleRequestValidator(TimeProvider clock)
     {
         RuleFor(x => x.Name).MaximumLength(Schedule.MaxNameLength).WithMessage($"ชื่อตารางยาวเกิน {Schedule.MaxNameLength} ตัวอักษร");
         RuleFor(x => x.Mode).IsInEnum().WithMessage("รูปแบบตารางไม่ถูกต้อง");
@@ -47,6 +56,12 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
         RuleFor(x => x.DripFrom).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาเริ่มช่วงไม่ถูกต้อง ใช้รูปแบบ HH:mm");
         RuleFor(x => x.DripTo).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาสิ้นสุดช่วงไม่ถูกต้อง ใช้รูปแบบ HH:mm");
         RuleFor(x => x.StartDate).Must(ScheduleRules.IsDate).WithMessage("วันที่เริ่มไม่ถูกต้อง ใช้รูปแบบ ปปปป-ดด-วว");
+        RuleFor(x => x.StartDate).Must((r, d) => ScheduleRules.IsStartDateInRange(d, r.UtcOffsetMinutes, clock.GetUtcNow()))
+            .WithMessage(r =>
+            {
+                var (min, max) = Schedule.StartDateRange(clock.GetUtcNow(), r.UtcOffsetMinutes);
+                return Schedule.StartDateMessage(min, max);
+            });
         RuleFor(x => x.EveryHours).InclusiveBetween(1, 24).When(x => x.Mode == ScheduleMode.Interval)
             .WithMessage("ความถี่ต้องอยู่ระหว่าง 1–24 ชั่วโมง");
         RuleFor(x => x.DripCount).InclusiveBetween(1, 12).When(x => x.Mode == ScheduleMode.Drip)
@@ -64,11 +79,11 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
 }
 
 /// <summary>Checks the request; its errors carry the form's own field names ("times", "startDate"), not "request.times".</summary>
-public sealed class CreateScheduleCommandValidator : AbstractValidator<CreateScheduleCommand>
+public sealed class CreateScheduleCommandValidator(TimeProvider clock) : AbstractValidator<CreateScheduleCommand>
 {
     public override Task<ValidationResult> ValidateAsync(ValidationContext<CreateScheduleCommand> context, CancellationToken cancellation = default) =>
         context.InstanceToValidate.Request is { } request
-            ? new SaveScheduleRequestValidator().ValidateAsync(request, cancellation)
+            ? new SaveScheduleRequestValidator(clock).ValidateAsync(request, cancellation)
             : Task.FromResult(new ValidationResult([new ValidationFailure("request", Messages.BadValue)]));
 }
 

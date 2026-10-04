@@ -260,7 +260,7 @@ public class CollectionsEndpointsTests(ApiFactory factory)
         var set = await client.CreateLinkSetAsync(ws);
         await factory.WithDbAsync(async db =>
         {
-            db.Schedules.Add(Schedule.Create(ws, "ตารางเช้า", c.Id, set.Id, ScheduleMode.Daily, ["09:00"], 6, "09:00", new DateOnly(2026, 10, 5), "14:00",
+            db.Schedules.Add(Schedule.Create(ws, "ตารางเช้า", c.Id, set.Id, ScheduleMode.Daily, ["09:00"], 6, "09:00", DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1), "14:00",
                 PostOrder.Shuffle, "09:00", "21:00", 3, 0, 0, null, 420, DateTimeOffset.UtcNow));
             await db.SaveChangesAsync();
         });

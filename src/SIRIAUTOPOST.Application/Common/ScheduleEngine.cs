@@ -166,6 +166,13 @@ public sealed class ScheduleMaterializer(
             }
         }
 
+        if (created.Count > 0)
+        {
+            // The workspace's queue has a limit too: a run that would go beyond it adds nothing.
+            var queued = await posts.CountQueuedFutureAsync(ws.Id, now, ct);
+            if (queued + created.Count > Schedule.MaxQueuedPerWorkspace)
+                throw new QueueFullException(queued, created.Count, Schedule.MaxQueuedPerWorkspace);
+        }
         foreach (var post in created) posts.Add(post);
         s.MarkGenerated(s.GeneratedThrough is { } done && done > toLocal ? done : toLocal, cursor);
         return created.Count == 0

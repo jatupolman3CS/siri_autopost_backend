@@ -75,7 +75,8 @@ public sealed class GetSchedulesQueryHandler(
 /// <summary>
 /// Creates a schedule and queues its posts for the next fortnight (in the schedule's local calendar). Refused (422)
 /// when the collection or link set is missing, the workspace already has 50 schedules, the collection has no post
-/// that can be used, or no connected Facebook account can post the set.
+/// that can be used, no connected Facebook account can post the set, or the posts would take the workspace over its
+/// limit of queued posts. The schedule and its posts are saved together: a refusal leaves nothing behind.
 /// </summary>
 public sealed record CreateScheduleCommand(Guid WorkspaceId, SaveScheduleRequest Request) : ICommand<ScheduleCreatedDto>;
 
@@ -93,12 +94,10 @@ public sealed class CreateScheduleCommandHandler(
         var r = c.Request;
         var collection = await collections.GetAsync(ws.Id, r.CollectionId, ct) ?? throw new DomainException("ไม่พบชุดโพสต์ที่เลือก");
         var set = await linkSets.GetAsync(ws.Id, r.LinkSetId, ct) ?? throw new DomainException("ไม่พบชุดลิงก์ที่เลือก");
-        if (await schedules.CountAsync(ws.Id, ct) >= Schedule.MaxPerWorkspace)
-            throw new DomainException($"สร้างตารางโพสต์ได้ไม่เกิน {Schedule.MaxPerWorkspace} ตารางต่อเวิร์กสเปซ");
 
         var now = clock.GetUtcNow();
         if (r.UtcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
-        var today = DateOnly.FromDateTime(now.ToOffset(TimeSpan.FromMinutes(r.UtcOffsetMinutes)).DateTime);
+        var today = Schedule.LocalDayOf(now, r.UtcOffsetMinutes);
         var start = string.IsNullOrWhiteSpace(r.StartDate)
             ? today
             : DateOnly.TryParseExact(r.StartDate.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
@@ -134,10 +133,16 @@ public sealed class CreateScheduleCommandHandler(
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
             r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now);
-        schedules.Add(schedule);
-        await uow.SaveChangesAsync(ct);
-
-        var made = await topUp.GenerateAsync(ws.Id, schedule.Id, ct);
+        var made = MaterializeResult.None;
+        // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
+        await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
+        {
+            if (await schedules.CountAsync(ws.Id, ct) >= Schedule.MaxPerWorkspace)
+                throw new DomainException($"สร้างตารางโพสต์ได้ไม่เกิน {Schedule.MaxPerWorkspace} ตารางต่อเวิร์กสเปซ");
+            schedules.Add(schedule);
+            await uow.SaveChangesAsync(ct);
+            made = await topUp.GenerateAsync(ws.Id, schedule.Id, ct);
+        }, ct);
         var saved = await schedules.GetAsync(ws.Id, schedule.Id, ct) ?? schedule;
         return new ScheduleCreatedDto(await views.BuildOneAsync(saved, now, ct), made.Created, made.FirstAt, made.LastAt);
     }
@@ -145,7 +150,7 @@ public sealed class CreateScheduleCommandHandler(
 
 /// <summary>
 /// Pauses or resumes a schedule. Pausing drops its posts that are still queued in the future; resuming makes the next
-/// fortnight again.
+/// fortnight again (and is refused, leaving the schedule paused, when the posts would not fit in the workspace's queue).
 /// </summary>
 public sealed record SetScheduleActiveCommand(Guid WorkspaceId, Guid ScheduleId, bool Active) : ICommand<ScheduleDto>;
 
@@ -161,10 +166,21 @@ public sealed class SetScheduleActiveCommandHandler(
         var now = clock.GetUtcNow();
         if (schedule.Active != c.Active)
         {
-            if (!c.Active) posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(schedule.Id, now, ct));
-            schedule.SetActive(c.Active);
-            await uow.SaveChangesAsync(ct);
-            if (c.Active) await topUp.GenerateAsync(ws.Id, schedule.Id, ct);
+            if (!c.Active)
+            {
+                posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(schedule.Id, now, ct));
+                schedule.SetActive(false);
+                await uow.SaveChangesAsync(ct);
+            }
+            else
+            {
+                await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
+                {
+                    schedule.SetActive(true);
+                    await uow.SaveChangesAsync(ct);
+                    await topUp.GenerateAsync(ws.Id, schedule.Id, ct);
+                }, ct);
+            }
         }
         var saved = await schedules.GetAsync(ws.Id, schedule.Id, ct) ?? schedule;
         return await views.BuildOneAsync(saved, now, ct);

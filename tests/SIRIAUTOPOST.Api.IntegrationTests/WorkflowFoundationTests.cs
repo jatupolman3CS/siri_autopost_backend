@@ -247,7 +247,8 @@ public class WorkflowFoundationTests(ApiFactory factory)
             await db.SaveChangesAsync();
             (collection, set) = (c.Id, s.Id);
         });
-        var made = Schedule.Create(ws, "ตาราง", collection, set, ScheduleMode.Drip, ["09:00"], 4, "08:30", new DateOnly(2026, 11, 2), "15:45", PostOrder.Rotate,
+        var start = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(30);
+        var made = Schedule.Create(ws, "ตาราง", collection, set, ScheduleMode.Drip, ["09:00"], 4, "08:30", start, "15:45", PostOrder.Rotate,
             "10:00", "20:00", 5, 12, 7, new Dictionary<string, IReadOnlyList<string>> { [Schedule.LinkKey(link)] = ["20:00", "06:00"], [Schedule.AccountKey(Guid.NewGuid())] = ["12:00"] },
             -300, DateTimeOffset.UtcNow);
         made.SetActive(false);
@@ -261,7 +262,7 @@ public class WorkflowFoundationTests(ApiFactory factory)
         var s = await factory.WithDbAsync(db => db.Schedules.AsNoTracking().SingleAsync(x => x.Id == made.Id));
 
         Assert.Equal(("ตาราง", ScheduleMode.Drip, PostOrder.Rotate, 4, "08:30", "15:45"), (s.Name, s.Mode, s.Order, s.EveryHours, s.FirstTime, s.OnceTime));
-        Assert.Equal((new DateOnly(2026, 11, 2), "10:00", "20:00", 5, 12, 7), (s.StartDate, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays));
+        Assert.Equal((start, "10:00", "20:00", 5, 12, 7), (s.StartDate, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays));
         Assert.Equal((false, -300, new DateOnly(2026, 11, 15), 9), (s.Active, s.UtcOffsetMinutes, s.GeneratedThrough, s.Cursor));
         Assert.Equal(["09:00"], s.Times);
         Assert.Equal(["06:00", "20:00"], s.Overrides[Schedule.LinkKey(link)]);
@@ -367,7 +368,7 @@ public class WorkflowFoundationTests(ApiFactory factory)
         await client.AddLinkAsync(ws, set.Id, "facebook.com/groups/x");
         await factory.WithDbAsync(async db =>
         {
-            db.Schedules.Add(Schedule.Create(ws, "s", c.Id, set.Id, ScheduleMode.Daily, ["09:00"], 6, "09:00", new DateOnly(2026, 10, 5), "14:00", PostOrder.Shuffle,
+            db.Schedules.Add(Schedule.Create(ws, "s", c.Id, set.Id, ScheduleMode.Daily, ["09:00"], 6, "09:00", DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1), "14:00", PostOrder.Shuffle,
                 "09:00", "21:00", 3, 0, 0, null, 420, DateTimeOffset.UtcNow));
             db.ReportShares.Add(ReportShare.Create(ws, ReportShare.NewToken(), "b", "week", false, "{}", DateTimeOffset.UtcNow));
             await db.SaveChangesAsync();
@@ -390,7 +391,7 @@ public class WorkflowFoundationTests(ApiFactory factory)
         var set = await client.CreateLinkSetAsync(ws);
         await factory.WithDbAsync(async db =>
         {
-            db.Schedules.Add(Schedule.Create(ws, "s", c.Id, set.Id, ScheduleMode.Daily, ["09:00"], 6, "09:00", new DateOnly(2026, 10, 5), "14:00", PostOrder.Shuffle,
+            db.Schedules.Add(Schedule.Create(ws, "s", c.Id, set.Id, ScheduleMode.Daily, ["09:00"], 6, "09:00", DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1), "14:00", PostOrder.Shuffle,
                 "09:00", "21:00", 3, 0, 0, null, 420, DateTimeOffset.UtcNow));
             await db.SaveChangesAsync();
         });

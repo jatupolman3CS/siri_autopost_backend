@@ -237,4 +237,39 @@ public class ScheduleTests
         Assert.Null(s.GeneratedThrough);
         Assert.Equal(7, s.Cursor);
     }
+
+    // ---- the start date ----
+
+    [Fact]
+    public void A_start_date_may_be_from_yesterday_to_366_days_ahead_in_the_schedules_own_calendar()
+    {
+        var today = new DateOnly(2026, 10, 4); // 03:00 UTC is 10:00 on the 4th in Bangkok
+        Assert.Equal((today.AddDays(-1), today.AddDays(366)), Schedule.StartDateRange(Now, 420));
+
+        Assert.Equal(today.AddDays(-1), Make(start: today.AddDays(-1)).StartDate);
+        Assert.Equal(today.AddDays(366), Make(start: today.AddDays(366)).StartDate);
+        Assert.Throws<DomainException>(() => Make(start: today.AddDays(-2)));
+        Assert.Throws<DomainException>(() => Make(start: today.AddDays(367)));
+    }
+
+    [Fact]
+    public void The_range_follows_the_offset_so_a_browser_behind_utc_is_still_on_the_day_before()
+    {
+        // 03:00 UTC is 22:00 on the 3rd five hours behind.
+        Assert.Equal((new DateOnly(2026, 10, 2), new DateOnly(2027, 10, 4)), Schedule.StartDateRange(Now, -300));
+        Assert.Equal(new DateOnly(2026, 10, 2), Make(start: new DateOnly(2026, 10, 2), offset: -300).StartDate);
+        Assert.Throws<DomainException>(() => Make(start: new DateOnly(2026, 10, 1), offset: -300));
+    }
+
+    [Theory]
+    [InlineData(9999, 12, 31)]
+    [InlineData(9999, 12, 30)]
+    [InlineData(1, 1, 1)]
+    [InlineData(2100, 1, 1)]
+    public void A_start_date_that_breaks_the_calendar_is_refused_not_stored(int year, int month, int day)
+    {
+        var ex = Assert.Throws<DomainException>(() => Make(start: new DateOnly(year, month, day)));
+        Assert.Contains("2026-10-03", ex.Message); // the message says what is allowed
+        Assert.Contains("2027-10-05", ex.Message);
+    }
 }

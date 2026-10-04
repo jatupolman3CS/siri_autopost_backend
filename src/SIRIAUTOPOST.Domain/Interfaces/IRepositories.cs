@@ -135,6 +135,8 @@ public interface IPostRepository
     Task<Dictionary<Guid, int>> CountByScheduleAsync(IEnumerable<Guid> scheduleIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
     /// <summary>The earliest queued post still to go out, per schedule (schedules without one are left out).</summary>
     Task<Dictionary<Guid, DateTimeOffset>> NextQueuedAtByScheduleAsync(IEnumerable<Guid> scheduleIds, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>Queued posts of a workspace that are still in the future, whatever made them: what the queue limit counts.</summary>
+    Task<int> CountQueuedFutureAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default);
     /// <summary>Posts of one round of a schedule (same SlotKey, every target).</summary>
     Task<IReadOnlyList<Post>> ListBySlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default);
     /// <summary>Posts of a round that are not finished: queued, waiting or being posted. 0 = the round is over.</summary>

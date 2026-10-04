@@ -415,4 +415,33 @@ public class ScheduleTopUpTests
         throttle.Clear(id);
         Assert.False(throttle.IsDelayed(id, Now.AddMinutes(1)));
     }
+
+    [Fact]
+    public async Task A_full_queue_stops_the_top_up_of_that_schedule_quietly_until_there_is_room()
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+        rig.World.PostRepo.CountQueuedFutureAsync(rig.World.Ws.Id, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(10_000);
+
+        Assert.Equal(0, await rig.TopUp().EnsureAsync(rig.World.Ws.Id)); // no exception
+
+        Assert.Empty(rig.World.Added);
+        Assert.Null(s.GeneratedThrough);
+        Assert.True(rig.Throttle.IsDelayed(s.Id, Now.AddMinutes(1)));
+
+        rig.World.PostRepo.CountQueuedFutureAsync(rig.World.Ws.Id, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(0);
+        Assert.Equal(14 * 2, await rig.TopUp(Now.AddMinutes(11)).EnsureAsync(rig.World.Ws.Id)); // room again, and the ten minutes are over
+    }
+
+    [Fact]
+    public async Task Creating_or_resuming_a_schedule_with_a_full_queue_is_refused_with_the_reason()
+    {
+        var rig = new Rig();
+        var s = rig.Add(rig.World.NewSchedule());
+        rig.World.PostRepo.CountQueuedFutureAsync(rig.World.Ws.Id, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>()).Returns(9_990);
+
+        var ex = await Assert.ThrowsAsync<QueueFullException>(() => rig.TopUp().GenerateAsync(rig.World.Ws.Id, s.Id));
+
+        Assert.Contains("9,990", ex.Message);
+    }
 }

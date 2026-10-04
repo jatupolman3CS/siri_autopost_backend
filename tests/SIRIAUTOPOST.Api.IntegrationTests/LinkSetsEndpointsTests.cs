@@ -362,7 +362,8 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
         var set = await client.CreateLinkSetAsync(ws);
         var link = await client.AddLinkAsync(ws, set.Id, Plants);
         var collection = await client.CreateCollectionAsync(ws);
-        var schedule = Schedule.Create(ws, "ตารางเย็น", collection.Id, set.Id, ScheduleMode.Weekend, ["18:00"], 6, "09:00", new DateOnly(2026, 10, 5), "14:00",
+        var start = DateOnly.FromDateTime(DateTime.UtcNow).AddDays(1);
+        var schedule = Schedule.Create(ws, "ตารางเย็น", collection.Id, set.Id, ScheduleMode.Weekend, ["18:00"], 6, "09:00", start, "14:00",
             PostOrder.Rotate, "09:00", "21:00", 3, 0, 0, new Dictionary<string, IReadOnlyList<string>> { [Schedule.LinkKey(link.Id)] = ["07:00", "19:30"] }, 420,
             DateTimeOffset.UtcNow);
         await factory.WithDbAsync(async db =>
@@ -377,7 +378,7 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
 
         // The schedule's own settings survive a round trip through the database.
         var stored = await factory.WithDbAsync(db => db.Schedules.AsNoTracking().SingleAsync(s => s.Id == schedule.Id));
-        Assert.Equal((ScheduleMode.Weekend, PostOrder.Rotate, new DateOnly(2026, 10, 5), 420), (stored.Mode, stored.Order, stored.StartDate, stored.UtcOffsetMinutes));
+        Assert.Equal((ScheduleMode.Weekend, PostOrder.Rotate, start, 420), (stored.Mode, stored.Order, stored.StartDate, stored.UtcOffsetMinutes));
         Assert.Equal(["07:00", "19:30"], stored.Overrides[Schedule.LinkKey(link.Id)]);
         Assert.Equal(["18:00"], stored.Times);
 

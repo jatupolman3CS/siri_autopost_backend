@@ -177,6 +177,7 @@ public sealed class RestoreBackupCommandHandler(
         var newSchedules = new List<Schedule>();
         foreach (var bsc in b.Schedules)
         {
+            // Each a millisecond after the one before it, so the list comes back in the file's order.
             if (!newCollections.TryGetValue((bsc.Collection ?? "").Trim(), out var collection))
                 throw new DomainException($"ตาราง \"{bsc.Name}\" อ้างถึงชุดโพสต์ \"{bsc.Collection}\" ที่ไม่มีในไฟล์");
             if (!newSets.TryGetValue((bsc.LinkSet ?? "").Trim(), out var set))
@@ -185,7 +186,7 @@ public sealed class RestoreBackupCommandHandler(
             var schedule = Schedule.Create(
                 ws.Id, bsc.Name, collection.Id, set.Id, bsc.Mode, bsc.Times, bsc.EveryHours, bsc.FirstTime, start, bsc.OnceTime, bsc.Order,
                 bsc.DripFrom, bsc.DripTo, bsc.DripCount, bsc.BumpHours, bsc.AutoDeleteDays,
-                TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now);
+                TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count));
             if (!bsc.Active) schedule.SetActive(false);
             newSchedules.Add(schedule);
         }

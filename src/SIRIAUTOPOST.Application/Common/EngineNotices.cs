@@ -45,13 +45,16 @@ public static partial class EngineNotices
     /// <summary>The group a post went to: its name and, when it has one, its code.</summary>
     public static string Group(Post p) => string.IsNullOrWhiteSpace(p.Code) ? p.Target : $"{p.Target} ({p.Code})";
 
+    // A post sent from the test page says so, so nobody mistakes it for a schedule's.
+    private static string Test(Post p) => p.IsTest ? "ทดสอบ · " : "";
+
     public static Notice Posted(Post p, Guid? linkSetId, bool awaitingApproval) => new(
         NotifyEvent.Success, linkSetId, p.LinkId,
-        $"{(awaitingApproval ? "ส่งโพสต์แล้ว รอแอดมินกลุ่มอนุมัติ" : "โพสต์สำเร็จ")} · {Group(p)} · “{Excerpt(p.Content)}”");
+        $"{Test(p)}{(awaitingApproval ? "ส่งโพสต์แล้ว รอแอดมินกลุ่มอนุมัติ" : "โพสต์สำเร็จ")} · {Group(p)} · “{Excerpt(p.Content)}”");
 
     public static Notice Failed(Post p, Guid? linkSetId, string? error) => new(
         NotifyEvent.Fail, linkSetId, p.LinkId,
-        $"โพสต์ล้มเหลว · {Group(p)} · {(string.IsNullOrWhiteSpace(error) ? "ไม่ทราบสาเหตุ" : Excerpt(error, 120))} · “{Excerpt(p.Content, 40)}”");
+        $"{Test(p)}โพสต์ล้มเหลว · {Group(p)} · {(string.IsNullOrWhiteSpace(error) ? "ไม่ทราบสาเหตุ" : Excerpt(error, 120))} · “{Excerpt(p.Content, 40)}”");
 
     public static Notice NeedsLogin(Post p, Guid? linkSetId, Device device) => new(
         NotifyEvent.Block, linkSetId, p.LinkId,

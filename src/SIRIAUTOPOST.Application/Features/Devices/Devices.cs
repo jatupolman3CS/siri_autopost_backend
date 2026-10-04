@@ -526,6 +526,7 @@ public sealed class ReportJobResultCommandHandler(
             if (c.NeedsLogin) account?.MarkNeedsLogin();
 
             // A lost login or a Facebook block is about the account, not the group.
+            Notice? switchedOff = null;
             if (link is not null && !c.NeedsLogin && !c.Blocked)
             {
                 link.RecordFailure();
@@ -533,7 +534,7 @@ public sealed class ReportJobResultCommandHandler(
                 {
                     link.AutoDisable(link.FailStreak);
                     events.Add(DeviceEvents.LinksChanged(ws.Id, device.Id, link.LinkSetId, link.Id, link.Health, now));
-                    notices.Add(EngineNotices.LinkSwitchedOff(link, link.FailStreak));
+                    switchedOff = EngineNotices.LinkSwitchedOff(link, link.FailStreak);
                 }
             }
 
@@ -547,6 +548,7 @@ public sealed class ReportJobResultCommandHandler(
             if (c.NeedsLogin) notices.Add(EngineNotices.NeedsLogin(post, link?.LinkSetId, device));
             else if (c.Blocked) notices.Add(EngineNotices.Blocked(post, link?.LinkSetId, device, c.Error, blockPause));
             else notices.Add(EngineNotices.Failed(post, link?.LinkSetId, c.Error));
+            if (switchedOff is not null) notices.Add(switchedOff);
 
             // This post and the ones before it all failed: rest the device for a while.
             if (advanced.FailStreak > 0 && account is not null)

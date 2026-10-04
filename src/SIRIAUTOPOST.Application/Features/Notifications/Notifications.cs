@@ -41,6 +41,8 @@ public sealed class UpdateNotificationsCommandHandler(
         await users.RequireNotificationsAsync(ws, ct);
 
         var settings = c.Settings.ToSettings(ws.Notifications);
+        // "Default" means "follow the parent": a set or a group may say it, the workspace has no parent.
+        if (settings.Channel == NotifyChannel.Default) throw new DomainException("ช่องทางเริ่มต้นของเวิร์กสเปซต้องเป็น tg, line, both หรือ off");
         var setIds = (await linkSets.ListAsync(ws.Id, ct)).Select(s => s.Id).ToHashSet();
         var linksOfSet = (await links.ListAsync(ws.Id, ct)).GroupBy(l => l.LinkSetId).ToDictionary(g => g.Key, g => g.Select(l => l.Id).ToHashSet());
         foreach (var setId in settings.Sets.Keys.ToList())

@@ -15,7 +15,7 @@ export function hasContent(settings) {
     (c) =>
       c.groups.length ||
       (c.leadImageIds || []).length ||
-      c.posts.some((p) => p.text.trim() || p.imageIds.length)
+      c.posts.some((p) => p.text.trim() || p.imageIds.length || (p.imageUrls || []).length)
   );
 }
 

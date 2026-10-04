@@ -49,7 +49,7 @@ public static partial class ExtensionSettings
             foreach (var p in Items(c, "posts"))
             {
                 var text = p.TryGetProperty("text", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : "";
-                if (!string.IsNullOrWhiteSpace(text) || Strings(p, "imageIds").Any()) return true;
+                if (!string.IsNullOrWhiteSpace(text) || Strings(p, "imageIds").Any() || Strings(p, "imageUrls").Any()) return true;
             }
         }
         return false;

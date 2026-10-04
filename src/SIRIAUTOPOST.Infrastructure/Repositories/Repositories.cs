@@ -331,7 +331,7 @@ public sealed class MediaRepository(AppDbContext db) : IMediaRepository
         await db.Media.AsNoTracking()
             .Where(x => x.WorkspaceId == workspaceId)
             .OrderByDescending(x => x.CreatedAt)
-            .Select(x => new MediaSummary(x.Id, x.Name, x.ContentType, x.Kind, x.Size, x.UsedCount, x.CreatedAt))
+            .Select(x => new MediaSummary(x.Id, x.Name, x.ContentType, x.Kind, x.Size, x.UsedCount, x.CreatedAt, x.FolderId))
             .ToListAsync(ct);
 
     public Task<MediaFile?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
@@ -351,6 +351,32 @@ public sealed class MediaRepository(AppDbContext db) : IMediaRepository
     }
 
     public void Add(MediaFile file) => db.Media.Add(file);
+
+    public async Task<IReadOnlyList<MediaFile>> GetManyForUpdateAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
+    {
+        var list = ids.Distinct().ToList();
+        return await db.Media.Where(x => x.WorkspaceId == workspaceId && list.Contains(x.Id)).ToListAsync(ct);
+    }
+
+    public Task ClearFolderAsync(Guid workspaceId, Guid folderId, CancellationToken ct = default) =>
+        db.Media.Where(x => x.WorkspaceId == workspaceId && x.FolderId == folderId)
+            .ExecuteUpdateAsync(s => s.SetProperty(x => x.FolderId, (Guid?)null), ct);
+}
+
+public sealed class MediaFolderRepository(AppDbContext db) : IMediaFolderRepository
+{
+    public async Task<IReadOnlyList<MediaFolder>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.MediaFolders.AsNoTracking().Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.Name).ToListAsync(ct);
+
+    public Task<MediaFolder?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.MediaFolders.AsNoTracking().FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public Task<MediaFolder?> GetForUpdateAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.MediaFolders.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public void Add(MediaFolder folder) => db.MediaFolders.Add(folder);
+
+    public void Remove(MediaFolder folder) => db.MediaFolders.Remove(folder);
 }
 
 public sealed class SnippetRepository(AppDbContext db) : ISnippetRepository

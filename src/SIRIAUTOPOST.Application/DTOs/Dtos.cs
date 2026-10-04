@@ -113,11 +113,16 @@ public sealed record PostDto(
 
 public sealed record ScheduleResultDto(int Created, DateTimeOffset FirstAt, DateTimeOffset LastAt);
 
-public sealed record MediaDto(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt)
+public sealed record MediaDto(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt, Guid? FolderId)
 {
-    public static MediaDto From(MediaSummary m) => new(m.Id, m.Name, m.ContentType, m.Kind, m.Size, m.UsedCount, m.CreatedAt);
+    public static MediaDto From(MediaSummary m) => new(m.Id, m.Name, m.ContentType, m.Kind, m.Size, m.UsedCount, m.CreatedAt, m.FolderId);
 
-    public static MediaDto From(MediaFile m) => new(m.Id, m.Name, m.ContentType, m.Kind, m.Size, m.UsedCount, m.CreatedAt);
+    public static MediaDto From(MediaFile m) => new(m.Id, m.Name, m.ContentType, m.Kind, m.Size, m.UsedCount, m.CreatedAt, m.FolderId);
+}
+
+public sealed record MediaFolderDto(Guid Id, string Name, DateTimeOffset CreatedAt)
+{
+    public static MediaFolderDto From(MediaFolder f) => new(f.Id, f.Name, f.CreatedAt);
 }
 
 /// <summary>A file to send back. <c>ExternalUrl</c> set: the bytes are not in the database, fetch them from there.</summary>

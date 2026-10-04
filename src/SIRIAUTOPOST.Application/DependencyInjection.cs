@@ -74,6 +74,11 @@ public static class DependencyInjection
         services.AddQuery<GetMediaQuery, IReadOnlyList<MediaDto>, GetMediaQueryHandler>();
         services.AddQuery<GetMediaContentQuery, MediaContent, GetMediaContentQueryHandler>();
         services.AddCommand<UploadMediaCommand, MediaDto, UploadMediaCommandHandler>();
+        services.AddQuery<GetMediaFoldersQuery, IReadOnlyList<MediaFolderDto>, GetMediaFoldersQueryHandler>();
+        services.AddCommand<CreateMediaFolderCommand, MediaFolderDto, CreateMediaFolderCommandHandler>();
+        services.AddCommand<RenameMediaFolderCommand, MediaFolderDto, RenameMediaFolderCommandHandler>();
+        services.AddCommand<DeleteMediaFolderCommand, Unit, DeleteMediaFolderCommandHandler>();
+        services.AddCommand<MoveMediaCommand, IReadOnlyList<MediaDto>, MoveMediaCommandHandler>();
         services.AddQuery<GetSnippetsQuery, IReadOnlyList<SnippetDto>, GetSnippetsQueryHandler>();
         services.AddCommand<CreateSnippetCommand, SnippetDto, CreateSnippetCommandHandler>();
 

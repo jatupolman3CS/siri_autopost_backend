@@ -195,7 +195,7 @@ public sealed record PostOutcome(
     PostStatus Status, DateTimeOffset ScheduledAt, DateTimeOffset? PublishedAt);
 
 /// <summary>A library entry without its bytes.</summary>
-public sealed record MediaSummary(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt);
+public sealed record MediaSummary(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt, Guid? FolderId);
 
 public interface IMediaRepository
 {
@@ -205,6 +205,20 @@ public interface IMediaRepository
     /// <summary>Counts one more use (a post scheduled with it) for each file.</summary>
     Task RecordUseAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     void Add(MediaFile file);
+    /// <summary>The files (tracked) to change; ids from another workspace are not returned.</summary>
+    Task<IReadOnlyList<MediaFile>> GetManyForUpdateAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    /// <summary>Takes every file out of a folder (the folder is being deleted).</summary>
+    Task ClearFolderAsync(Guid workspaceId, Guid folderId, CancellationToken ct = default);
+}
+
+public interface IMediaFolderRepository
+{
+    Task<IReadOnlyList<MediaFolder>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    Task<MediaFolder?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    /// <summary>Tracked, to rename or delete.</summary>
+    Task<MediaFolder?> GetForUpdateAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    void Add(MediaFolder folder);
+    void Remove(MediaFolder folder);
 }
 
 public interface IDeviceRepository

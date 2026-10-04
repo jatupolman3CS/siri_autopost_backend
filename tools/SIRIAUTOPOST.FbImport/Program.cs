@@ -186,6 +186,9 @@ await db.SaveChangesAsync();
         coll = PostCollection.Create(workspaceId, CollName, "โพสต์และรูปที่นำเข้าจากไฟล์ส่งออก", now, await db.Collections.CountAsync(x => x.WorkspaceId == workspaceId));
         db.Collections.Add(coll);
     }
+    // The imported files go into their own library folder.
+    var folder = await db.MediaFolders.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Name == CollName);
+    if (folder is null) { folder = MediaFolder.Create(workspaceId, CollName, now); db.MediaFolders.Add(folder); }
     static string KeyOf(string url) { var i = url.IndexOf("/media/", StringComparison.Ordinal); return i < 0 ? url : url[(i + 1)..]; }
     var lib = new Dictionary<string, MediaFile>();
     foreach (var f in await db.Media.Where(x => x.WorkspaceId == workspaceId && x.ExternalUrl != null).ToListAsync()) lib[KeyOf(f.ExternalUrl!)] = f;
@@ -203,6 +206,7 @@ await db.SaveChangesAsync();
             if (!lib.TryGetValue(m.Key, out var f))
             {
                 f = MediaFile.CreateExternal(workspaceId, Path.GetFileNameWithoutExtension(m.Key), m.ContentType, m.Size, "r2://" + m.Key, now);
+                f.MoveToFolder(folder.Id);
                 db.Media.Add(f);
                 lib[m.Key] = f;
                 newMedia++;
@@ -215,6 +219,7 @@ await db.SaveChangesAsync();
         db.CollectionPosts.Add(CollectionPost.Create(coll, text, ids, ip.PostedAt));
         newPosts++;
     }
+    foreach (var f in lib.Values) if (f.FolderId is null) f.MoveToFolder(folder.Id);
     await db.SaveChangesAsync();
     // Remove copies made by an earlier run (same text and media): keep the oldest.
     var dups = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).OrderBy(x => x.CreatedAt).ThenBy(x => x.UpdatedAt).ToListAsync())

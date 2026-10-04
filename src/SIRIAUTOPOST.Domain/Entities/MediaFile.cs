@@ -17,6 +17,8 @@ public class MediaFile : Entity
     /// <summary>Set when the file lives in object storage (Data is then empty) and is served from this address.</summary>
     public string? ExternalUrl { get; private set; }
     public int UsedCount { get; private set; }
+    /// <summary>The library folder the file is in; null = not in a folder.</summary>
+    public Guid? FolderId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
     private MediaFile() { } // EF Core
@@ -40,6 +42,8 @@ public class MediaFile : Entity
             CreatedAt = now,
         };
     }
+
+    public void MoveToFolder(Guid? folderId) => FolderId = folderId;
 
     /// <summary>Points the file at a new address (the storage's public address changed).</summary>
     public void MoveTo(string url) => ExternalUrl = url;

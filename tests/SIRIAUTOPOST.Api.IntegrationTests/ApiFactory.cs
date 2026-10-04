@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using SIRIAUTOPOST.Api.IntegrationTests.Notifications;
 using SIRIAUTOPOST.Api.IntegrationTests.Payments;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Interfaces;
@@ -36,6 +37,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     /// <summary>Stripe, played by the tests. Tests that switch it off or make it decline must put it back.</summary>
     public FakePaymentGateway Payments { get; } = new(StripeWebhookSecret);
 
+    /// <summary>Telegram and LINE, played by the tests: notifications are delivered inline and recorded here.</summary>
+    public FakeNotificationGateway Notifications { get; } = new();
+
     private static readonly string ConnectionString =
         Environment.GetEnvironmentVariable("SIRIAUTOPOST_TEST_DB")
         ?? "Host=localhost;Port=5432;Database=siriautopost_test;Username=postgres;Password=postgres";
@@ -48,11 +52,14 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "integration-test-signing-key-0123456789abcdef");
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);
+        builder.UseSetting("Notifications:Inline", "true"); // delivered inside the request, so tests see what was sent at once
         builder.ConfigureTestServices(s =>
         {
             s.AddSingleton<TimeProvider>(Clock);
             s.RemoveAll<IPaymentGateway>();
             s.AddSingleton<IPaymentGateway>(Payments);
+            s.RemoveAll<INotificationGateway>();
+            s.AddSingleton<INotificationGateway>(Notifications);
         });
     }
 

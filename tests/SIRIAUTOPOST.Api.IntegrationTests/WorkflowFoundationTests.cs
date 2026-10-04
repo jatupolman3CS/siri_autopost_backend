@@ -156,12 +156,13 @@ public class WorkflowFoundationTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task Notifications_are_not_sent_until_a_dispatcher_is_registered()
+    public async Task A_notification_for_a_workspace_that_does_not_exist_is_dropped_quietly()
     {
         using var scope = factory.Services.CreateScope();
         var dispatcher = scope.ServiceProvider.GetRequiredService<INotificationDispatcher>();
+        var before = factory.Notifications.All.Count;
         await dispatcher.NotifyAsync(NotifyEvent.Fail, Guid.NewGuid(), null, null, "ทดสอบ");
-        Assert.NotNull(dispatcher);
+        Assert.Equal(before, factory.Notifications.All.Count);
     }
 
     // ---- what is stored ----

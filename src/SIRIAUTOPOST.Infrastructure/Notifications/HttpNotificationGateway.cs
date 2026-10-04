@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
@@ -43,7 +43,7 @@ public sealed partial class HttpNotificationGateway(HttpClient http, IOptions<No
         var (response, error) = await CallAsync("Telegram", token, ct, () =>
             new HttpRequestMessage(HttpMethod.Post, TelegramUri(token, "sendMessage"))
             {
-                Content = JsonContent.Create(new { chat_id = chatId.Trim(), text = Cut(text, TelegramMaxText) }),
+                Content = Body(new { chat_id = chatId.Trim(), text = Cut(text, TelegramMaxText) }),
             });
         if (response is null) return GatewayResult.Failure(error!);
         var failure = await TelegramFailureAsync(response, token, ct);
@@ -58,7 +58,7 @@ public sealed partial class HttpNotificationGateway(HttpClient http, IOptions<No
         {
             var request = new HttpRequestMessage(HttpMethod.Post, new Uri($"{options.LineBaseUrl.TrimEnd('/')}/v2/bot/message/push"))
             {
-                Content = JsonContent.Create(new { to = to.Trim(), messages = new[] { new { type = "text", text = Cut(text, LineMaxText) } } }),
+                Content = Body(new { to = to.Trim(), messages = new[] { new { type = "text", text = Cut(text, LineMaxText) } } }),
             };
             request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
             return request;
@@ -130,6 +130,12 @@ public sealed partial class HttpNotificationGateway(HttpClient http, IOptions<No
         var name = string.Join(' ', new[] { Text("first_name"), Text("last_name") }.Where(n => n is not null));
         return name.Length > 0 ? name : id;
     }
+
+    // A string body, not JsonContent: it carries a Content-Length, which not every API accepts being left out.
+    private static StringContent Body(object payload) => new(JsonSerializer.Serialize(payload, BodyOptions), Encoding.UTF8, "application/json");
+
+    // Thai stays Thai in the body (not \u0e01 escapes): smaller, and easier to read in a proxy log.
+    private static readonly JsonSerializerOptions BodyOptions = new() { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
 
     private Uri TelegramUri(string token, string method, string? query = null) =>
         new($"{options.TelegramBaseUrl.TrimEnd('/')}/bot{token}/{method}" + (query is null ? "" : "?" + query));

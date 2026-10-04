@@ -84,6 +84,11 @@ public sealed class CreateCollectionCommandHandler(
     }
 }
 
+/// <summary>
+/// Editors change a collection's name and composing settings, but turning <c>requireApproval</c> on or off is an admin's
+/// switch (403 for an editor who changes it): the approval step is only worth something if the people it checks cannot
+/// switch it off.
+/// </summary>
 public sealed record UpdateCollectionCommand(
     Guid WorkspaceId, Guid CollectionId, string Name, string? Description, string? Icon, CollectionSettingsDto Settings) : ICommand<CollectionDto>;
 
@@ -94,8 +99,11 @@ public sealed class UpdateCollectionCommandHandler(
 {
     public async Task<CollectionDto> HandleAsync(UpdateCollectionCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var (_, role) = await workspaces.RequireRoleAsync(c.WorkspaceId, current, ct);
+        if (role < WorkspaceRole.Editor) throw new ForbiddenException("สิทธิ์ของคุณในเวิร์กสเปซนี้ทำรายการนี้ไม่ได้");
         var collection = await CollectionLookups.RequireAsync(collections, c.WorkspaceId, c.CollectionId, ct);
+        if (c.Settings.RequireApproval != collection.Settings.RequireApproval && role < WorkspaceRole.Admin)
+            throw new ForbiddenException("การเปิดหรือปิดการอนุมัติโพสต์ต้องเป็นผู้ดูแล (admin) ขึ้นไป");
         collection.Update(c.Name, c.Description, c.Icon, c.Settings.ToSettings());
         await uow.SaveChangesAsync(ct);
         return await CollectionLookups.ViewAsync(collection, posts, postRepo, schedules, ct);

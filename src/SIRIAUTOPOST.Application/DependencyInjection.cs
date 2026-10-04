@@ -88,6 +88,8 @@ public static class DependencyInjection
         services.AddQuery<GetReportQuery, ReportDto, GetReportQueryHandler>();
         services.AddCommand<ShareReportCommand, ReportShareDto, ShareReportCommandHandler>();
         services.AddQuery<GetSharedReportQuery, SharedReportDto, GetSharedReportQueryHandler>();
+        services.AddQuery<GetReportSharesQuery, IReadOnlyList<ReportShareSummaryDto>, GetReportSharesQueryHandler>();
+        services.AddCommand<RevokeReportShareCommand, Unit, RevokeReportShareCommandHandler>();
 
         // Collections ("ชุดโพสต์")
         services.AddQuery<GetCollectionsQuery, IReadOnlyList<CollectionDto>, GetCollectionsQueryHandler>();

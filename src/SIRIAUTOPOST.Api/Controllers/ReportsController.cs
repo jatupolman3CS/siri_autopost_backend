@@ -23,6 +23,25 @@ public sealed class ReportsController : ControllerBase
     public Task<ReportShareDto> Share(
         Guid wsId, ShareReportRequest r, [FromServices] ICommandHandler<ShareReportCommand, ReportShareDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new ShareReportCommand(wsId, r.Brand, r.Period, r.Logo), ct);
+
+    /// <summary>
+    /// The workspace's links that have not expired, newest first (admins; 403 below Agency). Each path carries the token, so
+    /// this is for the admins who hand the links out.
+    /// </summary>
+    [HttpGet("shares")]
+    public Task<IReadOnlyList<ReportShareSummaryDto>> Shares(
+        Guid wsId, [FromServices] IQueryHandler<GetReportSharesQuery, IReadOnlyList<ReportShareSummaryDto>> handler, CancellationToken ct) =>
+        handler.HandleAsync(new GetReportSharesQuery(wsId), ct);
+
+    /// <summary>Takes a link back (admins): it stops working at once and makes room for a new one. 204; 404 when it is not this workspace's.</summary>
+    [HttpDelete("shares/{id:guid}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> Revoke(
+        Guid wsId, Guid id, [FromServices] ICommandHandler<RevokeReportShareCommand, Unit> handler, CancellationToken ct)
+    {
+        await handler.HandleAsync(new RevokeReportShareCommand(wsId, id), ct);
+        return NoContent();
+    }
 }
 
 // The page a client opens from a shared link: no sign-in, the random token is the key.

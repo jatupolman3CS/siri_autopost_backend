@@ -429,4 +429,125 @@ public partial class ReportsEndpointsTests(ApiFactory factory)
         var (other, _, otherWs) = await factory.SignUpAsync("agency");
         Assert.Matches(TokenShape(), (await ShareAsync(other, otherWs)).Token);
     }
+
+    // ---- managing the links ----
+
+    private static async Task<List<ReportShareSummaryDto>> SharesAsync(HttpClient client, Guid ws) =>
+        (await client.GetFromJsonAsync<List<ReportShareSummaryDto>>(Reports(ws, "/shares"), Json))!;
+
+    [Fact]
+    public async Task Admins_can_list_the_live_links_with_their_paths_and_take_one_back()
+    {
+        var team = await factory.TeamAsync();
+        Assert.Empty(await SharesAsync(team.Admin, team.Ws));
+        var a = await ShareAsync(team.Owner, team.Ws, Share("แบรนด์ A", "week", true));
+        var b = await ShareAsync(team.Admin, team.Ws, Share("แบรนด์ B", "month", false));
+
+        var list = await SharesAsync(team.Admin, team.Ws);
+
+        Assert.Equal(["แบรนด์ B", "แบรนด์ A"], list.Select(x => x.Brand)); // newest first
+        Assert.Equal(["/report/" + b.Token, "/report/" + a.Token], list.Select(x => x.Path));
+        Assert.Equal([("month", false), ("week", true)], list.Select(x => (x.Period, x.Logo)));
+        Assert.Equal(a.ExpiresAt.ToUnixTimeMilliseconds(), list[1].ExpiresAt.ToUnixTimeMilliseconds()); // the database keeps microseconds
+        Assert.InRange((list[1].ExpiresAt - list[1].CreatedAt).TotalDays, 29.99, 30.01);
+        Assert.Equal(2, list.Select(x => x.Id).Distinct().Count());
+        Assert.DoesNotContain("snapshot", await team.Owner.GetStringAsync(Reports(team.Ws, "/shares")), StringComparison.OrdinalIgnoreCase); // the report itself is not in the list
+
+        // Taking one back: it stops working at once and leaves the list; the other one is untouched.
+        Assert.Equal(HttpStatusCode.NoContent, (await team.Admin.DeleteAsync(Reports(team.Ws, $"/shares/{list[1].Id}"))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await OpenAsync(a.Token)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(b.Token)).StatusCode);
+        Assert.Equal([list[0].Id], (await SharesAsync(team.Owner, team.Ws)).Select(x => x.Id));
+        Assert.Equal(HttpStatusCode.NotFound, (await team.Admin.DeleteAsync(Reports(team.Ws, $"/shares/{list[1].Id}"))).StatusCode); // twice
+        Assert.Equal(HttpStatusCode.NotFound, (await team.Admin.DeleteAsync(Reports(team.Ws, $"/shares/{Guid.NewGuid()}"))).StatusCode);
+
+        // Links that ran out are not listed.
+        using (factory.Clock.Advance(TimeSpan.FromDays(31)))
+            Assert.Empty(await SharesAsync(team.Admin, team.Ws));
+    }
+
+    [Fact]
+    public async Task Listing_and_revoking_follow_the_roles_and_a_workspace_cannot_touch_anothers_links()
+    {
+        var team = await factory.TeamAsync();
+        var share = await ShareAsync(team.Owner, team.Ws);
+        var id = (await SharesAsync(team.Owner, team.Ws)).Single().Id;
+
+        foreach (var client in new[] { team.Viewer, team.Editor })
+        {
+            await AssertProblemAsync(await client.GetAsync(Reports(team.Ws, "/shares")), HttpStatusCode.Forbidden, "สิทธิ์ของคุณในเวิร์กสเปซนี้ทำรายการนี้ไม่ได้");
+            await AssertProblemAsync(await client.DeleteAsync(Reports(team.Ws, $"/shares/{id}")), HttpStatusCode.Forbidden, "สิทธิ์ของคุณในเวิร์กสเปซนี้ทำรายการนี้ไม่ได้");
+        }
+        var (stranger, _, strangerWs) = await factory.SignUpAsync("agency");
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.GetAsync(Reports(team.Ws, "/shares"))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.DeleteAsync(Reports(team.Ws, $"/shares/{id}"))).StatusCode);
+        // Their own workspace, someone else's link id: not found, and the link lives on.
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.DeleteAsync(Reports(strangerWs, $"/shares/{id}"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(share.Token)).StatusCode);
+        Assert.Empty(await SharesAsync(stranger, strangerWs)); // and it is not in their list
+
+        // Below Agency there is nothing to list (403 like making one) - see the next test for what revoking does then.
+        var (pro, _, proWs) = await factory.SignUpAsync("pro");
+        await AssertProblemAsync(await pro.GetAsync(Reports(proWs, "/shares")), HttpStatusCode.Forbidden, "ต้องใช้แผน Agency");
+        Assert.Equal(HttpStatusCode.Unauthorized, (await factory.CreateClient().GetAsync(Reports(team.Ws, "/shares"))).StatusCode);
+    }
+
+    [Fact]
+    public async Task The_twenty_link_limit_can_be_recovered_by_taking_links_back()
+    {
+        var (agency, _, ws) = await factory.SignUpAsync("agency");
+        for (var i = 0; i < 20; i++) await ShareAsync(agency, ws, Share($"แบรนด์ {i}"));
+        await AssertProblemAsync(await agency.PostAsJsonAsync(Reports(ws, "/share"), Share(), Json), HttpStatusCode.UnprocessableEntity);
+        var list = await SharesAsync(agency, ws);
+        Assert.Equal(20, list.Count);
+
+        Assert.Equal(HttpStatusCode.NoContent, (await agency.DeleteAsync(Reports(ws, $"/shares/{list[7].Id}"))).StatusCode);
+
+        var fresh = await ShareAsync(agency, ws, Share("ใหม่"));
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(fresh.Token)).StatusCode);
+        Assert.Equal(20, (await SharesAsync(agency, ws)).Count);
+        await AssertProblemAsync(await agency.PostAsJsonAsync(Reports(ws, "/share"), Share(), Json), HttpStatusCode.UnprocessableEntity); // full again
+    }
+
+    [Fact]
+    public async Task A_link_stops_working_when_the_owner_leaves_Agency_or_is_blocked_and_works_again_with_the_plan()
+    {
+        var (agency, auth, ws) = await factory.SignUpAsync("agency");
+        var share = await ShareAsync(agency, ws);
+        var admin = await factory.AdminAsync();
+        Task<HttpResponseMessage> Plan(string plan) => admin.PutAsJsonAsync($"/api/admin/customers/{auth.User.Id}/plan", new { plan }, Json);
+        Task<HttpResponseMessage> Status(string status) => admin.PostAsJsonAsync($"/api/admin/customers/{auth.User.Id}/status", new { status }, Json);
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(share.Token)).StatusCode);
+
+        (await Plan("pro")).EnsureSuccessStatusCode(); // downgraded: the client's page is gone, the report is not shown to anyone
+        Assert.Equal(HttpStatusCode.NotFound, (await OpenAsync(share.Token)).StatusCode);
+        await AssertProblemAsync(await agency.GetAsync(Reports(ws, "/shares")), HttpStatusCode.Forbidden, "ต้องใช้แผน Agency");
+        (await Plan("agency")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(share.Token)).StatusCode); // the links were kept, only hidden
+
+        (await Status("suspended")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.NotFound, (await OpenAsync(share.Token)).StatusCode);
+        (await Status("banned")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.NotFound, (await OpenAsync(share.Token)).StatusCode);
+        (await Status("active")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(share.Token)).StatusCode);
+
+        // A paused owner (posting off) is not blocked: the report is theirs to show.
+        (await admin.PostAsJsonAsync($"/api/admin/customers/{auth.User.Id}/pause", new { paused = true }, Json)).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.OK, (await OpenAsync(share.Token)).StatusCode);
+    }
+
+    [Fact]
+    public async Task A_workspace_that_left_Agency_can_still_take_its_links_back()
+    {
+        var (agency, auth, ws) = await factory.SignUpAsync("agency");
+        var share = await ShareAsync(agency, ws);
+        var id = (await SharesAsync(agency, ws)).Single().Id;
+        (await (await factory.AdminAsync()).PutAsJsonAsync($"/api/admin/customers/{auth.User.Id}/plan", new { plan = "free" }, Json)).EnsureSuccessStatusCode();
+
+        Assert.Equal(HttpStatusCode.NoContent, (await agency.DeleteAsync(Reports(ws, $"/shares/{id}"))).StatusCode);
+
+        (await (await factory.AdminAsync()).PutAsJsonAsync($"/api/admin/customers/{auth.User.Id}/plan", new { plan = "agency" }, Json)).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.NotFound, (await OpenAsync(share.Token)).StatusCode); // gone for good, not just hidden
+    }
 }

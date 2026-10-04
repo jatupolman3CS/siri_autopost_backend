@@ -199,7 +199,7 @@ public class CollectionsEndpointsTests(ApiFactory factory)
     {
         var t = await factory.TeamAsync();
         var c = await t.Editor.CreateCollectionAsync(t.Ws, "ต้องอนุมัติ");
-        await t.Editor.PutAsJsonAsync($"{Base(t.Ws)}/{c.Id}", new { name = "ต้องอนุมัติ", settings = WorkflowTestSupport.Settings(requireApproval: true) }, Json);
+        (await t.Admin.PutAsJsonAsync($"{Base(t.Ws)}/{c.Id}", new { name = "ต้องอนุมัติ", settings = WorkflowTestSupport.Settings(requireApproval: true) }, Json)).EnsureSuccessStatusCode();
 
         var post = await t.Editor.AddPostAsync(t.Ws, c.Id, "รออนุมัติ");
         Assert.Equal(PostApproval.Draft, post.Approval);
@@ -228,6 +228,42 @@ public class CollectionsEndpointsTests(ApiFactory factory)
         // An edit needs a new approval.
         var edited = await (await t.Editor.PutAsJsonAsync($"{Base(t.Ws)}/{c.Id}/posts/{post.Id}", new { text = "แก้ข้อความ" }, Json)).ReadAsync<CollectionPostDto>();
         Assert.Equal(PostApproval.Draft, edited.Approval);
+    }
+
+    [Fact]
+    public async Task Only_an_admin_can_switch_approval_on_or_off_so_an_editor_cannot_get_around_it()
+    {
+        var t = await factory.TeamAsync();
+        var c = await t.Owner.CreateCollectionAsync(t.Ws, "ต้องอนุมัติ");
+        Task<HttpResponseMessage> Put(HttpClient who, bool approval, string hashtags = "") =>
+            who.PutAsJsonAsync($"{Base(t.Ws)}/{c.Id}", new { name = "ต้องอนุมัติ", settings = WorkflowTestSupport.Settings(requireApproval: approval, hashtags: hashtags) }, Json);
+        async Task<CollectionDto> Stored() => (await t.Owner.CollectionsAsync(t.Ws)).Single(x => x.Id == c.Id);
+
+        // The editor cannot turn it on...
+        var refused = await Put(t.Editor, true);
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains("admin", (await refused.Content.ReadFromJsonAsync<ProblemDetails>(Json))!.Title);
+        Assert.False((await Stored()).Settings.RequireApproval);
+
+        // ...an admin can, and so can the owner.
+        Assert.True((await (await Put(t.Admin, true)).ReadAsync<CollectionDto>()).Settings.RequireApproval);
+        Assert.False((await (await Put(t.Owner, false)).ReadAsync<CollectionDto>()).Settings.RequireApproval);
+        (await Put(t.Admin, true)).EnsureSuccessStatusCode();
+
+        // The editor cannot turn it off either: the approval step would be theirs to skip.
+        Assert.Equal(HttpStatusCode.Forbidden, (await Put(t.Editor, false)).StatusCode);
+        Assert.True((await Stored()).Settings.RequireApproval);
+
+        // Everything else stays an editor's: a save that keeps the switch where it is goes through, either way.
+        var tagged = await (await Put(t.Editor, true, "#ลดราคา")).ReadAsync<CollectionDto>();
+        Assert.Equal(("#ลดราคา", true), (tagged.Settings.Hashtags, tagged.Settings.RequireApproval));
+        (await Put(t.Owner, false)).EnsureSuccessStatusCode();
+        Assert.Equal("#อีกที", (await (await Put(t.Editor, false, "#อีกที")).ReadAsync<CollectionDto>()).Settings.Hashtags);
+
+        // A viewer still cannot save anything, and an editor's refusal says nothing about collections that are not theirs to see.
+        Assert.Equal(HttpStatusCode.Forbidden, (await Put(t.Viewer, false)).StatusCode);
+        var (stranger, _, _) = await factory.SignUpAsync();
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.PutAsJsonAsync($"{Base(t.Ws)}/{c.Id}", new { name = "x", settings = WorkflowTestSupport.Settings(requireApproval: true) }, Json)).StatusCode);
     }
 
     [Fact]

@@ -158,10 +158,52 @@ public sealed class ShareReportCommandHandler(
     }
 }
 
+public sealed record GetReportSharesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ReportShareSummaryDto>>;
+
+/// <summary>The workspace's live links, newest first (admins; Agency, like making them). Their paths carry the tokens.</summary>
+public sealed class GetReportSharesQueryHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, IReportShareRepository shares, ICurrentUser current, TimeProvider clock)
+    : IQueryHandler<GetReportSharesQuery, IReadOnlyList<ReportShareSummaryDto>>
+{
+    public async Task<IReadOnlyList<ReportShareSummaryDto>> HandleAsync(GetReportSharesQuery q, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        await users.RequireClientReportsAsync(ws, ct);
+        return (await shares.ListActiveAsync(ws.Id, clock.GetUtcNow(), ct))
+            .Select(x => new ReportShareSummaryDto(x.Id, x.Brand, x.Period, x.ShowLogo, x.CreatedAt, x.ExpiresAt, "/report/" + x.Token))
+            .ToList();
+    }
+}
+
+public sealed record RevokeReportShareCommand(Guid WorkspaceId, Guid ShareId) : ICommand<Unit>;
+
+/// <summary>
+/// Takes a link back: it stops working at once and no longer counts toward the twenty. Admins; no plan check, so a workspace
+/// whose owner has left Agency can still clean up what it handed out.
+/// </summary>
+public sealed class RevokeReportShareCommandHandler(
+    IWorkspaceRepository workspaces, IReportShareRepository shares, ICurrentUser current, IUnitOfWork uow)
+    : ICommandHandler<RevokeReportShareCommand, Unit>
+{
+    public async Task<Unit> HandleAsync(RevokeReportShareCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        var share = await shares.GetAsync(ws.Id, c.ShareId, ct) ?? throw new NotFoundException("ลิงก์รายงาน", c.ShareId);
+        shares.Remove(share);
+        await uow.SaveChangesAsync(ct);
+        return Unit.Value;
+    }
+}
+
 public sealed record GetSharedReportQuery(string Token) : IQuery<SharedReportDto>;
 
-/// <summary>The report behind a link. No sign-in: the token is the key. Unknown and expired links look the same (404).</summary>
-public sealed class GetSharedReportQueryHandler(IReportShareRepository shares, TimeProvider clock) : IQueryHandler<GetSharedReportQuery, SharedReportDto>
+/// <summary>
+/// The report behind a link. No sign-in: the token is the key. Unknown and expired links look the same (404), and so does a
+/// link whose workspace's owner is no longer on the Agency plan or is blocked: a downgrade takes the links with it.
+/// </summary>
+public sealed class GetSharedReportQueryHandler(
+    IReportShareRepository shares, IWorkspaceRepository workspaces, IUserRepository users, TimeProvider clock)
+    : IQueryHandler<GetSharedReportQuery, SharedReportDto>
 {
     public async Task<SharedReportDto> HandleAsync(GetSharedReportQuery q, CancellationToken ct = default)
     {
@@ -171,6 +213,9 @@ public sealed class GetSharedReportQueryHandler(IReportShareRepository shares, T
             throw new NotFoundException("รายงาน", "ลิงก์นี้");
         var share = await shares.GetByTokenAsync(token, ct);
         if (share is null || share.IsExpired(clock.GetUtcNow())) throw new NotFoundException("รายงาน", "ลิงก์นี้");
+        var ws = await workspaces.GetByIdAsync(share.WorkspaceId, ct) ?? throw new NotFoundException("รายงาน", "ลิงก์นี้");
+        var owner = await users.OwnerOfAsync(ws, ct);
+        if (!owner.HasClientReports || owner.IsBlocked) throw new NotFoundException("รายงาน", "ลิงก์นี้");
         return JsonSerializer.Deserialize<SharedReportDto>(share.SnapshotJson, ReportSnapshot.Options) ?? throw new NotFoundException("รายงาน", "ลิงก์นี้");
     }
 }

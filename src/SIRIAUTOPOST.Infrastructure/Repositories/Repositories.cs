@@ -725,6 +725,16 @@ public sealed class ReportShareRepository(AppDbContext db) : IReportShareReposit
     public Task<ReportShare?> GetByTokenAsync(string token, CancellationToken ct = default) =>
         db.ReportShares.AsNoTracking().FirstOrDefaultAsync(x => x.Token == token, ct);
 
+    public async Task<IReadOnlyList<ReportShareInfo>> ListActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default) =>
+        await db.ReportShares.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && x.ExpiresAt > now)
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new ReportShareInfo(x.Id, x.Token, x.Brand, x.Period, x.ShowLogo, x.CreatedAt, x.ExpiresAt))
+            .ToListAsync(ct);
+
+    public Task<ReportShare?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.ReportShares.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
     public Task<int> CountActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default) =>
         db.ReportShares.CountAsync(x => x.WorkspaceId == workspaceId && x.ExpiresAt > now, ct);
 
@@ -732,4 +742,6 @@ public sealed class ReportShareRepository(AppDbContext db) : IReportShareReposit
         db.ReportShares.Where(x => x.ExpiresAt < before).ExecuteDeleteAsync(ct);
 
     public void Add(ReportShare share) => db.ReportShares.Add(share);
+
+    public void Remove(ReportShare share) => db.ReportShares.Remove(share);
 }

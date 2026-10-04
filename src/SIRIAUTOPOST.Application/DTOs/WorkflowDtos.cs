@@ -231,6 +231,12 @@ public sealed record ShareReportRequest(string Brand, string Period, bool Logo);
 /// <param name="Path">"/report/&lt;token&gt;": the page of the web app that shows it.</param>
 public sealed record ReportShareDto(string Token, string Path, DateTimeOffset ExpiresAt);
 
+/// <summary>A live client report link, for the admins who manage them. <paramref name="Path"/> carries the token: it is the key to the report.</summary>
+/// <param name="Id">What <c>DELETE reports/shares/{id}</c> takes.</param>
+/// <param name="Period">"week" or "month".</param>
+public sealed record ReportShareSummaryDto(
+    Guid Id, string Brand, string Period, bool Logo, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, string Path);
+
 public sealed record SharedReportDto(
     string Brand, string WorkspaceName, bool Logo, string Period, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt, ReportDto Report);
 

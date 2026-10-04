@@ -347,11 +347,20 @@ public interface IScheduleRepository
     void RemoveRange(IEnumerable<Schedule> schedules);
 }
 
+/// <summary>A client report link without its snapshot (the list does not need the report).</summary>
+public sealed record ReportShareInfo(
+    Guid Id, string Token, string Brand, string Period, bool ShowLogo, DateTimeOffset CreatedAt, DateTimeOffset ExpiresAt);
+
 public interface IReportShareRepository
 {
     Task<ReportShare?> GetByTokenAsync(string token, CancellationToken ct = default);
+    /// <summary>The workspace's links that have not expired, newest first.</summary>
+    Task<IReadOnlyList<ReportShareInfo>> ListActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>One of the workspace's links, tracked (to remove it); null when it is not the workspace's.</summary>
+    Task<ReportShare?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     Task<int> CountActiveAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default);
     /// <summary>Deletes links that expired before <paramref name="before"/>.</summary>
     Task DeleteExpiredAsync(DateTimeOffset before, CancellationToken ct = default);
     void Add(ReportShare share);
+    void Remove(ReportShare share);
 }

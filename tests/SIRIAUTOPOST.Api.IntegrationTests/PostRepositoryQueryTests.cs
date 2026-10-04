@@ -130,10 +130,14 @@ public class PostRepositoryQueryTests(ApiFactory factory)
     {
         var w = await BuildAsync();
 
-        Assert.Equal(2, await WithRepoAsync(r => r.CountPublishedToLinkSinceAsync(w.L1, Now.AddHours(-24)))); // P4 and the test post
-        Assert.Equal(3, await WithRepoAsync(r => r.CountPublishedToLinkSinceAsync(w.L1, Now.AddHours(-48)))); // and P7
-        Assert.Equal(1, await WithRepoAsync(r => r.CountPublishedToLinkSinceAsync(w.L2, Now.AddHours(-24))));
-        Assert.Equal(0, await WithRepoAsync(r => r.CountPublishedToLinkSinceAsync(Guid.NewGuid(), Now.AddHours(-24))));
+        var end = Now.AddHours(1);
+        Assert.Equal(2, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L1, Now.AddHours(-24), end))); // P4 and the test post
+        Assert.Equal(3, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L1, Now.AddHours(-48), end))); // and P7
+        Assert.Equal(1, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L2, Now.AddHours(-24), end)));
+        Assert.Equal(0, await WithRepoAsync(r => r.CountPublishedToLinkAsync(Guid.NewGuid(), Now.AddHours(-24), end)));
+        // A day is [from, to): what went out later than `to` (the test post, now) or before `from` (P7) is not in it.
+        Assert.Equal(1, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L1, Now.AddHours(-24), Now.AddMinutes(-5)))); // P4 alone
+        Assert.Equal(1, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L1, Now.AddHours(-31), Now.AddHours(-29)))); // P7 alone
 
         var many = await WithRepoAsync(r => r.CountPublishedToLinksSinceAsync([w.L1, w.L2, Guid.NewGuid()], Now.AddHours(-24)));
         Assert.Equal((2, 1, 2), (many[w.L1], many[w.L2], many.Count));
@@ -204,6 +208,49 @@ public class PostRepositoryQueryTests(ApiFactory factory)
         Assert.Equal(1, hours[Now.AddHours(-3).Hour]);
         var thai = await WithRepoAsync(r => r.CountPublishedByHourAsync(w.Ws, Now.AddHours(-48), 420));
         Assert.Equal(1, thai[Now.AddHours(-1).ToOffset(TimeSpan.FromHours(7)).Hour]);
+    }
+
+    [Fact]
+    public async Task A_post_being_posted_counts_for_the_group_on_the_day_it_was_taken()
+    {
+        var w = await BuildAsync();
+        var posting = w.P["P1"]; // L1, still queued: the device takes it now
+        await factory.WithDbAsync(async db =>
+        {
+            (await db.Posts.SingleAsync(p => p.Id == posting.Id)).Claim(w.Device, Now);
+            await db.SaveChangesAsync();
+        });
+
+        Assert.Equal(3, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L1, Now.AddHours(-24), Now.AddHours(1)))); // P4, the test post and the one on its way
+        Assert.Equal(1, await WithRepoAsync(r => r.CountPublishedToLinkAsync(w.L1, Now.AddHours(-24), Now.AddMinutes(-5)))); // taken now: not in an earlier day
+    }
+
+    [Fact]
+    public async Task Only_posts_a_device_attempted_count_for_the_failure_rate_and_the_failure_streak()
+    {
+        var w = await BuildAsync(); // the last day: P4 and P6 succeeded, P5 failed, the test post is left out
+        await factory.WithDbAsync(async db =>
+        {
+            var account = await db.Accounts.SingleAsync(a => a.Id == w.Account);
+            Post Settled(string name, Action<Post> settle)
+            {
+                var p = Post.FromSchedule(w.Ws, account, "g", name, [], Now.AddMinutes(-30), Now.AddHours(-1), w.Schedule, w.Cp1, w.L2, Post.LinkTargetKey(w.L2), name, null, null);
+                settle(p);
+                db.Posts.Add(p);
+                return p;
+            }
+            Settled("ถึงเพดานรวม", p => p.Fail(FailureCode.Quota, "ครบโควตา", Now)); // refused before it was handed out
+            Settled("ไม่พบกลุ่ม", p => p.Fail(FailureCode.Network, "ไม่พบลิงก์ของกลุ่ม", Now)); // the extension no longer has the group
+            Settled("ที่เครื่องลองแล้ว", p => { p.Claim(w.Device, Now); p.Fail(FailureCode.Network, "หน้าเว็บค้าง", Now.AddMinutes(1)); });
+            Settled("โควตาหลังรับงาน", p => { p.Claim(w.Device, Now); p.Fail(FailureCode.Quota, "x", Now); }); // not something a device reports, but never counted either
+            await db.SaveChangesAsync();
+        });
+
+        // Only the one the device took and reported adds to the 3 finished and 1 failed it had.
+        Assert.Equal((4, 2), await WithRepoAsync(r => r.CountOutcomesSinceAsync(w.Ws, Now.AddHours(-24))));
+        var recent = await WithRepoAsync(r => r.ListRecentOutcomesAsync(w.Account, 50));
+        Assert.Equal(6, recent.Count); // the 5 from before and the attempted one
+        Assert.Equal(PostStatus.Failed, recent[0]);
     }
 
     [Fact]

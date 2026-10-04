@@ -144,6 +144,14 @@ public class Schedule : Entity
         return (today.AddDays(-StartDateDaysBack), today.AddDays(StartDateDaysAhead));
     }
 
+    /// <summary>The calendar day that contains an instant, in a calendar <paramref name="utcOffsetMinutes"/> ahead of UTC, as UTC instants [Start, End).</summary>
+    public static (DateTimeOffset Start, DateTimeOffset End) LocalDayBounds(DateTimeOffset at, int utcOffsetMinutes)
+    {
+        var offset = TimeSpan.FromMinutes(Math.Clamp(utcOffsetMinutes, -840, 840));
+        var start = new DateTimeOffset(DateTime.SpecifyKind(at.ToOffset(offset).Date, DateTimeKind.Unspecified), offset).ToUniversalTime();
+        return (start, start.AddDays(1));
+    }
+
     /// <summary>
     /// A start date far outside the range is no use (and one near <c>9999-12-31</c> breaks every calculation that follows
     /// it), so it is refused.

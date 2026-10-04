@@ -144,8 +144,11 @@ public interface IPostRepository
 
     // ---- links: per-link caps, cooldown and "do not repeat" ----
 
-    /// <summary>Posts published to one link since a time (posts of connected accounts, tests included).</summary>
-    Task<int> CountPublishedToLinkSinceAsync(Guid linkId, DateTimeOffset since, CancellationToken ct = default);
+    /// <summary>
+    /// Posts to one link that went out (or are being posted) in [from, to): published ones by their publish time, ones a
+    /// device has taken and not reported on yet by the time it took them. Posts of connected accounts, tests included.
+    /// </summary>
+    Task<int> CountPublishedToLinkAsync(Guid linkId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
     /// <summary>The same for several links at once (links without a post are left out).</summary>
     Task<Dictionary<Guid, int>> CountPublishedToLinksSinceAsync(IEnumerable<Guid> linkIds, DateTimeOffset since, CancellationToken ct = default);
     /// <summary>When the link was last published to; null when never.</summary>
@@ -160,9 +163,13 @@ public interface IPostRepository
 
     /// <summary>Posts published in a workspace since a time, all platforms.</summary>
     Task<int> CountPublishedInWorkspaceSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default);
-    /// <summary>Finished posts since a time (success, awaiting approval, failed) and how many of them failed.</summary>
+    /// <summary>
+    /// Finished posts since a time (success, awaiting approval, failed) and how many of them failed. Only posts a device
+    /// actually attempted count: a post the engine itself failed or skipped before handing it out (a daily limit, a group the
+    /// extension no longer has) says nothing about how posting is going.
+    /// </summary>
     Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default);
-    /// <summary>The newest finished outcomes of an account (success, awaiting approval, failed), newest first.</summary>
+    /// <summary>The newest finished outcomes of an account (success, awaiting approval, failed), newest first; attempted posts only, as above.</summary>
     Task<IReadOnlyList<PostStatus>> ListRecentOutcomesAsync(Guid accountId, int take, CancellationToken ct = default);
 
     // ---- reports (real posts only: accounts with a device, no test posts) ----

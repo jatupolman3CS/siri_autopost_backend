@@ -76,10 +76,18 @@ public class EngineClaimTests(ApiFactory factory)
         Assert.Equal((PostStatus.Skipped, "กลุ่มถูกปิดหรือถูกลบแล้ว"), (skipped.Status, skipped.FailureDetail));
     }
 
+    /// <summary>Moves the API's clock so that it is at least two hours from a midnight (UTC) either way: a test that counts a "day" cannot straddle one.</summary>
+    private static void AwayFromUtcMidnight(Shop shop)
+    {
+        var at = shop.Now.UtcDateTime;
+        if (at.Hour >= 22 || at.Hour < 2) shop.Wait(at.Date.AddDays(at.Hour >= 22 ? 1 : 0).AddHours(6) - at);
+    }
+
     [Fact]
-    public async Task A_group_takes_no_more_posts_than_its_daily_cap_in_24_hours()
+    public async Task A_group_takes_no_more_posts_than_its_daily_cap_in_a_calendar_day()
     {
         using var shop = await factory.ShopAsync(links: 1);
+        AwayFromUtcMidnight(shop);
         await shop.UpdateLinkAsync(0, dailyMax: 1);
         Assert.Equal(PostStatus.Success, (await RunAsync(shop)).Status);
 
@@ -88,9 +96,56 @@ public class EngineClaimTests(ApiFactory factory)
         var skipped = await shop.PostAsync(second.Id);
         Assert.Equal((PostStatus.Skipped, "ครบเพดานต่อวันของกลุ่มนี้"), (skipped.Status, skipped.FailureDetail));
 
-        shop.Wait(TimeSpan.FromHours(25)); // a day on, the cap is free again
+        shop.Wait(TimeSpan.FromHours(25)); // the next day, the cap is free again
         await shop.TestPostAsync(0);
         Assert.Equal(PostStatus.Success, (await shop.RunNextAsync())!.Status);
+    }
+
+    [Fact]
+    public async Task A_daily_slot_with_a_cap_of_one_posts_every_day_even_when_one_claim_comes_later_than_the_day_before()
+    {
+        using var shop = await factory.ShopAsync(links: 1);
+        await shop.UpdateLinkAsync(0, dailyMax: 1);
+        var (slot, _) = SlotAhead(shop.Now, 420, TimeSpan.FromHours(2));
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: [slot], Offset: 420));
+        var days = (await shop.PostsAsync(created.Schedule.Id)).OrderBy(p => p.ScheduledAt).Take(3).ToList();
+
+        // The first day is claimed three minutes late and the next one a minute late, so the second claim is a little less
+        // than 24 hours after the first post went out: a window of "the last 24 hours" would count it and skip the day.
+        for (var i = 0; i < days.Count; i++)
+        {
+            shop.WaitUntil(days[i].ScheduledAt);
+            if (i == 0) shop.Wait(TimeSpan.FromMinutes(2));
+            Assert.Equal(days[i].Id, (await shop.RunNextAsync())!.Id);
+            Assert.Equal(PostStatus.Success, (await shop.PostAsync(days[i].Id)).Status);
+        }
+    }
+
+    [Fact]
+    public async Task The_cap_counts_the_days_of_the_schedules_own_calendar_not_utc_days_and_not_a_rolling_day()
+    {
+        using var shop = await factory.ShopAsync(links: 1);
+        await shop.UpdateLinkAsync(0, dailyMax: 1);
+        // A calendar that is at 21:30 now: its 23:00 is ahead, then 01:00 of its next day two hours after that.
+        var utcMinutes = (int)shop.Now.UtcDateTime.TimeOfDay.TotalMinutes;
+        var offset = (21 * 60 + 30 - utcMinutes + 1440) % 1440;
+        if (offset > 840) offset -= 1440;
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["23:00", "01:00"], Offset: offset));
+        var posts = (await shop.PostsAsync(created.Schedule.Id)).OrderBy(p => p.ScheduledAt).Take(4).ToList();
+        Assert.Equal(["23:00", "01:00", "23:00", "01:00"], posts.Select(p => p.ScheduledAt.ToOffset(TimeSpan.FromMinutes(offset)).ToString("HH:mm")));
+
+        async Task<PostStatus> RunAtAsync(PostDto p)
+        {
+            shop.WaitUntil(p.ScheduledAt);
+            if (await shop.ClaimAsync() is { } job) await shop.ReportAsync(job.PostId);
+            return (await shop.PostAsync(p.Id)).Status;
+        }
+
+        Assert.Equal(PostStatus.Success, await RunAtAsync(posts[0])); // day 1, 23:00
+        Assert.Equal(PostStatus.Success, await RunAtAsync(posts[1])); // day 2, 01:00: two hours later, but another calendar day
+        Assert.Equal(PostStatus.Skipped, await RunAtAsync(posts[2])); // day 2, 23:00: the cap of day 2 is used up by the 01:00 post
+        Assert.Equal(PostStatus.Success, await RunAtAsync(posts[3])); // day 3, 01:00
+        Assert.Equal("ครบเพดานต่อวันของกลุ่มนี้", (await shop.PostAsync(posts[2].Id)).FailureDetail);
     }
 
     [Fact]
@@ -171,6 +226,37 @@ public class EngineClaimTests(ApiFactory factory)
             var queued = (await shop.PostsAsync(created.Schedule.Id)).Count(p => p.Status == PostStatus.Queued);
             Assert.Equal(12 - succeeded - failed, queued); // they wait: nothing was failed or skipped
         }
+    }
+
+    [Fact]
+    public async Task A_workspace_that_hit_its_daily_limit_does_not_halt_itself_for_the_posts_the_limit_refused()
+    {
+        // Free: 10 posts a day. 20 groups are due at once: 10 go out and the other 10 are refused by the limit, which says
+        // nothing about how posting is going, so they must not count as failures of the last day.
+        using var shop = await factory.ShopAsync("free", links: 20, posts: 1);
+        (await shop.Owner.PutAsJsonAsync($"{shop.Api}/engine/offline", new { policy = "queue", window = "day", line = true, email = true, push = false }, Json)).EnsureSuccessStatusCode();
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Mode: "once", StartDate: ToLocalDay(shop.Now.AddDays(1), 0), OnceTime: "10:00", Offset: 0));
+        Assert.Equal(20, created.Created);
+        shop.WaitUntil(created.LastAt!.Value);
+
+        PostDto? last = null;
+        for (var i = 0; i < 10; i++)
+        {
+            last = await shop.RunNextAsync();
+            Assert.Equal(PostStatus.Success, last!.Status);
+            shop.Wait(TimeSpan.FromMinutes(5));
+        }
+        Assert.Null(await shop.ClaimAsync()); // the limit refuses the other ten
+        var refused = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.Status == PostStatus.Failed).ToList();
+        Assert.Equal(10, refused.Count);
+        Assert.All(refused, p => Assert.Equal(FailureCode.Quota, p.FailureCode));
+
+        // Just after the ten posts that went out are more than a day old (the limit is free again) the refusals are still
+        // inside the last day: counted as failures they would be 10 of 10 and stop the engine.
+        shop.Wait(last!.PublishedAt!.Value + TimeSpan.FromHours(24) + TimeSpan.FromMinutes(1) - shop.Now);
+        await shop.TestPostAsync();
+
+        Assert.NotNull(await shop.ClaimAsync());
     }
 
     [Fact]

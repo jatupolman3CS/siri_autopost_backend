@@ -253,7 +253,7 @@ public sealed class SyncDeviceGroupsCommandHandler(
 /// <summary>
 /// Hands the device the next post to publish, or nothing. First it lets the schedules catch up with the clock
 /// (<see cref="ScheduleTopUp"/>). On the way it settles posts it cannot hand out: too late for the offline policy
-/// (skipped), for a link that was switched off or deleted or whose daily cap is reached (skipped), over a daily
+/// (skipped), for a link that was switched off or deleted or whose daily cap (per calendar day of its schedule) is reached (skipped), over a daily
 /// limit (failed: quota), or a group the extension does not know (failed). It keeps the anti-ban gap between two posts
 /// of the account, waits out a group's cooldown, and hands out nothing while the device is paused (by the web or by
 /// the engine) or the workspace's failure rate says to stop.
@@ -394,8 +394,18 @@ public sealed class ClaimJobCommandHandler(
         var openFrom = last is { } lp ? lp + gap : DateTimeOffset.MinValue;
 
         var linkCache = new Dictionary<Guid, SetLink?>();
-        var perLinkDay = new Dictionary<Guid, int>();
+        var perLinkDay = new Dictionary<(Guid Link, DateTimeOffset Day), int>();
+        var offsets = new Dictionary<Guid, int>();
         var lastToLink = new Dictionary<Guid, DateTimeOffset?>();
+
+        // A group's daily cap counts calendar days, in the calendar of the schedule that made the post (UTC without one).
+        async Task<(DateTimeOffset Start, DateTimeOffset End)> DayOfAsync(Post p)
+        {
+            var offset = 0;
+            if (p.ScheduleId is { } scheduleId && !offsets.TryGetValue(scheduleId, out offset))
+                offsets[scheduleId] = offset = (await schedules.GetAsync(ws.Id, scheduleId, ct))?.UtcOffsetMinutes ?? 0;
+            return Schedule.LocalDayBounds(p.ScheduledAt, offset);
+        }
 
         void Settle(Post p)
         {
@@ -418,8 +428,9 @@ public sealed class ClaimJobCommandHandler(
                 }
                 if (link.DailyMax > 0)
                 {
-                    if (!perLinkDay.TryGetValue(linkId, out var published))
-                        perLinkDay[linkId] = published = await posts.CountPublishedToLinkSinceAsync(linkId, now.AddDays(-1), ct);
+                    var (dayStart, dayEnd) = await DayOfAsync(p);
+                    if (!perLinkDay.TryGetValue((linkId, dayStart), out var published))
+                        perLinkDay[(linkId, dayStart)] = published = await posts.CountPublishedToLinkAsync(linkId, dayStart, dayEnd, ct);
                     if (published >= link.DailyMax)
                     {
                         p.Skip(now, "ครบเพดานต่อวันของกลุ่มนี้");

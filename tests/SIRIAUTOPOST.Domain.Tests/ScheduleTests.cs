@@ -272,4 +272,20 @@ public class ScheduleTests
         Assert.Contains("2026-10-03", ex.Message); // the message says what is allowed
         Assert.Contains("2027-10-05", ex.Message);
     }
+
+    // ---- the calendar day of an instant ----
+
+    [Theory]
+    [InlineData(420, "2026-10-04T03:00:00+00:00", "2026-10-03T17:00:00+00:00")] // 10:00 on the 4th in Bangkok: the day began at 17:00 UTC the day before
+    [InlineData(-300, "2026-10-04T03:00:00+00:00", "2026-10-03T05:00:00+00:00")] // 22:00 on the 3rd five hours behind
+    [InlineData(0, "2026-10-04T23:59:59+00:00", "2026-10-04T00:00:00+00:00")]
+    [InlineData(840, "2026-10-04T09:59:00+00:00", "2026-10-03T10:00:00+00:00")] // 23:59 on the 4th at +14:00
+    [InlineData(840, "2026-10-04T10:00:00+00:00", "2026-10-04T10:00:00+00:00")] // midnight at +14:00 belongs to the next day
+    public void A_calendar_day_runs_from_local_midnight_to_local_midnight_in_utc_instants(int offset, string at, string start)
+    {
+        var (from, to) = Schedule.LocalDayBounds(DateTimeOffset.Parse(at), offset);
+
+        Assert.Equal(DateTimeOffset.Parse(start), from);
+        Assert.Equal(from.AddDays(1), to);
+    }
 }

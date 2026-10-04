@@ -220,8 +220,10 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
 
     // ---- links ----
 
-    public Task<int> CountPublishedToLinkSinceAsync(Guid linkId, DateTimeOffset since, CancellationToken ct = default) =>
-        Real.CountAsync(x => x.LinkId == linkId && x.PublishedAt != null && x.PublishedAt >= since, ct);
+    public Task<int> CountPublishedToLinkAsync(Guid linkId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default) =>
+        Real.CountAsync(x => x.LinkId == linkId &&
+                             ((x.PublishedAt != null && x.PublishedAt >= from && x.PublishedAt < to) ||
+                              (x.Status == PostStatus.Posting && x.ClaimedAt != null && x.ClaimedAt >= from && x.ClaimedAt < to)), ct);
 
     public async Task<Dictionary<Guid, int>> CountPublishedToLinksSinceAsync(IEnumerable<Guid> linkIds, DateTimeOffset since, CancellationToken ct = default)
     {
@@ -270,6 +272,7 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     {
         var rows = await Real
             .Where(x => x.WorkspaceId == workspaceId && !x.IsTest && x.UpdatedAt >= since &&
+                        x.ClaimedAt != null && (x.FailureCode == null || x.FailureCode != FailureCode.Quota) &&
                         (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
             .GroupBy(x => x.Status)
             .Select(g => new { Status = g.Key, Count = g.Count() })
@@ -280,6 +283,7 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     public async Task<IReadOnlyList<PostStatus>> ListRecentOutcomesAsync(Guid accountId, int take, CancellationToken ct = default) =>
         await db.Posts.AsNoTracking()
             .Where(x => x.AccountId == accountId &&
+                        x.ClaimedAt != null && (x.FailureCode == null || x.FailureCode != FailureCode.Quota) &&
                         (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
             .OrderByDescending(x => x.UpdatedAt)
             .Select(x => x.Status)

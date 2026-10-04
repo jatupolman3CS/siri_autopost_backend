@@ -23,7 +23,7 @@ public sealed class GetEngineSettingsQueryHandler(
 
 public sealed record UpdateAntiBanCommand(Guid WorkspaceId, AntiBanDto Settings) : ICommand<EngineSettingsDto>;
 
-/// <summary>Human-like behaviour switches only change on Pro and above; lower plans keep their current values.</summary>
+/// <summary>Human-like behaviour switches and the advanced numbers only change on Pro and above; lower plans keep their current values.</summary>
 public sealed class UpdateAntiBanCommandHandler(
     IWorkspaceRepository workspaces, IUserRepository users, IDeviceRepository devices, ICurrentUser current, IUnitOfWork uow,
     TimeProvider clock)
@@ -34,7 +34,9 @@ public sealed class UpdateAntiBanCommandHandler(
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         // The workspace owner's plan decides, whoever edits.
         var owner = await users.GetByIdAsync(ws.OwnerId, ct) ?? throw new NotFoundException("ผู้ใช้", ws.OwnerId);
-        ws.UpdateAntiBan(c.Settings.ToSettings(), owner.HasAdvancedAntiBan);
+        var settings = c.Settings.ToSettings();
+        if (c.Settings.Advanced is null) settings.Advanced = ws.AntiBan.Advanced.Clone(); // a client that does not know the advanced numbers keeps them
+        ws.UpdateAntiBan(settings, owner.HasAdvancedAntiBan);
         await uow.SaveChangesAsync(ct);
         return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());
     }

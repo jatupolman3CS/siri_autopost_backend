@@ -1,10 +1,13 @@
 using FluentValidation;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Admin;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
+using SIRIAUTOPOST.Application.Features.Collections;
+using SIRIAUTOPOST.Application.Features.LinkSets;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Engine;
@@ -13,6 +16,8 @@ using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Features.Library;
 using SIRIAUTOPOST.Application.Features.Posts;
 using SIRIAUTOPOST.Application.Features.Workspaces;
+using SIRIAUTOPOST.Application.Common;
+using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Application.Validators;
 
@@ -66,6 +71,34 @@ public static class DependencyInjection
         services.AddCommand<UploadMediaCommand, MediaDto, UploadMediaCommandHandler>();
         services.AddQuery<GetSnippetsQuery, IReadOnlyList<SnippetDto>, GetSnippetsQueryHandler>();
         services.AddCommand<CreateSnippetCommand, SnippetDto, CreateSnippetCommandHandler>();
+
+        // Collections ("ชุดโพสต์")
+        services.AddQuery<GetCollectionsQuery, IReadOnlyList<CollectionDto>, GetCollectionsQueryHandler>();
+        services.AddCommand<CreateCollectionCommand, CollectionDto, CreateCollectionCommandHandler>();
+        services.AddCommand<UpdateCollectionCommand, CollectionDto, UpdateCollectionCommandHandler>();
+        services.AddCommand<DeleteCollectionCommand, Unit, DeleteCollectionCommandHandler>();
+        services.AddCommand<AddCollectionPostCommand, CollectionPostDto, AddCollectionPostCommandHandler>();
+        services.AddCommand<AddCollectionPostsBatchCommand, IReadOnlyList<CollectionPostDto>, AddCollectionPostsBatchCommandHandler>();
+        services.AddCommand<UpdateCollectionPostCommand, CollectionPostDto, UpdateCollectionPostCommandHandler>();
+        services.AddCommand<DeleteCollectionPostCommand, Unit, DeleteCollectionPostCommandHandler>();
+        services.AddCommand<CollectionPostApprovalCommand, CollectionPostDto, CollectionPostApprovalCommandHandler>();
+
+        // Link sets ("ชุดลิงก์กลุ่ม")
+        services.AddQuery<GetLinkSetsQuery, IReadOnlyList<LinkSetDto>, GetLinkSetsQueryHandler>();
+        services.AddCommand<CreateLinkSetCommand, LinkSetDto, CreateLinkSetCommandHandler>();
+        services.AddCommand<UpdateLinkSetCommand, LinkSetDto, UpdateLinkSetCommandHandler>();
+        services.AddCommand<DeleteLinkSetCommand, Unit, DeleteLinkSetCommandHandler>();
+        services.AddCommand<AddLinkCommand, SetLinkDto, AddLinkCommandHandler>();
+        services.AddCommand<UpdateLinkCommand, SetLinkDto, UpdateLinkCommandHandler>();
+        services.AddCommand<DeleteLinkCommand, Unit, DeleteLinkCommandHandler>();
+        services.AddCommand<EnableLinkCommand, SetLinkDto, EnableLinkCommandHandler>();
+        services.AddCommand<BulkAddLinksCommand, BulkLinksResultDto, BulkAddLinksCommandHandler>();
+        services.AddCommand<ImportAccountGroupsCommand, LinkSetDto, ImportAccountGroupsCommandHandler>();
+        services.AddCommand<ImportLinksCsvCommand, CsvImportResultDto, ImportLinksCsvCommandHandler>();
+        services.AddQuery<GetAccountGroupsQuery, IReadOnlyList<GroupLinkDto>, GetAccountGroupsQueryHandler>();
+
+        // Notifications: sends nothing until the infrastructure registers the real dispatcher
+        services.TryAddSingleton<INotificationDispatcher, NullNotificationDispatcher>();
 
         // Posting engine
         services.AddQuery<GetEngineSettingsQuery, EngineSettingsDto, GetEngineSettingsQueryHandler>();

@@ -67,7 +67,16 @@ public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserD
 /// <param name="Limits">What the workspace's OWNER may use (their plan and the admin's overrides for them): the limits apply to
 /// everyone working in it, whatever plan a member has themselves.</param>
 /// <param name="AdvancedAntiBan">The owner's plan includes the advanced anti-ban settings.</param>
-public sealed record WorkspaceDto(Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role, LimitsDto Limits, bool AdvancedAntiBan);
+/// <param name="Notifications">The owner's plan includes Telegram/LINE notifications.</param>
+/// <param name="AutoReply">The owner's plan includes auto-reply rules.</param>
+/// <param name="ClientReports">The owner's plan includes shareable client reports (Agency).</param>
+public sealed record WorkspaceDto(
+    Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role, LimitsDto Limits, bool AdvancedAntiBan, bool Notifications,
+    bool AutoReply, bool ClientReports)
+{
+    public static WorkspaceDto From(Workspace w, int posts7, int members, WorkspaceRole role, LimitsDto limits, User owner) =>
+        new(w.Id, w.Name, posts7, members, role, limits, owner.HasAdvancedAntiBan, owner.HasNotifications, owner.HasAutoReply, owner.HasClientReports);
+}
 
 /// <param name="Connected">Posts through a paired browser (false for the demo accounts).</param>
 public sealed record AccountDto(
@@ -89,11 +98,17 @@ public sealed record PostDto(
     PostStatus Status,
     FailureCode? FailureCode,
     string? FailureDetail,
-    DateTimeOffset? PublishedAt)
+    DateTimeOffset? PublishedAt,
+    Guid? ScheduleId,
+    Guid? CollectionPostId,
+    Guid? LinkId,
+    string? Code,
+    string? TargetUrl,
+    bool IsTest)
 {
     public static PostDto From(Post p) =>
         new(p.Id, p.AccountId, p.Platform, p.Target, p.Content, p.MediaIds, p.ScheduledAt, p.Status, p.FailureCode,
-            p.FailureDetail, p.PublishedAt);
+            p.FailureDetail, p.PublishedAt, p.ScheduleId, p.CollectionPostId, p.LinkId, p.Code, p.TargetUrl, p.IsTest);
 }
 
 public sealed record ScheduleResultDto(int Created, DateTimeOffset FirstAt, DateTimeOffset LastAt);
@@ -119,15 +134,33 @@ public sealed record PlatformLimitsDto(int Fb, int X, int Ig, int Tt, int Line, 
     public PlatformLimits ToSettings() => new() { Fb = Fb, X = X, Ig = Ig, Tt = Tt, Line = Line, Th = Th };
 }
 
-public sealed record AntiBanDto(int Min, int Max, PlatformLimitsDto Limits, bool Typing, bool Scroll, bool Shuffle, bool AutoPause, bool Warmup)
+/// <summary>The advanced anti-ban numbers (Pro and above; lower plans keep the stored values).</summary>
+public sealed record AdvancedAntiBanDto(
+    int MinGap, int DailyAll, int BlockMin, int BlockMax, int FailStreak, int RecentAvoid, int Cooldown, bool Focus, int AutoOffFails,
+    int StopFailPct)
+{
+    public static AdvancedAntiBanDto From(AdvancedAntiBanSettings s) =>
+        new(s.MinGap, s.DailyAll, s.BlockMin, s.BlockMax, s.FailStreak, s.RecentAvoid, s.Cooldown, s.Focus, s.AutoOffFails, s.StopFailPct);
+
+    public AdvancedAntiBanSettings ToSettings() => new()
+    {
+        MinGap = MinGap, DailyAll = DailyAll, BlockMin = BlockMin, BlockMax = BlockMax, FailStreak = FailStreak,
+        RecentAvoid = RecentAvoid, Cooldown = Cooldown, Focus = Focus, AutoOffFails = AutoOffFails, StopFailPct = StopFailPct,
+    };
+}
+
+public sealed record AntiBanDto(
+    int Min, int Max, PlatformLimitsDto Limits, bool Typing, bool Scroll, bool Shuffle, bool AutoPause, bool Warmup, AdvancedAntiBanDto Advanced)
 {
     public static AntiBanDto From(AntiBanSettings s) =>
-        new(s.Min, s.Max, PlatformLimitsDto.From(s.Limits), s.Typing, s.Scroll, s.Shuffle, s.AutoPause, s.Warmup);
+        new(s.Min, s.Max, PlatformLimitsDto.From(s.Limits), s.Typing, s.Scroll, s.Shuffle, s.AutoPause, s.Warmup,
+            AdvancedAntiBanDto.From(s.Advanced));
 
     public AntiBanSettings ToSettings() => new()
     {
         Min = Min, Max = Max, Limits = Limits.ToSettings(),
         Typing = Typing, Scroll = Scroll, Shuffle = Shuffle, AutoPause = AutoPause, Warmup = Warmup,
+        Advanced = Advanced?.ToSettings() ?? new AdvancedAntiBanSettings(), // an old client may omit it
     };
 }
 

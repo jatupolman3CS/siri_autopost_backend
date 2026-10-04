@@ -31,10 +31,10 @@ public sealed class GetWorkspacesQueryHandler(
         var owners = (await users.ListByIdsAsync(all.Select(w => w.OwnerId), ct)).ToDictionary(u => u.Id);
         var limits = new Dictionary<Guid, LimitsDto>();
         foreach (var o in owners.Values) limits[o.Id] = LimitsDto.From(await plans.ForAsync(o, ct));
-        return all.Select(w => new WorkspaceDto(
-                w.Id, w.Name, sent.GetValueOrDefault(w.Id), people[w.Id],
+        return all.Select(w => WorkspaceDto.From(
+                w, sent.GetValueOrDefault(w.Id), people[w.Id],
                 w.OwnerId == current.UserId ? WorkspaceRole.Owner : memberships[w.Id],
-                limits[w.OwnerId], owners[w.OwnerId].HasAdvancedAntiBan))
+                limits[w.OwnerId], owners[w.OwnerId]))
             .ToList();
     }
 }
@@ -53,6 +53,6 @@ public sealed class CreateWorkspaceCommandHandler(
         await seeder.SeedAsync(ws, ct);
         await uow.SaveChangesAsync(ct);
         var owner = await users.GetByIdAsync(current.UserId, ct) ?? throw new AuthenticationException("ต้องเข้าสู่ระบบใหม่");
-        return new WorkspaceDto(ws.Id, ws.Name, 0, 1, WorkspaceRole.Owner, LimitsDto.From(await plans.ForAsync(owner, ct)), owner.HasAdvancedAntiBan);
+        return WorkspaceDto.From(ws, 0, 1, WorkspaceRole.Owner, LimitsDto.From(await plans.ForAsync(owner, ct)), owner);
     }
 }

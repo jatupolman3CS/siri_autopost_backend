@@ -24,6 +24,14 @@ public sealed record GatewayResult(bool Ok, string? Error)
 /// <param name="Id">Telegram's chat id (negative for groups).</param>
 public sealed record TelegramChat(string Id, string Title);
 
+/// <param name="Error">Why the lookup failed (a short Thai message with no token in it); null when Telegram answered.</param>
+public sealed record TelegramChatsResult(IReadOnlyList<TelegramChat> Chats, string? Error)
+{
+    public bool Ok => Error is null;
+
+    public static TelegramChatsResult Failure(string error) => new([], error);
+}
+
 /// <summary>The outside world's side of notifications. Implementations log failures instead of throwing them.</summary>
 public interface INotificationGateway
 {
@@ -31,6 +39,6 @@ public interface INotificationGateway
 
     Task<GatewayResult> SendLineAsync(string token, string to, string text, CancellationToken ct = default);
 
-    /// <summary>Chats that wrote to the bot lately (Telegram getUpdates); empty when the token is wrong.</summary>
-    Task<IReadOnlyList<TelegramChat>> FindTelegramChatsAsync(string token, CancellationToken ct = default);
+    /// <summary>Chats that wrote to the bot lately (Telegram getUpdates), newest first; an error when Telegram refuses the token.</summary>
+    Task<TelegramChatsResult> FindTelegramChatsAsync(string token, CancellationToken ct = default);
 }

@@ -7,7 +7,7 @@
 //   campaigns: [{
 //     id, name, enabled,
 //     groups: [{ url, text, enabled }],   // text = per-group first line / {{code}}
-//     posts:  [{ id, text, imageIds }],
+//     posts:  [{ id, text, imageIds, imageUrls }],   // imageUrls = http(s) links fetched when the post goes out
 //     config: { ...DEFAULT_CONFIG },
 //   }]
 // }
@@ -230,7 +230,7 @@ export function parseGroupList(text) {
 
 export function usablePosts(posts) {
   return (posts || []).filter(
-    (p) => (p.text && p.text.trim()) || (p.imageIds && p.imageIds.length)
+    (p) => (p.text && p.text.trim()) || (p.imageIds && p.imageIds.length) || (p.imageUrls && p.imageUrls.length)
   );
 }
 
@@ -281,7 +281,7 @@ export function uid() {
 
 // groupUrls: groups this post may be used for ([] = every group of the campaign).
 export function newPost() {
-  return { id: uid(), text: '', imageIds: [], groupUrls: [] };
+  return { id: uid(), text: '', imageIds: [], imageUrls: [], groupUrls: [] };
 }
 
 // leadImageIds: media (images/videos) attached first to every post of the campaign.
@@ -364,6 +364,8 @@ function normalizeCampaign(c, i) {
       id: typeof asObject(p).id === 'string' && p.id ? p.id : uid(),
       text: String(asObject(p).text || ''),
       imageIds: asArray(asObject(p).imageIds).filter((x) => typeof x === 'string'),
+      // Media kept in object storage: fetched when the post goes out instead of stored in the browser.
+      imageUrls: asArray(asObject(p).imageUrls).filter((x) => typeof x === 'string' && /^https?:\/\//i.test(x)),
       // Links that cannot be read stay as they are, so the post stays limited
       // (it matches no group) instead of silently fitting every group.
       groupUrls: [

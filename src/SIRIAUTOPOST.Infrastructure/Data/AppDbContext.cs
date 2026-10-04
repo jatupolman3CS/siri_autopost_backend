@@ -15,6 +15,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<Post> Posts => Set<Post>();
     public DbSet<MediaFile> Media => Set<MediaFile>();
     public DbSet<Snippet> Snippets => Set<Snippet>();
+    public DbSet<ImportedPost> ImportedPosts => Set<ImportedPost>();
     public DbSet<Device> Devices => Set<Device>();
     public DbSet<DevicePairing> DevicePairings => Set<DevicePairing>();
     public DbSet<WorkspaceMember> Members => Set<WorkspaceMember>();

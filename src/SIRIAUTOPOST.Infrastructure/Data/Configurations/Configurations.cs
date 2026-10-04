@@ -86,6 +86,23 @@ public sealed class MediaFileConfiguration : IEntityTypeConfiguration<MediaFile>
     }
 }
 
+public sealed class ImportedPostConfiguration : IEntityTypeConfiguration<ImportedPost>
+{
+    public void Configure(EntityTypeBuilder<ImportedPost> b)
+    {
+        b.ToTable("IMPORTED_POSTS");
+        b.Property(x => x.Source).HasMaxLength(30).IsRequired();
+        b.Property(x => x.SourceKey).HasMaxLength(100).IsRequired();
+        b.Property(x => x.Title).HasMaxLength(500);
+        b.Property(x => x.Text).HasColumnType("text").IsRequired();
+        b.Property(x => x.LinkUrl).HasMaxLength(2000);
+        b.OwnsMany(x => x.Media, o => o.ToJson("media"));
+        b.HasIndex(x => new { x.WorkspaceId, x.Source, x.SourceKey }).IsUnique();
+        b.HasIndex(x => new { x.WorkspaceId, x.PostedAt });
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
 public sealed class SnippetConfiguration : IEntityTypeConfiguration<Snippet>
 {
     public void Configure(EntityTypeBuilder<Snippet> b)

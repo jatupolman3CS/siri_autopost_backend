@@ -825,6 +825,7 @@ async function choosePost(camp, group, postId = null) {
     text: composeText(post.text, group.text, camp.config.footer, camp.config.footerPosition),
     // Lead media first (by chance %), the post's own images in random order.
     imageIds: postMediaIds(camp, post, true),
+    imageUrls: shuffle(post.imageUrls || []),
   };
 }
 
@@ -1073,6 +1074,7 @@ async function postToGroup(url, post, cfg, global) {
   let tabId = null;
   let groupName = '';
   let sent = false;
+  let urlKeys = [];
   try {
     if (global.focusWindow) {
       try {
@@ -1145,11 +1147,14 @@ async function postToGroup(url, post, cfg, global) {
       }
     }
 
-    if (post.imageIds.length) {
+    // Media kept in object storage (imageUrls) is downloaded now and removed again once attached.
+    urlKeys = await fetchUrlMedia(post.imageUrls || []);
+    const mediaIds = [...post.imageIds, ...urlKeys];
+    if (mediaIds.length) {
       check();
       await sleep(rand(800, 2200));
-      const r = await tabCmdOk(tabId, 'attachImages', { imageIds: post.imageIds }, 240000);
-      await log('info', `แนบรูป ${post.imageIds.length} รูป (${r.method})`);
+      const r = await tabCmdOk(tabId, 'attachImages', { imageIds: mediaIds }, 240000);
+      await log('info', `แนบรูป ${mediaIds.length} รูป (${r.method})`);
       const ready = await pollState(tabId, (s) => s.open && (s.postEnabled || s.hasNext) && !s.uploading, 600000, check);
       if (!ready) throw new Error('อัปโหลดรูปไม่เสร็จภายในเวลา');
     }
@@ -1203,11 +1208,28 @@ async function postToGroup(url, post, cfg, global) {
     }
     throw e;
   } finally {
+    if (urlKeys.length) await chrome.storage.local.remove(urlKeys).catch(() => {});
     if (prevWindowId != null) {
       const st = await getState();
       if (prevWindowId !== st.windowId) chrome.windows.update(prevWindowId, { focused: true }).catch(() => {});
     }
   }
+}
+
+// Downloads media links (a post's imageUrls) into temporary storage keys that content.js can attach.
+// The caller removes the keys again. Needs the site to allow the extension (CORS or the optional host permission).
+async function fetchUrlMedia(urls) {
+  const keys = [];
+  for (let i = 0; i < urls.length; i++) {
+    const res = await fetch(urls[i], { cache: 'no-store' });
+    if (!res.ok) throw new Error(`โหลดรูปไม่สำเร็จ (${res.status}): ${urls[i]}`);
+    const blob = await res.blob();
+    const type = blob.type || res.headers.get('content-type') || 'image/jpeg';
+    const key = `urlimg:${Date.now()}_${i}`;
+    keys.push(key);
+    await chrome.storage.local.set({ [key]: { name: decodeURIComponent(urls[i].split('/').pop() || `image_${i + 1}`), type, data: await dataUrlOf(blob, type) } });
+  }
+  return keys;
 }
 
 async function testPost(cid, url, postId) {

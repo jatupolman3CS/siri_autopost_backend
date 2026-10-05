@@ -9,8 +9,8 @@ pipeline {
         GIT_URL         = "https://github.com/jatupolman3CS/siri_autopost_backend.git"
         GIT_BRANCH      = "main"
         DOCKERFILE_PATH = "src/SIRIAUTOPOST.Api/Dockerfile"
-        K8S_NAMESPACE   = "siriautopost"
-        ENV_CREDENTIAL  = "siriautopost-env-file"
+        K8S_NAMESPACE   = "siriautopost-prd"
+        ENV_CREDENTIAL  = "siriautopost-env-file-prd"
     }
 
     stages {

@@ -3,7 +3,7 @@ kind: Kustomization
 
 # PRD: https://siriautopost.siristudiophoto.com  |  database SIRIAUTOPOST_PRD
 # Applied by Jenkinsfile (Jenkins job SIRIAUTOPOST-API-PRD). Fully separate from DEV: own namespace, secrets and database.
-namespace: siriautopost
+namespace: siriautopost-prd
 
 # No Ingress: the public host goes Cloudflare tunnel -> NodePort 30907 (Service `ui`, siri_autopost_ui),
 # and the dashboard's nginx proxies /api to Service `api` below.

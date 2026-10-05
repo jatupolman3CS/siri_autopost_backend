@@ -7,18 +7,18 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
 | | PRD | DEV |
 |---|---|---|
 | URL | https://siriautopost.siristudiophoto.com | https://siriautopost-dev.siristudiophoto.com |
-| Namespace | `siriautopost` | `siriautopost-dev` |
+| Namespace | `siriautopost-prd` | `siriautopost-dev` |
 | Database | `SIRIAUTOPOST_PRD` | `SIRIAUTOPOST` |
 | NodePort (Service `ui`) | 30907 | 30908 |
 | Jenkins jobs | `SIRIAUTOPOST-API-PRD`, `SIRIAUTOPOST-WEB-PRD` | `SIRIAUTOPOST-API-DEV`, `SIRIAUTOPOST-WEB-DEV` |
 | Jenkinsfile (both repos) | `Jenkinsfile` | `Jenkinsfile.dev` |
 | Manifests | `deploy/k8s/overlays/prd` | `deploy/k8s/overlays/dev` |
-| Env-file credential | `siriautopost-env-file` (template `deploy/env/prd.env.example`) | `siriautopost-dev-env-file` (`deploy/env/dev.env.example`) |
+| Env-file credential | `siriautopost-env-file-prd` | `siriautopost-env-file` |
 | Image tags | `prd-<build>`, `prd-latest` | `dev-<build>`, `dev-latest` |
-| In-cluster Postgres (optional) | `deploy/k8s/postgres/overlays/prd` | `deploy/k8s/postgres/overlays/dev` |
+| Postgres | shared `infra/postgres` (`postgres.infra.svc.cluster.local:5432`), one server, database per env | same server |
 
 Both environments use the same image names (`localhost:5000/siriautopost-api`, `siriautopost-web`); nothing else is shared:
-own namespace, own `api-env` secret (own `Jwt__Key`, DB credentials, Stripe keys), own database, own hostname, own NodePort.
+own namespace (`<app>-prd` / `<app>-dev`, like the other systems), own `api-env` secret (own `Jwt__Key`, DB credentials, Stripe keys), own database, own hostname, own NodePort.
 
 - Branch: all jobs build `main` (`GIT_BRANCH` in each Jenkinsfile; point the dev ones at `develop` once that branch exists).
 - Each job is a plain "Build Now" (no parameters), like the other systems on this Jenkins.
@@ -43,11 +43,9 @@ own namespace, own `api-env` secret (own `Jwt__Key`, DB credentials, Stripe keys
      - hostname: siriautopost-dev.siristudiophoto.com
        service: http://172.17.0.1:30908
      ```
-2. **Databases.** The DB user needs CREATEDB, or the databases must exist: `SIRIAUTOPOST_PRD` (PRD) and `SIRIAUTOPOST` (DEV), on the
-   server each env file names. Or use the in-cluster Postgres: create secret `postgres-env` (`POSTGRES_USER`, `POSTGRES_PASSWORD`)
-   in the namespace, then `kubectl apply -k deploy/k8s/postgres/overlays/<dev|prd>` (no pipeline applies it).
-3. **Jenkins credentials** `siriautopost-env-file` (PRD) and `siriautopost-dev-env-file` (DEV), both "Secret file": a `.env` file like the other jobs use
-   (templates in `deploy/env/`; never copy values from one to the other). The job puts it into
+2. **Databases.** One shared server (`infra/postgres`); the API creates its database on first start (migrations), so the DB user needs CREATEDB: `SIRIAUTOPOST_PRD` (PRD) and `SIRIAUTOPOST` (DEV). Both env files use `Host=postgres.infra.svc.cluster.local`.
+3. **Jenkins credentials** `siriautopost-env-file-prd` (PRD) and `siriautopost-env-file` (DEV), both "Secret file" (same naming as `siriphoto-env-file[-prd]`): a `.env` file like the other jobs use
+   (never copy values from one to the other). The job puts it into
    the secret `api-env` **as it is** (BOM and CRLF stripped), and every key in it becomes an environment variable of the
    API pod, so use the API's own names (`Section__Key`):
 
@@ -88,7 +86,7 @@ own namespace, own `api-env` secret (own `Jwt__Key`, DB credentials, Stripe keys
 ## Check
 
 ```
-kubectl -n siriautopost get pods,svc            # PRD
+kubectl -n siriautopost-prd get pods,svc        # PRD
 kubectl -n siriautopost-dev get pods,svc        # DEV
 curl -fsS http://172.17.0.1:30907/              # PRD NodePort
 curl -fsS http://172.17.0.1:30908/              # DEV NodePort

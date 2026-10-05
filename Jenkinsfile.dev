@@ -10,7 +10,7 @@ pipeline {
         GIT_BRANCH      = "main"
         DOCKERFILE_PATH = "src/SIRIAUTOPOST.Api/Dockerfile"
         K8S_NAMESPACE   = "siriautopost-dev"
-        ENV_CREDENTIAL  = "siriautopost-dev-env-file"
+        ENV_CREDENTIAL  = "siriautopost-env-file"
     }
 
     stages {

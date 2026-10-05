@@ -8,7 +8,7 @@ pipeline {
         IMAGE_TAG     = "prd-${env.BUILD_NUMBER}"
         GIT_URL       = "https://github.com/jatupolman3CS/siri_autopost_ui.git"
         GIT_BRANCH    = "main"
-        K8S_NAMESPACE = "siriautopost"
+        K8S_NAMESPACE = "siriautopost-prd"
     }
 
     stages {

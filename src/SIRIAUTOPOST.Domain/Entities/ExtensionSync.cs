@@ -150,11 +150,11 @@ public class DeviceCommand : Entity
     /// <summary>The commands the extension runs from the web (remoteCommands in client/background.js).</summary>
     public static readonly IReadOnlySet<string> Allowed = new HashSet<string>
     {
-        "start", "stop", "runNow", "testPost", "tgTest", "tgFindChats", "clearLogs", "syncNow",
+        "start", "stop", "runNow", "testPost", "tgTest", "tgFindChats", "clearLogs", "syncNow", "takeJobs",
     };
 
-    /// <summary>Buttons that make the extension post (start, run now, test post).</summary>
-    public static bool StartsPosting(string cmd) => cmd is "start" or "runNow" or "testPost";
+    /// <summary>Buttons that make the extension post (start, run now, test post, take the schedules' due posts).</summary>
+    public static bool StartsPosting(string cmd) => cmd is "start" or "runNow" or "testPost" or "takeJobs";
 
     public Guid WorkspaceId { get; private set; }
     public Guid DeviceId { get; private set; }

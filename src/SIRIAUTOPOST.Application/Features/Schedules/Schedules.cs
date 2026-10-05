@@ -25,7 +25,7 @@ public sealed class ScheduleViews(
         if (list.Count == 0) return [];
         var byCollection = (await collections.ListAsync(workspaceId, ct)).ToDictionary(c => c.Id);
         var usable = (await collectionPosts.ListAsync(workspaceId, ct))
-            .Where(p => byCollection.TryGetValue(p.CollectionId, out var c) && p.IsUsable(c))
+            .Where(p => byCollection.TryGetValue(p.CollectionId, out var c) && c.Active && p.IsUsable(c))
             .GroupBy(p => p.CollectionId)
             .ToDictionary(g => g.Key, g => g.Count());
         var sets = (await linkSets.ListAsync(workspaceId, ct)).ToDictionary(s => s.Id);
@@ -42,7 +42,7 @@ public sealed class ScheduleViews(
 
         return list.Select(s =>
         {
-            var targets = sets.TryGetValue(s.LinkSetId, out var set) ? ScheduleTargets.Resolve(set, links[set.Id].ToList(), accountList) : [];
+            var targets = sets.TryGetValue(s.LinkSetId, out var set) && set.Active ? ScheduleTargets.Resolve(set, links[set.Id].ToList(), accountList) : [];
             return Map(s, targets.Count, targets.Sum(t => s.SlotsFor(t.OverrideKey).Count), usable.GetValueOrDefault(s.CollectionId),
                 today.GetValueOrDefault(s.Id), next.TryGetValue(s.Id, out var at) ? at : null);
         }).ToList();
@@ -56,7 +56,7 @@ public sealed class ScheduleViews(
             s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount,
             s.BumpHours, s.AutoDeleteDays,
             s.Overrides.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value),
-            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt);
+            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow);
 }
 
 public sealed record GetSchedulesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ScheduleDto>>;
@@ -94,11 +94,13 @@ public sealed class CreateScheduleCommandHandler(
         var r = c.Request;
         var collection = await collections.GetAsync(ws.Id, r.CollectionId, ct) ?? throw new DomainException("ไม่พบชุดโพสต์ที่เลือก");
         var set = await linkSets.GetAsync(ws.Id, r.LinkSetId, ct) ?? throw new DomainException("ไม่พบชุดลิงก์ที่เลือก");
+        if (!collection.Active) throw new DomainException("ชุดโพสต์นี้ปิดใช้งานอยู่ เปิดใช้งานก่อนสร้างตาราง");
+        if (!set.Active) throw new DomainException("ชุดลิงก์นี้ปิดใช้งานอยู่ เปิดใช้งานก่อนสร้างตาราง");
 
         var now = clock.GetUtcNow();
         if (r.UtcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
         var today = Schedule.LocalDayOf(now, r.UtcOffsetMinutes);
-        var start = string.IsNullOrWhiteSpace(r.StartDate)
+        var start = r.StartNow || string.IsNullOrWhiteSpace(r.StartDate)
             ? today
             : DateOnly.TryParseExact(r.StartDate.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
                 ? d
@@ -132,7 +134,7 @@ public sealed class CreateScheduleCommandHandler(
         }
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
-            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now);
+            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow);
         var made = MaterializeResult.None;
         // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
         await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
@@ -185,6 +187,23 @@ public sealed class SetScheduleActiveCommandHandler(
         }
         var saved = await schedules.GetAsync(ws.Id, schedule.Id, ct) ?? schedule;
         return await views.BuildOneAsync(saved, now, ct);
+    }
+}
+
+/// <summary>Renames a schedule; nothing else about it changes.</summary>
+public sealed record RenameScheduleCommand(Guid WorkspaceId, Guid ScheduleId, string Name) : ICommand<ScheduleDto>;
+
+public sealed class RenameScheduleCommandHandler(
+    IWorkspaceRepository workspaces, IScheduleRepository schedules, ScheduleViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<RenameScheduleCommand, ScheduleDto>
+{
+    public async Task<ScheduleDto> HandleAsync(RenameScheduleCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var schedule = await schedules.GetAsync(ws.Id, c.ScheduleId, ct) ?? throw new NotFoundException("ตารางโพสต์", c.ScheduleId);
+        schedule.Rename(c.Name);
+        await uow.SaveChangesAsync(ct);
+        return await views.BuildOneAsync(schedule, clock.GetUtcNow(), ct);
     }
 }
 

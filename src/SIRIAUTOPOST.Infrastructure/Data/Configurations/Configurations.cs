@@ -101,7 +101,7 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         // the same post cannot both change it, the second save fails with a ConcurrencyConflictException.
         b.Property<uint>("xmin").IsRowVersion();
         b.Property(x => x.Target).HasMaxLength(Post.MaxTargetLength);
-        b.Property(x => x.Content).HasMaxLength(Post.MaxContentLength).IsRequired();
+        b.Property(x => x.Content).HasMaxLength(Post.MaxComposedLength).IsRequired();
         b.Property(x => x.FailureDetail).HasMaxLength(Post.MaxDetailLength);
         b.Property(x => x.TargetKey).HasMaxLength(60);
         b.Property(x => x.SlotKey).HasMaxLength(20);

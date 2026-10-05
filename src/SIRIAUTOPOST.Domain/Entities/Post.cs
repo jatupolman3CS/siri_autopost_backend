@@ -7,6 +7,8 @@ namespace SIRIAUTOPOST.Domain.Entities;
 public class Post : Entity
 {
     public const int MaxContentLength = 5000;
+    /// <summary>What a composed post may hold: a full-size text plus the group code, the footer and the hashtags.</summary>
+    public const int MaxComposedLength = 7000;
     public const int MaxTargetLength = 200;
     public const int MaxTargetUrlLength = 300;
     public const int MaxCodeLength = 100;
@@ -113,7 +115,7 @@ public class Post : Entity
     {
         var text = (content ?? "").Trim();
         if (text.Length == 0) throw new DomainException("กรุณาใส่ข้อความโพสต์");
-        if (text.Length > MaxContentLength) throw new DomainException($"ข้อความโพสต์ยาวเกิน {MaxContentLength} ตัวอักษร");
+        if (text.Length > MaxComposedLength) throw new DomainException($"ข้อความโพสต์ยาวเกิน {MaxComposedLength} ตัวอักษร");
         var url = string.IsNullOrWhiteSpace(targetUrl) ? null : targetUrl.Trim();
         if (url is { Length: > MaxTargetUrlLength }) throw new DomainException($"ลิงก์ยาวเกิน {MaxTargetUrlLength} ตัวอักษร");
         var c = string.IsNullOrWhiteSpace(code) ? null : code.Trim();

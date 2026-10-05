@@ -50,6 +50,8 @@ public class PostCollection : Entity
     public string Description { get; private set; } = "";
     public string Icon { get; private set; } = DefaultIcon;
     public int SortOrder { get; private set; }
+    /// <summary>Off = schedules that use the collection queue nothing from it until it is switched on again.</summary>
+    public bool Active { get; private set; } = true;
     public DateTimeOffset CreatedAt { get; private set; }
     public CollectionSettings Settings { get; private set; } = new();
 
@@ -61,6 +63,8 @@ public class PostCollection : Entity
         c.Rename(name, description);
         return c;
     }
+
+    public void SetActive(bool active) => Active = active;
 
     /// <summary>Changes the name and description; the description may be empty.</summary>
     public void Rename(string? name, string? description)
@@ -141,6 +145,14 @@ public class CollectionPost : Entity
         MediaIds = media;
         if (changed && collection.Settings.RequireApproval && Approval != PostApproval.Draft) Approval = PostApproval.Draft;
         UpdatedAt = now;
+    }
+
+    /// <summary>Takes deleted library files out of the post (a deleted file must not stay attached).</summary>
+    public bool DropMedia(IReadOnlySet<Guid> gone)
+    {
+        if (!MediaIds.Any(gone.Contains)) return false;
+        MediaIds = MediaIds.Where(id => !gone.Contains(id)).ToList();
+        return true;
     }
 
     /// <summary>Moves the post to another collection. A collection that requires approval has to approve it itself.</summary>

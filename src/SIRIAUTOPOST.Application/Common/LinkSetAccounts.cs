@@ -9,14 +9,16 @@ namespace SIRIAUTOPOST.Application.Common;
 public static class LinkSetAccounts
 {
     /// <summary>
-    /// The account that posts the set's links: the one it names (<see cref="LinkSet.PostAsAccountId"/>), or the
-    /// workspace's first connected Facebook account. The named account is returned even when it is not connected, so
-    /// the caller can say so. Null when there is none.
+    /// The account that posts the set's links: the one it names (<see cref="LinkSet.PostAsAccountId"/>) while a browser
+    /// is paired to it, else the workspace's first connected Facebook account (a set pinned to a browser that was
+    /// unbound and paired again keeps working through the new one). When no account is connected the named one is
+    /// returned anyway, so the caller can say it is not connected. Null when there is none.
     /// </summary>
     public static SocialAccount? PostingAccount(LinkSet set, IReadOnlyList<SocialAccount> accounts)
     {
-        if (set.PostAsAccountId is { } id && accounts.FirstOrDefault(a => a.Id == id) is { } named) return named;
-        return accounts.FirstOrDefault(a => a.Platform == Platform.Fb && a.IsConnected);
+        var named = set.PostAsAccountId is { } id ? accounts.FirstOrDefault(a => a.Id == id) : null;
+        if (named is { IsConnected: true }) return named;
+        return accounts.FirstOrDefault(a => a.Platform == Platform.Fb && a.IsConnected) ?? named;
     }
 
     /// <summary>The device a "links.changed" event of this set belongs to; null when no browser posts the set.</summary>

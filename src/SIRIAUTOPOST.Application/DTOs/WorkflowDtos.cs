@@ -37,10 +37,10 @@ public sealed record CollectionPostDto(
 /// <param name="Posts">Oldest first (the newest is last).</param>
 /// <param name="ScheduleCount">Schedules that use the collection.</param>
 public sealed record CollectionDto(
-    Guid Id, string Name, string Description, string Icon, CollectionSettingsDto Settings, IReadOnlyList<CollectionPostDto> Posts, int ScheduleCount)
+    Guid Id, string Name, string Description, string Icon, CollectionSettingsDto Settings, IReadOnlyList<CollectionPostDto> Posts, int ScheduleCount, bool Active)
 {
     public static CollectionDto From(PostCollection c, IReadOnlyList<CollectionPostDto> posts, int scheduleCount) =>
-        new(c.Id, c.Name, c.Description, c.Icon, CollectionSettingsDto.From(c.Settings), posts, scheduleCount);
+        new(c.Id, c.Name, c.Description, c.Icon, CollectionSettingsDto.From(c.Settings), posts, scheduleCount, c.Active);
 }
 
 /// <summary>What the approval buttons do: the author asks, an admin approves or sends it back.</summary>
@@ -69,13 +69,13 @@ public sealed record SetLinkDto(
 /// <param name="AccountIds">Other accounts that post the same content to their default target.</param>
 /// <param name="Links">In their order.</param>
 public sealed record LinkSetDto(
-    Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount)
+    Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount, bool Active)
 {
     public static LinkSetDto From(LinkSet set, IReadOnlyList<SetLink> links, int scheduleCount)
     {
         var seen = new HashSet<string>(FacebookGroupUrl.Comparer); // /groups/ABC and /groups/abc are one group
         var dtos = links.Select(l => SetLinkDto.From(l, l.IsValid && !seen.Add(l.Url))).ToList();
-        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount);
+        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount, set.Active);
     }
 }
 
@@ -98,15 +98,19 @@ public sealed record ScheduleDto(
     Guid Id, string Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, IReadOnlyList<string> Slots,
-    int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt);
+    int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false);
 
 /// <param name="StartDate">"yyyy-MM-dd" in the schedule's local calendar; empty = today.</param>
 /// <param name="Overrides">Own times per link (its id, 32 hex digits) or "account:&lt;id&gt;"; empty list = follow the schedule.</param>
 /// <param name="UtcOffsetMinutes">The browser's UTC offset.</param>
+/// <param name="StartNow">
+/// True = start when the schedule is created: the groups go out one after the other from this moment (the start date and,
+/// for Once, the time are ignored), then the regular times go on. False (default) = wait for the times.
+/// </param>
 public sealed record SaveScheduleRequest(
     string? Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string>? Times, int EveryHours, string? FirstTime,
     string? StartDate, string? OnceTime, PostOrder Order, string? DripFrom, string? DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false);
 
 public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateTimeOffset? FirstAt, DateTimeOffset? LastAt);
 

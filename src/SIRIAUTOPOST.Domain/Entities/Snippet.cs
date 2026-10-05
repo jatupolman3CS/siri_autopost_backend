@@ -12,6 +12,8 @@ public class Snippet : Entity
     public string Title { get; private set; } = "";
     public string Text { get; private set; } = "";
     public int UsedCount { get; private set; }
+    /// <summary>Off = kept in the library but not offered for new posts.</summary>
+    public bool Active { get; private set; } = true;
     public DateTimeOffset CreatedAt { get; private set; }
 
     private Snippet() { } // EF Core
@@ -24,4 +26,16 @@ public class Snippet : Entity
         if (t.Length > MaxTitleLength || x.Length > MaxTextLength) throw new DomainException("ชื่อหรือข้อความยาวเกินไป");
         return new Snippet { WorkspaceId = workspaceId, Title = t, Text = x, CreatedAt = now, UsedCount = usedCount };
     }
+
+    public void Update(string? title, string? text)
+    {
+        var t = (title ?? "").Trim();
+        var x = (text ?? "").Trim();
+        if (t.Length == 0 || x.Length == 0) throw new DomainException("กรุณาใส่ชื่อและข้อความ");
+        if (t.Length > MaxTitleLength || x.Length > MaxTextLength) throw new DomainException("ชื่อหรือข้อความยาวเกินไป");
+        Title = t;
+        Text = x;
+    }
+
+    public void SetActive(bool active) => Active = active;
 }

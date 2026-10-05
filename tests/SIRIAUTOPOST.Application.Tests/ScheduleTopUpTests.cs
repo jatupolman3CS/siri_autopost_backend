@@ -308,9 +308,11 @@ public class ScheduleTopUpTests
     public async Task A_refusal_of_the_run_is_thrown_to_the_one_who_asked_for_it()
     {
         var rig = new Rig();
+        rig.World.Links.Clear();
+        rig.World.AddLink("long", new string('C', 100));
         var s = rig.Add(rig.World.NewSchedule());
         rig.World.Posts.Clear();
-        rig.World.AddPost(new string('ก', 5000)); // the composed text (with the group's code) is too long
+        rig.World.AddPost(new string('ก', 4800) + string.Concat(Enumerable.Repeat("{{code}}", 25))); // too long once the 100-character codes are in
         rig.World.SetLinks.ListBySetAsync(rig.World.Ws.Id, Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(_ => rig.World.Links.ToList());
 
         await Assert.ThrowsAsync<DomainException>(() => rig.TopUp().GenerateAsync(rig.World.Ws.Id, s.Id));

@@ -12,6 +12,7 @@ namespace SIRIAUTOPOST.Domain.Services;
 public static partial class PostComposer
 {
     private const int MaxSpinRounds = 50;
+    private const int MaxLengthAttempts = 30;
 
     [GeneratedRegex(@"\{\{\s*(?:code|รหัส)\s*\}\}", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex CodeTag();
@@ -57,9 +58,40 @@ public static partial class PostComposer
 
     /// <summary>
     /// Spin, then the code, then the footer (unless the body already has it) at the end or the top, then the hashtags
-    /// (unless the body already has them). A result over the post length limit is refused, never cut.
+    /// (unless the body already has them). A result over the post length limit is refused, never cut; but spintax can
+    /// make one pick longer than another, so a pick over the limit is spun again (up to <see cref="MaxLengthAttempts"/>
+    /// times) before the shortest one is refused.
     /// </summary>
     public static string ComposeFull(string? text, string? code, CollectionSettings settings, Func<double> rnd)
+    {
+        DomainException? shortest = null;
+        var shortestLength = int.MaxValue;
+        for (var attempt = 0; attempt < MaxLengthAttempts; attempt++)
+        {
+            try
+            {
+                return ComposeOnce(text, code, settings, rnd);
+            }
+            catch (TooLongException e)
+            {
+                if (e.Length < shortestLength)
+                {
+                    shortestLength = e.Length;
+                    shortest = e;
+                }
+                // Nothing to vary: every pick is the same text.
+                if (!HasSpin(text) && !HasSpin(settings.Footer)) break;
+            }
+        }
+        throw new DomainException(shortest!.Message);
+    }
+
+    private sealed class TooLongException(string message, int length) : DomainException(message)
+    {
+        public int Length { get; } = length;
+    }
+
+    private static string ComposeOnce(string? text, string? code, CollectionSettings settings, Func<double> rnd)
     {
         var body = Compose(Spin(text, rnd), code);
         var withoutExtras = body.Length;
@@ -77,12 +109,13 @@ public static partial class PostComposer
             tagsLength = tags.Length;
             body += "\n" + tags;
         }
-        if (body.Length > Post.MaxContentLength)
+        if (body.Length > Post.MaxComposedLength)
         {
             var (part, length) = new[] { ("ข้อความโพสต์", withoutExtras), ("ข้อความส่วนท้าย", footLength), ("แฮชแท็ก", tagsLength) }
                 .MaxBy(p => p.Item2);
-            throw new DomainException(
-                $"ข้อความที่ประกอบแล้วยาว {body.Length} ตัวอักษร เกิน {Post.MaxContentLength} ตัวอักษร: ลดความยาวของ{part} (ตอนนี้ {length} ตัวอักษร)");
+            throw new TooLongException(
+                $"ข้อความที่ประกอบแล้วยาว {body.Length} ตัวอักษร เกิน {Post.MaxComposedLength} ตัวอักษร: ลดความยาวของ{part} (ตอนนี้ {length} ตัวอักษร)",
+                body.Length);
         }
         return body;
     }

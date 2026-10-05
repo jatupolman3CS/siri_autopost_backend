@@ -13,6 +13,8 @@ public class Schedule : Entity
     public const int MaxNameLength = 120;
     /// <summary>Schedules per workspace.</summary>
     public const int MaxPerWorkspace = 50;
+    /// <summary>The slot name of the start-now round (the slot key is the local day, "T" and this).</summary>
+    public const string NowSlot = "now";
     /// <summary>Posts are queued this many local days ahead (today and the 13 days after).</summary>
     public const int HorizonDays = 14;
     /// <summary>One materialising run refuses to create more posts than this.</summary>
@@ -66,6 +68,13 @@ public class Schedule : Entity
     /// <summary>Rotate: the position in the collection's posts, one step per slot.</summary>
     public int Cursor { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
+    /// <summary>
+    /// "Start now" was chosen: the schedule opens with a round queued the moment it is created (the groups one after the
+    /// other, spaced by the smart delay) instead of waiting for its first time. Once ignores its date and time.
+    /// </summary>
+    public bool StartNow { get; private set; }
+    /// <summary>The start-now round is not queued yet. Cleared by the run that queues it, so pausing and resuming never repeats it.</summary>
+    public bool NowPending { get; private set; }
 
     private Schedule() { } // EF Core
 
@@ -77,7 +86,7 @@ public class Schedule : Entity
         Guid workspaceId, string name, Guid collectionId, Guid linkSetId, ScheduleMode mode, IEnumerable<string>? times,
         int everyHours, string? firstTime, DateOnly startDate, string? onceTime, PostOrder order, string? dripFrom, string? dripTo,
         int dripCount, int bumpHours, int autoDeleteDays, IReadOnlyDictionary<string, IReadOnlyList<string>>? overrides,
-        int utcOffsetMinutes, DateTimeOffset now)
+        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false)
     {
         var n = (name ?? "").Trim();
         if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อตาราง");
@@ -85,6 +94,8 @@ public class Schedule : Entity
         if (!Enum.IsDefined(mode)) throw new DomainException("รูปแบบตารางไม่ถูกต้อง");
         if (!Enum.IsDefined(order)) throw new DomainException("ลำดับโพสต์ไม่ถูกต้อง");
         if (utcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
+        // Starting now means starting today, whatever date was sent.
+        if (startNow) startDate = LocalDayOf(now, utcOffsetMinutes);
         EnsureStartDate(startDate, now, utcOffsetMinutes);
         if (!BumpOptions.Contains(bumpHours)) throw new DomainException("ตัวเลือกดันโพสต์ไม่ถูกต้อง");
         if (!AutoDeleteOptions.Contains(autoDeleteDays)) throw new DomainException("ตัวเลือกลบโพสต์อัตโนมัติไม่ถูกต้อง");
@@ -103,7 +114,7 @@ public class Schedule : Entity
             throw new DomainException("เลือกเวลาโพสต์อย่างน้อย 1 เวลา");
 
         var first = Time(firstTime, "09:00", "เวลาเริ่มต้นไม่ถูกต้อง", interval);
-        var once = Time(onceTime, "14:00", "เวลาโพสต์ไม่ถูกต้อง", mode == ScheduleMode.Once);
+        var once = Time(onceTime, "14:00", "เวลาโพสต์ไม่ถูกต้อง", mode == ScheduleMode.Once && !startNow);
         var from = Time(dripFrom, "09:00", "เวลาเริ่มช่วงไม่ถูกต้อง", drip);
         var to = Time(dripTo, "21:00", "เวลาสิ้นสุดช่วงไม่ถูกต้อง", drip);
         if (drip && TimeOfDay.Parse(from)! > TimeOfDay.Parse(to)!)
@@ -130,6 +141,8 @@ public class Schedule : Entity
             Overrides = CleanOverrides(overrides),
             UtcOffsetMinutes = utcOffsetMinutes,
             CreatedAt = now,
+            StartNow = startNow,
+            NowPending = startNow,
         };
     }
 
@@ -234,12 +247,23 @@ public class Schedule : Entity
     public static string SlotKey(DateOnly localDay, string hhmm) => $"{localDay:yyyy-MM-dd}T{hhmm}";
 
     /// <summary>Resumes or pauses. Resuming forgets what was generated, so the next run fills the horizon again.</summary>
+    public void Rename(string? name)
+    {
+        var n = (name ?? "").Trim();
+        if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อตาราง");
+        if (n.Length > MaxNameLength) throw new DomainException($"ชื่อตารางยาวเกิน {MaxNameLength} ตัวอักษร");
+        Name = n;
+    }
+
     public void SetActive(bool active)
     {
         if (active == Active) return;
         Active = active;
         if (active) GeneratedThrough = null;
     }
+
+    /// <summary>The start-now round has been queued (or there was nothing it could do for good).</summary>
+    public void ClearNowPending() => NowPending = false;
 
     /// <summary>Remembers how far posts were generated and where Rotate stands.</summary>
     public void MarkGenerated(DateOnly through, int cursor)

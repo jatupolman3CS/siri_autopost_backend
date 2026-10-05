@@ -196,7 +196,9 @@ docker compose up -d --build
 **ทางที่ 2: สร้างไฟล์ config ของโฟลเดอร์ส่วนขยาย** (ใช้ Node.js)
 
 ```bash
-node tools/siri-to-config.mjs "C:\Users\jatup\Downloads\SIRI_autopost_export.zip" --share-page-posts --codes-to-groups --all-groups --add-groups config/extra-groups.txt --footer "✨━━━━━━━━━━━━━━━━━━✨\n{🌐|💻|🔗|👉} สั่งทำรูปผ่านเว็บไซต์ : https://www.siristudiophoto.com/\n{📸|🖼️|✅|👉} ผลงาน : https://www.siristudiophoto.com/index/portfolio\n✨━━━━━━━━━━━━━━━━━━✨" --footer-position top --drop-images config/drop-images.txt --swap-images config/image-fixes --lead "C:\SIRI STUDIO PHOTO\Poster.jpg" --lead "C:\SIRI STUDIO PHOTO\Video.mp4" --replace "@970wfiou=>@siristudiophoto" --replace "@siristuiophoto=>@siristudiophoto" --replace "https://lin.ee/c2I3lh4=>https://line.me/R/ti/p/@siristudiophoto" --replace "ขออนุญาตแอดมินและสมาชิกในกลุ่มทุกท่านนะคะ=>{ขออนุญาตแอดมินและสมาชิกในกลุ่มทุกท่านนะคะ|ขออนุญาตแอดมินและสมาชิกทุกท่านนะคะ|ขออนุญาตแอดมินกลุ่มนะคะ|สวัสดีค่ะ ขออนุญาตแอดมินและสมาชิกนะคะ}" --set groupDelayMin=8 --set groupDelayMax=20 --set roundIntervalHours=1 --set roundJitterMin=60 --set longBreakEvery=6 --set longBreakMin=20 --set longBreakMax=45 --set skipChancePct=5 --set activeHoursEnabled=true --set activeStart=08:00 --set activeEnd=21:30 --set groupCooldownHours=12 --set recentAvoid=10 --set shuffleImages=true --set leadChancePct=100 --global minGapMin=5 --global dailyMaxPosts=30 --global blockPauseHoursMin=24 --global blockPauseHoursMax=48 --global failStreakPause=4
+node tools/siri-to-config.mjs "C:\Users\jatup\Downloads\SIRI_autopost_export.zip" --share-page-posts --codes-to-groups --all-groups --add-groups config/extra-groups.txt --footer "สั่งรูปออนไลน์ได้ด้วยตัวเอง ไม่ต้องไปร้าน : https://www.siristudiophoto.com
+ดูผลงาน : https://www.siristudiophoto.com/index/portfolio
+สั่งงาน สอบถาม จองคิว คลิก https://lin.ee/c2I3lh4" --footer-position top --drop-images config/drop-images.txt --swap-images config/image-fixes --lead "C:\SIRI STUDIO PHOTO\Poster.jpg" --lead "C:\SIRI STUDIO PHOTO\Video.mp4" --replace "@970wfiou=>@siristudiophoto" --replace "@siristuiophoto=>@siristudiophoto" --replace "https://lin.ee/c2I3lh4=>https://line.me/R/ti/p/@siristudiophoto" --replace "ขออนุญาตแอดมินและสมาชิกในกลุ่มทุกท่านนะคะ=>{ขออนุญาตแอดมินและสมาชิกในกลุ่มทุกท่านนะคะ|ขออนุญาตแอดมินและสมาชิกทุกท่านนะคะ|ขออนุญาตแอดมินกลุ่มนะคะ|สวัสดีค่ะ ขออนุญาตแอดมินและสมาชิกนะคะ}" --set groupDelayMin=8 --set groupDelayMax=20 --set roundIntervalHours=1 --set roundJitterMin=60 --set longBreakEvery=6 --set longBreakMin=20 --set longBreakMax=45 --set skipChancePct=5 --set activeHoursEnabled=true --set activeStart=08:00 --set activeEnd=21:30 --set groupCooldownHours=12 --set recentAvoid=10 --set shuffleImages=true --set leadChancePct=100 --global minGapMin=5 --global dailyMaxPosts=30 --global blockPauseHoursMin=24 --global blockPauseHoursMax=48 --global failStreakPause=4
 ```
 
 ได้ `config/autopost-config.json` ที่ส่วนขยายโหลดเองตอนติดตั้งใหม่ (ดูหัวข้อ "ย้ายไปเครื่องอื่น") ต้องใช้ Node.js 18 ขึ้นไป ทุกตัวเลือกไม่ใส่ก็ได้
@@ -251,10 +253,11 @@ node tools/siri-to-config.mjs "C:\Users\jatup\Downloads\SIRI_autopost_export.zip
 
   ตอนโพสต์ รหัสของกลุ่มเป็นบรรทัดแรกเสมอและมีครั้งเดียว: ถ้าในโพสต์มีรหัสเดียวกันอยู่ (เช่นโพสต์ที่เพิ่มเองทีหลัง) ระบบเอาออกก่อน ไม่สน `#` ตัวเล็กใหญ่ เครื่องหมายวรรคตอน หรือแบบเขียนติดกัน ลิงก์ hashtag อื่น และวันที่ไม่ถูกแตะ
   ถ้ารหัสเปลี่ยน แก้ช่อง "ข้อความเฉพาะกลุ่ม" ในตารางกลุ่มได้เลย
-- ไลน์แอดเป็น `@siristudiophoto` ทุกโพสต์ (เปลี่ยนจาก `@970wfiou` 23 โพสต์ และแก้ `@siristuiophoto` ที่สะกดผิดอีก 1 โพสต์)
-- ลิงก์แอดไลน์เป็น `https://line.me/R/ti/p/@siristudiophoto` ทุกโพสต์ (เปลี่ยนจาก `https://lin.ee/c2I3lh4` 63 จุดใน 60 โพสต์ ลิงก์เก่าพาไป `@970wfiou` ซึ่งเป็น Basic ID ของบัญชีเดียวกัน) ถ้าสร้างลิงก์สั้น lin.ee ของ `@siristudiophoto` แล้ว ใช้ "ค้นหา / แทนที่" เปลี่ยนเป็นลิงก์สั้นได้
-- **QR ในรูป**: 116 รูปเปลี่ยน QR เป็นของ `@siristudiophoto` แล้ว (QR ใหม่วางทับที่เดิม ตรวจแล้วสแกนได้ลิงก์ใหม่ทุกรูป ไฟล์อยู่ใน `config/image-fixes/`) อีก 5 รูป QR เล็ก/เบลอเกินกว่าจะอ่านออก จึงไม่ได้แก้ ข้อความ `LINE :@970WFIOU` ที่เป็นลายน้ำในรูปไม่ได้แก้ (บัญชีเดียวกัน)
-- **รูปที่มีไลน์ Teach_pp** 55 รูปเอาออกจากทุกโพสต์ (`config/drop-images.txt`)
+- ไลน์แอดเป็น `@siristudiophoto` ทุกโพสต์ (แปลงจาก ID ไลน์เดิมและแก้ตัวสะกดผิดแล้ว)
+- ลิงก์แอดไลน์เป็น `https://line.me/R/ti/p/@siristudiophoto` ทุกโพสต์ (แปลงจากลิงก์สั้นเดิมแล้ว) ถ้าสร้างลิงก์สั้น lin.ee ของ `@siristudiophoto` แล้ว ใช้ "ค้นหา / แทนที่" เปลี่ยนเป็นลิงก์สั้นได้
+- **QR ในรูป**: ทุกรูปที่มี QR เป็นของ `@siristudiophoto` แล้ว (QR ใหม่วางทับที่เดิม สแกนได้ลิงก์ใหม่ยกเว้น 2 รูปที่ QR เล็กเกินสแกน ใส่ QR ใหม่ขนาดเล็กไว้แทน) ไฟล์อยู่ใน `config/image-fixes/`
+- **ข้อความ ID ไลน์ในรูป** (ลายน้ำที่ซ้ำทั่วภาพ, แถบส่วนหัว/ท้าย, ข้อความเล็กในรูปย่อย) เปลี่ยนเป็น `@siristudiophoto` ทุกรูปแล้ว ตรวจด้วย OCR และตรวจด้วยตาทุกรูป (ไฟล์อยู่ใน `config/image-fixes/` เช่นกัน)
+- **รูปที่มีไลน์บัญชีเก่าแบบเอาออกไม่ได้** 55 รูปเอาออกจากทุกโพสต์ (`config/drop-images.txt`)
 - **เนื้อหาหมุนเวียน**: ทุกกลุ่มสุ่มจากโพสต์ทั้ง 86 แบบ
 - **ตารางเวลาแบบกันบล็อก**: ดูหัวข้อ "กันโดนบล็อก + หมุนเวียนเนื้อหา"
 
@@ -395,14 +398,14 @@ SIRI Studio Photo รับตัดต่อ รีทัช รูปติด
 ## ค้นหา / แทนที่ข้อความในทุกโพสต์
 
 ในการ์ด "เนื้อหาโพสต์" เปิด **"ค้นหา / แทนที่ข้อความในทุกโพสต์"** ใช้เปลี่ยนข้อความทีเดียวทุกโพสต์ เช่น เปลี่ยนไลน์แอด
-1. ช่อง "ค้นหา" ใส่ `@970wfiou` ช่อง "แทนที่ด้วย" ใส่ `@siristudiophoto`
+1. ช่อง "ค้นหา" ใส่ ID ไลน์เดิม ช่อง "แทนที่ด้วย" ใส่ `@siristudiophoto`
 2. เลือก "เฉพาะชุดนี้" หรือ "ทุกชุด" แล้วกด **แทนที่ทั้งหมด**
 3. ระบบบอกจำนวนจุดที่จะเปลี่ยนให้ยืนยันก่อน
-4. ทำซ้ำกับลิงก์: ค้นหา `https://lin.ee/c2I3lh4` แทนที่ด้วย `https://line.me/R/ti/p/@siristudiophoto`
+4. ทำซ้ำกับลิงก์สั้นเดิม แทนที่ด้วย `https://line.me/R/ti/p/@siristudiophoto`
 
 แทนที่ตรงตัวอักษร ทั้งในข้อความโพสต์และข้อความต่อท้าย
 
-นำเข้า SIRI zip ผ่านหน้าตั้งค่า (ทางที่ 1) ได้ข้อความและรูปตามไฟล์ zip เดิม ยังมี `@970wfiou`, ลิงก์ `lin.ee/c2I3lh4`, รูป QR เดิม และรูป Teach_pp อยู่ ข้อความแก้ด้วยข้อ 1–4 หลังนำเข้าได้ แต่รูปแก้ไม่ได้ ใช้ `config/autopost-config.json` (ทางที่ 2) จะได้ครบทั้งข้อความและรูปที่แก้แล้ว
+นำเข้า SIRI zip ผ่านหน้าตั้งค่า (ทางที่ 1) ได้ข้อความและรูปตามไฟล์ zip เดิม ซึ่งยังเป็นข้อมูลก่อนแปลง ข้อความแก้ด้วยข้อ 1–4 หลังนำเข้าได้ แต่รูปแก้ไม่ได้ ใช้ `config/autopost-config.json` (ทางที่ 2) จะได้ครบทั้งข้อความและรูปที่แปลงแล้ว
 
 ## โพสต์ใช้กับกลุ่มไหน
 

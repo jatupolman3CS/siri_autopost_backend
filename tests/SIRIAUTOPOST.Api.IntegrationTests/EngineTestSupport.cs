@@ -11,7 +11,7 @@ namespace SIRIAUTOPOST.Api.IntegrationTests;
 internal sealed record ScheduleSpec(
     string Mode = "daily", string[]? Times = null, string Order = "rotate", string? StartDate = null, string OnceTime = "14:00",
     int EveryHours = 6, string FirstTime = "09:00", string DripFrom = "09:00", string DripTo = "21:00", int DripCount = 3,
-    Dictionary<string, string[]>? Overrides = null, int Offset = 0, string? Name = null, int BumpHours = 0, int AutoDeleteDays = 0);
+    Dictionary<string, string[]>? Overrides = null, int Offset = 0, string? Name = null, int BumpHours = 0, int AutoDeleteDays = 0, bool StartNow = false);
 
 /// <summary>
 /// A workspace the engine can run: an owner (Pro unless said otherwise) with a browser paired, a collection of posts and
@@ -68,6 +68,7 @@ internal sealed class Shop : IDisposable
         autoDeleteDays = spec.AutoDeleteDays,
         overrides = spec.Overrides,
         utcOffsetMinutes = spec.Offset,
+        startNow = spec.StartNow,
     };
 
     public Task<HttpResponseMessage> TryCreateScheduleAsync(ScheduleSpec? spec = null, HttpClient? as_ = null) =>

@@ -16,6 +16,7 @@ public sealed class CollectionsController : ControllerBase
 
     public sealed record UpdateCollectionRequest(string Name, string? Description, string? Icon, CollectionSettingsDto Settings);
 
+    public sealed record SetActiveRequest(bool Active);
     public sealed record CollectionPostRequest(string Text, IReadOnlyList<Guid>? MediaIds);
 
     public sealed record CollectionPostsBatchRequest(IReadOnlyList<CollectionPostInput> Items);
@@ -42,6 +43,11 @@ public sealed class CollectionsController : ControllerBase
         handler.HandleAsync(new UpdateCollectionCommand(wsId, id, r.Name, r.Description, r.Icon, r.Settings), ct);
 
     /// <summary>Deletes the collection and its posts; 422 while a schedule uses it.</summary>
+    [HttpPut("{id:guid}/active")]
+    public Task<CollectionDto> SetActive(
+        Guid wsId, Guid id, SetActiveRequest r, [FromServices] ICommandHandler<SetCollectionActiveCommand, CollectionDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new SetCollectionActiveCommand(wsId, id, r.Active), ct);
+
     [HttpDelete("{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Delete(

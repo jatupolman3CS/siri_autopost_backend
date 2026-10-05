@@ -52,11 +52,14 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
         RuleFor(x => x.Times).Must(ScheduleRules.IsTimeList)
             .WithMessage($"เวลาโพสต์ต้องเป็นรูปแบบ HH:mm และเลือกได้ไม่เกิน {Schedule.MaxTimes} เวลา");
         RuleFor(x => x.FirstTime).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาเริ่มต้นไม่ถูกต้อง ใช้รูปแบบ HH:mm");
-        RuleFor(x => x.OnceTime).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาโพสต์ไม่ถูกต้อง ใช้รูปแบบ HH:mm");
+        RuleFor(x => x.OnceTime).Must(ScheduleRules.IsTimeOrEmpty).When(x => !x.StartNow)
+            .WithMessage("เวลาโพสต์ไม่ถูกต้อง ใช้รูปแบบ HH:mm");
         RuleFor(x => x.DripFrom).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาเริ่มช่วงไม่ถูกต้อง ใช้รูปแบบ HH:mm");
         RuleFor(x => x.DripTo).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาสิ้นสุดช่วงไม่ถูกต้อง ใช้รูปแบบ HH:mm");
-        RuleFor(x => x.StartDate).Must(ScheduleRules.IsDate).WithMessage("วันที่เริ่มไม่ถูกต้อง ใช้รูปแบบ ปปปป-ดด-วว");
-        RuleFor(x => x.StartDate).Must((r, d) => ScheduleRules.IsStartDateInRange(d, r.UtcOffsetMinutes, clock.GetUtcNow()))
+        // "Start now" ignores the date (and Once's time): the schedule starts today at this moment.
+        RuleFor(x => x.StartDate).Must(ScheduleRules.IsDate).When(x => !x.StartNow)
+            .WithMessage("วันที่เริ่มไม่ถูกต้อง ใช้รูปแบบ ปปปป-ดด-วว");
+        RuleFor(x => x.StartDate).Must((r, d) => ScheduleRules.IsStartDateInRange(d, r.UtcOffsetMinutes, clock.GetUtcNow())).When(x => !x.StartNow)
             .WithMessage(r =>
             {
                 var (min, max) = Schedule.StartDateRange(clock.GetUtcNow(), r.UtcOffsetMinutes);

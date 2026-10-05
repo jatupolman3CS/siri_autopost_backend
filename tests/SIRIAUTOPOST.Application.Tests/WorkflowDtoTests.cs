@@ -143,7 +143,14 @@ public class WorkflowDtoTests
         Assert.Equal(connected, LinkSetAccounts.PostingAccount(unnamed, all));
 
         var named = LinkSet.Create(Ws, "b", demoPage.Id, Now);
-        Assert.Equal(demoPage, LinkSetAccounts.PostingAccount(named, all)); // named even when it has no browser: the caller says so
+        // A named account without a browser (unbound, or paired again as a new browser) gives way to the connected one...
+        Assert.Equal(connected, LinkSetAccounts.PostingAccount(named, all));
+        // ...and when nothing is connected it is still the one returned, so the caller can say it has no browser.
+        Assert.Equal(demoPage, LinkSetAccounts.PostingAccount(named, [demoPage, ig]));
+        var pinnedToConnected = LinkSet.Create(Ws, "d", connected.Id, Now);
+        var other = SocialAccount.Connect(Ws, Device.Pair(Ws, "PC 2", "Chrome", "2.2", "h2", Now), 3);
+        Assert.Equal(other, LinkSetAccounts.PostingAccount(LinkSet.Create(Ws, "e", other.Id, Now), [connected, other])); // a connected named account stays
+        Assert.Equal(connected, LinkSetAccounts.PostingAccount(pinnedToConnected, [connected, other]));
 
         var gone = LinkSet.Create(Ws, "c", Guid.NewGuid(), Now);
         Assert.Equal(connected, LinkSetAccounts.PostingAccount(gone, all));

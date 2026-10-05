@@ -77,5 +77,28 @@ assert.equal(page.posted[0].text, 'สวัสดีครับ A1');
 const live = (await api('GET', `/api/workspaces/${ws.id}/devices/${device.id}/live`)).json;
 assert.ok(live.logs.some((l) => l.msg.includes(GROUP_URL)), 'the extension logged the group it posted to');
 
+step('a link set pinned to a browser that was unbound still works through the browser paired afterwards');
+r = await api('POST', `/api/workspaces/${ws.id}/link-sets`, { name: 'ชุดที่ผูกเครื่องเก่า', postAsAccountId: device.accountId });
+assert.equal(r.status, 200, r.text);
+const pinned = r.json;
+r = await api('POST', `/api/workspaces/${ws.id}/link-sets/${pinned.id}/links`, { name: 'กลุ่มอีกกลุ่ม', url: 'https://www.facebook.com/groups/another', code: 'B2' });
+assert.equal(r.status, 200, r.text);
+r = await api('DELETE', `/api/workspaces/${ws.id}/devices/${device.id}`);
+assert.equal(r.status, 204, r.text);
+const code2 = (await api('POST', `/api/workspaces/${ws.id}/devices/pairing`)).json.code;
+r = await bg('cloudPair', { apiUrl: API, code: code2, name: 'คอมเครื่องใหม่' });
+assert.equal(r.ok, true, r.error);
+r = await api('POST', `/api/workspaces/${ws.id}/schedules`, {
+  collectionId: collection.id,
+  linkSetId: pinned.id,
+  mode: 'daily',
+  times: ['09:00'],
+  startNow: true,
+  utcOffsetMinutes: 420,
+  order: 'shuffle',
+});
+assert.equal(r.status, 200, r.text);
+assert.ok(r.json.created >= 1, 'queued for the new browser');
+
 console.log('\nผ่านทุกข้อ ✔');
 process.exit(0);

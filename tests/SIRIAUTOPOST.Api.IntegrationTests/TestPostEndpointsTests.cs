@@ -155,13 +155,14 @@ public class TestPostEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task A_text_that_is_too_long_once_composed_is_refused_with_the_part_to_shorten()
+    public async Task A_full_size_text_with_its_footer_still_fits_and_a_text_over_the_input_limit_is_a_400()
     {
         using var shop = await factory.ShopAsync(links: 1, posts: 1, footer: new string('ข', 100));
 
+        // A composed post may hold a full-size text plus the group code, the footer and the hashtags (Post.MaxComposedLength).
         var res = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 4950) });
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, res.StatusCode);
-        Assert.Contains("5000", await TitleAsync(res));
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.True((await res.ReadAsync<PostDto>()).Content.Length > 5000);
 
         var tooLong = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 5001) });
         Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);

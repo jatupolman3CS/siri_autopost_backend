@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# DEV: https://siriautopost-dev.siristudiophoto.com  |  database SIRIAUTOPOST  |  namespace siriautopost-dev
+# Applied by Jenkinsfile.dev (Jenkins job SIRIAUTOPOST-API-DEV). Fully separate from PRD: own namespace, own secrets, own database.
+namespace: siriautopost-dev
+
+# No Ingress: the public host goes Cloudflare tunnel -> NodePort 30908 (Service `ui`, siri_autopost_ui),
+# and the dashboard's nginx proxies /api to Service `api` below.
+resources:
+  - ../../base
+
+images:
+  # newTag is rewritten by the Jenkinsfile for every build; the value below is never deployed as-is.
+  - name: siriautopost-api
+    newName: localhost:5000/siriautopost-api
+    newTag: set-by-jenkins
+
+configMapGenerator:
+  - name: api-config
+    behavior: merge
+    literals:
+      # Staging, not Development: Development would expose /openapi anonymously on a public host.
+      - ASPNETCORE_ENVIRONMENT=Staging
+      - Cors__AllowedOrigins__0=https://siriautopost-dev.siristudiophoto.com
+      - Stripe__ReturnBaseUrl=https://siriautopost-dev.siristudiophoto.com

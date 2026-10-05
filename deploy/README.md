@@ -1,54 +1,75 @@
-# Deploy: https://siriautopost.siristudiophoto.com
+# Deploy: DEV and PRD, fully separated
 
 Same Jenkins and host as SIRISTUDIOPHOTO (https://jenkins.siristudiophoto.com/): docker + kubectl on the Jenkins
 host, images in the local registry `localhost:5000`, and the Cloudflare tunnel `siri-monitor` (cloudflared on the
 host, locally managed) in front, which routes each hostname to a k8s NodePort on `172.17.0.1`.
 
-| | |
-|---|---|
-| Namespace | `siriautopost` |
-| Jenkins jobs | `SIRIAUTOPOST-API` (this repo, `Jenkinsfile`), `SIRIAUTOPOST-WEB` (siri_autopost_ui, `Jenkinsfile`) |
-| Manifests | `deploy/k8s/overlays/prd` here (Deployment + Service `api`, shared config) and `deploy/k8s/overlays/prd` in siri_autopost_ui (Deployment + Service `ui`); each job applies its own with `kubectl apply -k` |
-| Branch | `main` (both repos are public; the jobs still check out with credential `gitlab-auth-id`, like the other systems) |
-| Images | `localhost:5000/siriautopost-api`, `localhost:5000/siriautopost-web` |
-| Database | the server named by `ConnectionStrings__Default` in the env-file credential. `deploy/k8s/postgres` is an optional Postgres 18 StatefulSet (database `SIRIAUTOPOST_PRD`, 10Gi volume) that no pipeline applies: `kubectl apply -k deploy/k8s/postgres` by hand, after creating its `postgres-env` secret (`POSTGRES_USER`, `POSTGRES_PASSWORD`) |
-| Routing | tunnel → `http://172.17.0.1:30907` (Service `ui`, NodePort) → nginx serves the dashboard and proxies `/api` to Service `api:8080` |
+| | PRD | DEV |
+|---|---|---|
+| URL | https://siriautopost.siristudiophoto.com | https://siriautopost-dev.siristudiophoto.com |
+| Namespace | `siriautopost` | `siriautopost-dev` |
+| Database | `SIRIAUTOPOST_PRD` | `SIRIAUTOPOST` |
+| NodePort (Service `ui`) | 30907 | 30908 |
+| Jenkins jobs | `SIRIAUTOPOST-API-PRD`, `SIRIAUTOPOST-WEB-PRD` | `SIRIAUTOPOST-API-DEV`, `SIRIAUTOPOST-WEB-DEV` |
+| Jenkinsfile (both repos) | `Jenkinsfile` | `Jenkinsfile.dev` |
+| Manifests | `deploy/k8s/overlays/prd` | `deploy/k8s/overlays/dev` |
+| Env-file credential | `siriautopost-env-file` (template `deploy/env/prd.env.example`) | `siriautopost-dev-env-file` (`deploy/env/dev.env.example`) |
+| Image tags | `prd-<build>`, `prd-latest` | `dev-<build>`, `dev-latest` |
+| In-cluster Postgres (optional) | `deploy/k8s/postgres/overlays/prd` | `deploy/k8s/postgres/overlays/dev` |
+
+Both environments use the same image names (`localhost:5000/siriautopost-api`, `siriautopost-web`); nothing else is shared:
+own namespace, own `api-env` secret (own `Jwt__Key`, DB credentials, Stripe keys), own database, own hostname, own NodePort.
+
+- Branch: all jobs build `main` (`GIT_BRANCH` in each Jenkinsfile; point the dev ones at `develop` once that branch exists).
+- Each job is a plain "Build Now" (no parameters), like the other systems on this Jenkins.
+- The old jobs `SIRIAUTOPOST-API` / `SIRIAUTOPOST-WEB` are replaced by the `-PRD` ones: rename or disable them.
+- Routing per environment: tunnel → `http://172.17.0.1:<NodePort>` (Service `ui`) → nginx serves the dashboard and proxies `/api` to Service `api:8080` **of the same namespace**.
 
 ## One-time setup
 
-0. **Namespace + Jenkins rights (cluster admin, on the k8s host).** Jenkins deploys as `ci:jenkins-deployer`,
-   which cannot create namespaces:
+0. **Namespaces + Jenkins rights (cluster admin, on the k8s host).** Jenkins deploys as `ci:jenkins-deployer`,
+   which cannot create namespaces. This creates both `siriautopost` and `siriautopost-dev`:
    ```
    curl -fsSL https://raw.githubusercontent.com/jatupolman3CS/siri_autopost_backend/main/deploy/admin-bootstrap.sh | sh
    ```
-1. **Tunnel route.** `siri-monitor` is locally managed, so its routes live in the cloudflared config file on the
-   host, not in the dashboard. Add, before the catch-all rule, then restart cloudflared:
-   ```yaml
-   - hostname: siriautopost.siristudiophoto.com
-     service: http://172.17.0.1:30907
-   ```
-2. **DNS (Cloudflare, zone siristudiophoto.com):** CNAME `siriautopost` →
-   `d7ef791e-9da8-416f-a040-d25f144e08eb.cfargotunnel.com`, proxied (or `cloudflared tunnel route dns siri-monitor siriautopost.siristudiophoto.com`).
-3. **Jenkins credential** `siriautopost-env-file` (Secret file): a `.env` file like the other jobs use. The job puts it into
+1. **DNS + tunnel routes (both hosts).** `siri-monitor` is locally managed, so its routes live in the cloudflared config file on the
+   host, not in the dashboard. `sh deploy/cloudflare-dns.sh [/etc/cloudflared/config.yml]` does both steps (idempotent), then restart cloudflared:
+   - DNS (Cloudflare, zone siristudiophoto.com): proxied CNAMEs `siriautopost` and `siriautopost-dev` →
+     `d7ef791e-9da8-416f-a040-d25f144e08eb.cfargotunnel.com` (`cloudflared tunnel route dns siri-monitor <host>`)
+   - ingress rules, before the catch-all:
+     ```yaml
+     - hostname: siriautopost.siristudiophoto.com
+       service: http://172.17.0.1:30907
+     - hostname: siriautopost-dev.siristudiophoto.com
+       service: http://172.17.0.1:30908
+     ```
+2. **Databases.** The DB user needs CREATEDB, or the databases must exist: `SIRIAUTOPOST_PRD` (PRD) and `SIRIAUTOPOST` (DEV), on the
+   server each env file names. Or use the in-cluster Postgres: create secret `postgres-env` (`POSTGRES_USER`, `POSTGRES_PASSWORD`)
+   in the namespace, then `kubectl apply -k deploy/k8s/postgres/overlays/<dev|prd>` (no pipeline applies it).
+3. **Jenkins credentials** `siriautopost-env-file` (PRD) and `siriautopost-dev-env-file` (DEV), both "Secret file": a `.env` file like the other jobs use
+   (templates in `deploy/env/`; never copy values from one to the other). The job puts it into
    the secret `api-env` **as it is** (BOM and CRLF stripped), and every key in it becomes an environment variable of the
    API pod, so use the API's own names (`Section__Key`):
 
    | Key | |
    |---|---|
-   | `ConnectionStrings__Default` | **required**, e.g. `Host=...;Database=SIRIAUTOPOST_PRD;Username=...;Password=...;Gss Encryption Mode=Disable` |
-   | `Jwt__Key` | **required**, 32+ characters (the API does not start without it) |
+   | `ConnectionStrings__Default` | **required**, e.g. `Host=...;Database=SIRIAUTOPOST_PRD;Username=...;Password=...;Gss Encryption Mode=Disable` (DEV: `Database=SIRIAUTOPOST`) |
+   | `Jwt__Key` | **required**, 32+ characters (the API does not start without it); different per environment |
    | `Admin__Email`, `Admin__Password` | creates the platform admin on first start. Optional for the pod, but without it nobody can reach the admin area (customers, refunds, plans) |
-   | `Stripe__SecretKey` | the Stripe secret key (`sk_live_...`). Without it online payment is off: the dashboard says so and paid plans cannot be bought |
+   | `Stripe__SecretKey` | the Stripe secret key (`sk_live_...`; DEV `sk_test_...`). Without it online payment is off: the dashboard says so and paid plans cannot be bought |
    | `Stripe__WebhookSecret` | the signing secret (`whsec_...`) of the webhook endpoint below. Without it Stripe's calls are rejected, so a paid plan would never be applied or renewed |
-   | `Google__ClientId` | optional, enables "Sign in with Google" (add the site origin as an Authorized JavaScript origin on that OAuth client) |
+   | `Google__ClientId` | optional, enables "Sign in with Google" (add each site origin as an Authorized JavaScript origin on that OAuth client) |
 
-   `Cors__AllowedOrigins__0` and `Stripe__ReturnBaseUrl` are pinned to the public address in `deploy/k8s/overlays/prd`
-   (the config map wins over the secret). `deploy/prepare-env.sh` (an older helper that filtered the file and derived
-   `Jwt__Key` from `AppSettings__Secret`) is not used by the pipelines.
-4. **Jenkins jobs** (Pipeline, "Pipeline script": paste `deploy/jenkins/SIRIAUTOPOST-API.groovy` and `SIRIAUTOPOST-WEB.groovy`, or use the `Jenkinsfile` of each repo; the API one is the same script as the `.groovy` file. The web repo's `Jenkinsfile` also checks that Service `api` exists and smoke-tests the NodePort):
-   - `SIRIAUTOPOST-API` → https://github.com/jatupolman3CS/siri_autopost_backend.git. Builds the image, writes the `api-env` secret, applies `deploy/k8s/overlays/prd` with the build's image tag and waits for the rollout.
-   - `SIRIAUTOPOST-WEB` → https://github.com/jatupolman3CS/siri_autopost_ui.git
-5. **Stripe** (dashboard.stripe.com, live mode):
+   `Cors__AllowedOrigins__0` and `Stripe__ReturnBaseUrl` are pinned to the environment's public address in `deploy/k8s/overlays/<env>`
+   (the config map wins over the secret), as is `ASPNETCORE_ENVIRONMENT` (PRD `Production`, DEV `Staging`: `Development` would expose `/openapi` anonymously).
+   `deploy/prepare-env.sh` (an older helper that filtered the file and derived `Jwt__Key` from `AppSettings__Secret`) is not used by the pipelines.
+4. **Jenkins jobs** (Pipeline, "Pipeline script": paste the matching file of `deploy/jenkins/`: `SIRIAUTOPOST-API-PRD.groovy`, `SIRIAUTOPOST-API-DEV.groovy`,
+   `SIRIAUTOPOST-WEB-PRD.groovy`, `SIRIAUTOPOST-WEB-DEV.groovy`; or "Pipeline script from SCM" with `Jenkinsfile` / `Jenkinsfile.dev`, which are the same scripts).
+   Each builds the image, (API) writes the `api-env` secret, applies its overlay with the build's image tag and waits for the rollout.
+   - `SIRIAUTOPOST-API-*` → https://github.com/jatupolman3CS/siri_autopost_backend.git
+   - `SIRIAUTOPOST-WEB-*` → https://github.com/jatupolman3CS/siri_autopost_ui.git
+5. **Stripe** (dashboard.stripe.com). DEV uses **test mode** only (`sk_test_...`, its own webhook endpoint
+   `https://siriautopost-dev.siristudiophoto.com/api/webhooks/stripe`, card `4242 4242 4242 4242`). PRD, live mode:
    - Developers → Webhooks → add the endpoint `https://siriautopost.siristudiophoto.com/api/webhooks/stripe` with the events
      `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`,
      `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `refund.created`, `refund.updated`;
@@ -61,17 +82,18 @@ host, locally managed) in front, which routes each hostname to a k8s NodePort on
    - Prices come from the plan settings in the admin area (baht, whole units; `Stripe__Currency` defaults to `thb`). The API
      creates one Stripe product per plan (`autopost_<plan>`) on first use and sends the price inline with each Checkout, so a
      changed price applies to new purchases and plan changes, not to subscriptions already running. Try everything with a test key
-     (`sk_test_...`, a test webhook endpoint, card `4242 4242 4242 4242`) before the live key goes in. Nothing in this
-     repository has been run against Stripe itself: the tests use a fake gateway and signed sample events.
-6. Build `SIRIAUTOPOST-API` first (it creates Service `api`, which the dashboard's nginx needs), then
-   `SIRIAUTOPOST-WEB`.
+     before the live key goes in. Nothing in this repository has been run against Stripe itself: the tests use a fake gateway and signed sample events.
+6. Per environment, build the API job first (it creates Service `api`, which the dashboard's nginx needs), then the WEB job.
 
 ## Check
 
 ```
-kubectl -n siriautopost get pods,svc
-curl -fsS http://172.17.0.1:30907/
+kubectl -n siriautopost get pods,svc            # PRD
+kubectl -n siriautopost-dev get pods,svc        # DEV
+curl -fsS http://172.17.0.1:30907/              # PRD NodePort
+curl -fsS http://172.17.0.1:30908/              # DEV NodePort
 curl -fsS https://siriautopost.siristudiophoto.com/
+curl -fsS https://siriautopost-dev.siristudiophoto.com/
 ```
 
 The API runs EF migrations on startup (`Database__MigrateOnStartup=true`) and creates the platform admin from

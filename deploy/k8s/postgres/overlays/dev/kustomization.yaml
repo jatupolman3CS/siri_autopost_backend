@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Optional in-cluster Postgres for DEV that no pipeline applies (the API uses the server named by ConnectionStrings__Default
+# in the env-file credential). To use it: create the secret postgres-env (POSTGRES_USER, POSTGRES_PASSWORD) in namespace
+# siriautopost-dev, run `kubectl apply -k deploy/k8s/postgres/overlays/dev`, and point ConnectionStrings__Default at Host=postgres;Database=SIRIAUTOPOST.
+namespace: siriautopost-dev
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: postgres-config
+    literals:
+      - POSTGRES_DB=SIRIAUTOPOST

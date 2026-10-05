@@ -4,15 +4,17 @@ pipeline {
     environment {
         REGISTRY_URL  = "localhost:5000"
         IMAGE_NAME    = "siriautopost-web"
-        IMAGE_TAG     = "${env.BUILD_NUMBER}"
+        // Tags carry the environment so DEV and PRD builds (separate Jenkins build counters) never overwrite each other.
+        IMAGE_TAG     = "prd-${env.BUILD_NUMBER}"
         GIT_URL       = "https://github.com/jatupolman3CS/siri_autopost_ui.git"
+        GIT_BRANCH    = "main"
         K8S_NAMESPACE = "siriautopost"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main',
+                git branch: "${GIT_BRANCH}",
                     credentialsId: 'gitlab-auth-id',
                     url: "${GIT_URL}"
             }
@@ -22,7 +24,7 @@ pipeline {
             steps {
                 script {
                     sh "docker build --no-cache -t ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} ."
-                    sh "docker tag ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY_URL}/${IMAGE_NAME}:latest"
+                    sh "docker tag ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY_URL}/${IMAGE_NAME}:prd-latest"
                 }
             }
         }
@@ -31,14 +33,20 @@ pipeline {
             steps {
                 script {
                     sh "docker push ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}"
-                    sh "docker push ${REGISTRY_URL}/${IMAGE_NAME}:latest"
+                    sh "docker push ${REGISTRY_URL}/${IMAGE_NAME}:prd-latest"
                 }
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                sh "kubectl -n ${K8S_NAMESPACE} set image deployment/ui ui=${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}"
+                // Deployment + Service `ui` (NodePort 30907) come from deploy/k8s/overlays/prd, so the first build creates them.
+                // The tag is pinned in the workspace copy only.
+                sh """
+                    set -eu
+                    sed -i "s/newTag: .*/newTag: ${IMAGE_TAG}/" deploy/k8s/overlays/prd/kustomization.yaml
+                    kubectl apply -k deploy/k8s/overlays/prd
+                """
                 sh "kubectl -n ${K8S_NAMESPACE} rollout status deployment/ui --timeout=180s"
             }
         }

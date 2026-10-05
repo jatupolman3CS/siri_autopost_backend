@@ -4,16 +4,19 @@ pipeline {
     environment {
         REGISTRY_URL    = "localhost:5000"
         IMAGE_NAME      = "siriautopost-api"
-        IMAGE_TAG       = "${env.BUILD_NUMBER}"
+        // Tags carry the environment so DEV and PRD builds (separate Jenkins build counters) never overwrite each other.
+        IMAGE_TAG       = "prd-${env.BUILD_NUMBER}"
         GIT_URL         = "https://github.com/jatupolman3CS/siri_autopost_backend.git"
+        GIT_BRANCH      = "main"
         DOCKERFILE_PATH = "src/SIRIAUTOPOST.Api/Dockerfile"
         K8S_NAMESPACE   = "siriautopost"
+        ENV_CREDENTIAL  = "siriautopost-env-file"
     }
 
     stages {
         stage('Checkout') {
             steps {
-                git branch: 'main',
+                git branch: "${GIT_BRANCH}",
                     credentialsId: 'gitlab-auth-id',
                     url: "${GIT_URL}"
                     sh "ls -lah"
@@ -25,7 +28,7 @@ pipeline {
                 script {
                     echo "Building using Dockerfile at: ${DOCKERFILE_PATH}"
                     sh "docker build --no-cache -t ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} -f ${DOCKERFILE_PATH} ."
-                    sh "docker tag ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY_URL}/${IMAGE_NAME}:latest"
+                    sh "docker tag ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG} ${REGISTRY_URL}/${IMAGE_NAME}:prd-latest"
                 }
             }
         }
@@ -34,14 +37,14 @@ pipeline {
             steps {
                 script {
                     sh "docker push ${REGISTRY_URL}/${IMAGE_NAME}:${IMAGE_TAG}"
-                    sh "docker push ${REGISTRY_URL}/${IMAGE_NAME}:latest"
+                    sh "docker push ${REGISTRY_URL}/${IMAGE_NAME}:prd-latest"
                 }
             }
         }
 
         stage('Deploy to Kubernetes') {
             steps {
-                withCredentials([file(credentialsId: 'siriautopost-env-file', variable: 'ENV_FILE')]) {
+                withCredentials([file(credentialsId: "${ENV_CREDENTIAL}", variable: 'ENV_FILE')]) {
                     // The env file may come from Windows (UTF-8 BOM, CRLF): strip both before it becomes the secret.
                     sh '''
                         set +x

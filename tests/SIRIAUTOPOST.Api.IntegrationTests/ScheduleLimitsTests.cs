@@ -100,7 +100,10 @@ public class ScheduleLimitsTests(ApiFactory factory)
     public async Task A_full_queue_stops_the_top_up_without_an_error_and_it_goes_on_ten_minutes_after_there_is_room()
     {
         using var shop = await factory.ShopAsync(links: 2);
-        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["18:00"], Offset: Bangkok));
+        // A slot twelve hours away: waiting three days and eleven minutes never moves "now" across it, whatever time the test runs
+        // (a fixed 18:00 failed in the quarter of an hour before 18:00 Bangkok time, when the eleven minutes crossed the slot).
+        var (slot, _) = EngineTestSupport.SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(12));
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: [slot], Offset: Bangkok));
         shop.Wait(TimeSpan.FromDays(3)); // three more days are due: 6 posts
         var before = (await shop.PostsAsync(created.Schedule.Id)).Count;
         await FillToAsync(shop, 10_000 - 3); // room for 3

@@ -191,6 +191,7 @@ public class EngineNotificationTests(ApiFactory factory)
         var (shop, notifier, host) = await StartAsync(links: 2);
         using var _ = shop;
         await using var __ = host;
+        await shop.SetAntiBanAsync(a => a with { Shuffle = false }); // the groups of a round go in the set's order, so the first post is the one that goes out
         await DueScheduleAsync(shop, 2);
         await shop.UpdateLinkAsync(1, enabled: false);
 

@@ -17,6 +17,8 @@ public class MediaFile : Entity
     /// <summary>Set when the file lives in object storage (Data is then empty) and is served from this address.</summary>
     public string? ExternalUrl { get; private set; }
     public int UsedCount { get; private set; }
+    /// <summary>Off = kept in the library but not offered for new posts.</summary>
+    public bool Active { get; private set; } = true;
     /// <summary>The library folder the file is in; null = not in a folder.</summary>
     public Guid? FolderId { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
@@ -43,7 +45,20 @@ public class MediaFile : Entity
         };
     }
 
+    public const int MaxNameLength = 200;
+
     public void MoveToFolder(Guid? folderId) => FolderId = folderId;
+
+    public void SetActive(bool active) => Active = active;
+
+    /// <summary>Changes the display name (the file's bytes and type stay).</summary>
+    public void Rename(string? name)
+    {
+        var n = (name ?? "").Trim();
+        if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อไฟล์");
+        if (n.Length > MaxNameLength) throw new DomainException($"ชื่อไฟล์ยาวเกิน {MaxNameLength} ตัวอักษร");
+        Name = n;
+    }
 
     /// <summary>Points the file at a new address (the storage's public address changed).</summary>
     public void MoveTo(string url) => ExternalUrl = url;

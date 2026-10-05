@@ -15,6 +15,11 @@ public sealed class LibraryController : ControllerBase
     public sealed record CreateSnippetRequest(string Title, string Text);
     public sealed record FolderRequest(string Name);
     public sealed record MoveMediaRequest(IReadOnlyList<Guid> MediaIds, Guid? FolderId);
+    public sealed record UpdateSnippetRequest(string Title, string Text);
+    public sealed record ActiveRequest(bool Active);
+    public sealed record MediaNameRequest(string Name);
+    public sealed record MediaIdsRequest(IReadOnlyList<Guid> MediaIds);
+    public sealed record MediaActiveRequest(IReadOnlyList<Guid> MediaIds, bool Active);
 
     [HttpGet("media")]
     public Task<IReadOnlyList<MediaDto>> Media(
@@ -81,4 +86,42 @@ public sealed class LibraryController : ControllerBase
     public Task<SnippetDto> CreateSnippet(
         Guid wsId, CreateSnippetRequest r, [FromServices] ICommandHandler<CreateSnippetCommand, SnippetDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new CreateSnippetCommand(wsId, r.Title, r.Text), ct);
+
+    [HttpPut("snippets/{snippetId:guid}")]
+    public Task<SnippetDto> UpdateSnippet(
+        Guid wsId, Guid snippetId, UpdateSnippetRequest r, [FromServices] ICommandHandler<UpdateSnippetCommand, SnippetDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new UpdateSnippetCommand(wsId, snippetId, r.Title, r.Text), ct);
+
+    [HttpPut("snippets/{snippetId:guid}/active")]
+    public Task<SnippetDto> SetSnippetActive(
+        Guid wsId, Guid snippetId, ActiveRequest r, [FromServices] ICommandHandler<SetSnippetActiveCommand, SnippetDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new SetSnippetActiveCommand(wsId, snippetId, r.Active), ct);
+
+    [HttpDelete("snippets/{snippetId:guid}")]
+    public async Task<IActionResult> DeleteSnippet(
+        Guid wsId, Guid snippetId, [FromServices] ICommandHandler<DeleteSnippetCommand, Unit> handler, CancellationToken ct)
+    {
+        await handler.HandleAsync(new DeleteSnippetCommand(wsId, snippetId), ct);
+        return NoContent();
+    }
+
+    [HttpPut("media/{mediaId:guid}")]
+    public Task<MediaDto> RenameMedia(
+        Guid wsId, Guid mediaId, MediaNameRequest r, [FromServices] ICommandHandler<RenameMediaCommand, MediaDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new RenameMediaCommand(wsId, mediaId, r.Name), ct);
+
+    /// <summary>Switches files on or off (off = kept, but not offered for new posts).</summary>
+    [HttpPost("media/active")]
+    public Task<IReadOnlyList<MediaDto>> SetMediaActive(
+        Guid wsId, MediaActiveRequest r, [FromServices] ICommandHandler<SetMediaActiveCommand, IReadOnlyList<MediaDto>> handler, CancellationToken ct) =>
+        handler.HandleAsync(new SetMediaActiveCommand(wsId, r.MediaIds, r.Active), ct);
+
+    /// <summary>Deletes files from the library (at most 500 at a time).</summary>
+    [HttpPost("media/delete")]
+    public async Task<IActionResult> DeleteMedia(
+        Guid wsId, MediaIdsRequest r, [FromServices] ICommandHandler<DeleteMediaCommand, int> handler, CancellationToken ct)
+    {
+        await handler.HandleAsync(new DeleteMediaCommand(wsId, r.MediaIds), ct);
+        return NoContent();
+    }
 }

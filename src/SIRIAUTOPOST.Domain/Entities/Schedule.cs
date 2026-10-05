@@ -247,6 +247,14 @@ public class Schedule : Entity
     public static string SlotKey(DateOnly localDay, string hhmm) => $"{localDay:yyyy-MM-dd}T{hhmm}";
 
     /// <summary>Resumes or pauses. Resuming forgets what was generated, so the next run fills the horizon again.</summary>
+    public void Rename(string? name)
+    {
+        var n = (name ?? "").Trim();
+        if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อตาราง");
+        if (n.Length > MaxNameLength) throw new DomainException($"ชื่อตารางยาวเกิน {MaxNameLength} ตัวอักษร");
+        Name = n;
+    }
+
     public void SetActive(bool active)
     {
         if (active == Active) return;

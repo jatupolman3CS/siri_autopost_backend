@@ -1,4 +1,5 @@
 using SIRIAUTOPOST.Domain.Entities;
+using SIRIAUTOPOST.Domain.Exceptions;
 using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Application.Common;
@@ -42,9 +43,41 @@ public sealed class ScheduleSync(IScheduleRepository schedules, IPostRepository 
         }
     }
 
+    /// <summary>
+    /// A collection or link set was switched off (the future posts its schedules still have queued go, because nothing may
+    /// be posted from it) or on again (the schedules look at their horizon again and fill in what is missing).
+    /// </summary>
+    public async Task SourceToggledAsync(IReadOnlyList<Schedule> affected, bool active, DateTimeOffset now, CancellationToken ct)
+    {
+        foreach (var s in affected)
+        {
+            if (!active) posts.RemoveRange(await posts.ListFutureQueuedByScheduleAsync(s.Id, now, ct));
+            if (s.Active) s.InvalidateGenerated();
+        }
+    }
+
     private async Task InvalidateAsync(Guid workspaceId, Guid linkSetId, CancellationToken ct)
     {
         foreach (var s in await schedules.ListByLinkSetAsync(workspaceId, linkSetId, ct))
             if (s.Active) s.InvalidateGenerated();
+    }
+}
+
+/// <summary>Lets the schedules of a collection or link set that was switched on again fill their horizon at once.</summary>
+internal static class SourceTopUp
+{
+    public static async Task RunAsync(ScheduleTopUp topUp, Guid workspaceId, IEnumerable<Schedule> schedules, CancellationToken ct)
+    {
+        foreach (var s in schedules.Where(s => s.Active))
+        {
+            try
+            {
+                await topUp.GenerateAsync(workspaceId, s.Id, ct);
+            }
+            catch (DomainException)
+            {
+                // A refusal (queue full, text too long) must not undo the switch: the next claim's top-up tries again.
+            }
+        }
     }
 }

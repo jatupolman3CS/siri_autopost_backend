@@ -37,10 +37,10 @@ public sealed record CollectionPostDto(
 /// <param name="Posts">Oldest first (the newest is last).</param>
 /// <param name="ScheduleCount">Schedules that use the collection.</param>
 public sealed record CollectionDto(
-    Guid Id, string Name, string Description, string Icon, CollectionSettingsDto Settings, IReadOnlyList<CollectionPostDto> Posts, int ScheduleCount)
+    Guid Id, string Name, string Description, string Icon, CollectionSettingsDto Settings, IReadOnlyList<CollectionPostDto> Posts, int ScheduleCount, bool Active)
 {
     public static CollectionDto From(PostCollection c, IReadOnlyList<CollectionPostDto> posts, int scheduleCount) =>
-        new(c.Id, c.Name, c.Description, c.Icon, CollectionSettingsDto.From(c.Settings), posts, scheduleCount);
+        new(c.Id, c.Name, c.Description, c.Icon, CollectionSettingsDto.From(c.Settings), posts, scheduleCount, c.Active);
 }
 
 /// <summary>What the approval buttons do: the author asks, an admin approves or sends it back.</summary>
@@ -69,13 +69,13 @@ public sealed record SetLinkDto(
 /// <param name="AccountIds">Other accounts that post the same content to their default target.</param>
 /// <param name="Links">In their order.</param>
 public sealed record LinkSetDto(
-    Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount)
+    Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount, bool Active)
 {
     public static LinkSetDto From(LinkSet set, IReadOnlyList<SetLink> links, int scheduleCount)
     {
         var seen = new HashSet<string>(FacebookGroupUrl.Comparer); // /groups/ABC and /groups/abc are one group
         var dtos = links.Select(l => SetLinkDto.From(l, l.IsValid && !seen.Add(l.Url))).ToList();
-        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount);
+        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount, set.Active);
     }
 }
 

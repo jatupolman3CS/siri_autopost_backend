@@ -195,7 +195,7 @@ public sealed record PostOutcome(
     PostStatus Status, DateTimeOffset ScheduledAt, DateTimeOffset? PublishedAt);
 
 /// <summary>A library entry without its bytes.</summary>
-public sealed record MediaSummary(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt, Guid? FolderId);
+public sealed record MediaSummary(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt, Guid? FolderId, bool Active = true);
 
 public interface IMediaRepository
 {
@@ -209,6 +209,8 @@ public interface IMediaRepository
     Task<IReadOnlyList<MediaFile>> GetManyForUpdateAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     /// <summary>Takes every file out of a folder (the folder is being deleted).</summary>
     Task ClearFolderAsync(Guid workspaceId, Guid folderId, CancellationToken ct = default);
+    /// <summary>Deletes the files (ids from another workspace are ignored); returns how many went.</summary>
+    Task<int> RemoveManyAsync(Guid workspaceId, IReadOnlyCollection<Guid> ids, CancellationToken ct = default);
 }
 
 public interface IMediaFolderRepository
@@ -255,7 +257,10 @@ public interface IDevicePairingRepository
 public interface ISnippetRepository
 {
     Task<IReadOnlyList<Snippet>> ListAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Tracked, to edit or delete.</summary>
+    Task<Snippet?> GetForUpdateAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     void Add(Snippet snippet);
+    void Remove(Snippet snippet);
 }
 
 /// <summary>The extension's settings, media, run state, log and web commands of paired devices.</summary>
@@ -316,6 +321,8 @@ public interface ICollectionPostRepository
     Task<IReadOnlyList<CollectionPost>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default);
     Task<CollectionPost?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     Task<IReadOnlyList<CollectionPost>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    /// <summary>Every post of the workspace, tracked (library files are being taken out of them).</summary>
+    Task<IReadOnlyList<CollectionPost>> ListForUpdateAsync(Guid workspaceId, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
     void Add(CollectionPost post);
     void AddRange(IEnumerable<CollectionPost> posts);

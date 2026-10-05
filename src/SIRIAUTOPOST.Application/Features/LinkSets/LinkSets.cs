@@ -111,6 +111,33 @@ public sealed class UpdateLinkSetCommandHandler(
     }
 }
 
+/// <summary>
+/// Switches a link set on or off. Off: the schedules that use it queue nothing to it and the posts they still had queued
+/// for the future are removed. On: those schedules fill in what is missing.
+/// </summary>
+public sealed record SetLinkSetActiveCommand(Guid WorkspaceId, Guid LinkSetId, bool Active) : ICommand<LinkSetDto>;
+
+public sealed class SetLinkSetActiveCommandHandler(
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IScheduleRepository schedules,
+    ScheduleSync sync, ScheduleTopUp topUp, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SetLinkSetActiveCommand, LinkSetDto>
+{
+    public async Task<LinkSetDto> HandleAsync(SetLinkSetActiveCommand c, CancellationToken ct = default)
+    {
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
+        if (set.Active != c.Active)
+        {
+            var used = await schedules.ListByLinkSetAsync(c.WorkspaceId, c.LinkSetId, ct);
+            set.SetActive(c.Active);
+            await sync.SourceToggledAsync(used, c.Active, clock.GetUtcNow(), ct);
+            await uow.SaveChangesAsync(ct);
+            if (c.Active) await SourceTopUp.RunAsync(topUp, c.WorkspaceId, used, ct);
+        }
+        return await LinkSetLookups.ViewAsync(set, links, schedules, ct);
+    }
+}
+
 /// <summary>Deletes a link set and its links. Refused while a schedule uses it.</summary>
 public sealed record DeleteLinkSetCommand(Guid WorkspaceId, Guid LinkSetId) : ICommand<Unit>;
 

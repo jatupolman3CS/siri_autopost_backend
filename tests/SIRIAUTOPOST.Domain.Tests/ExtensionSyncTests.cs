@@ -73,6 +73,20 @@ public class ExtensionSyncTests
         Assert.Throws<DomainException>(() => DeviceCommand.Create(Guid.NewGuid(), Guid.NewGuid(), "rm", "{}", Now));
     }
 
+    [Theory]
+    [InlineData("start", true)]
+    [InlineData("runNow", true)]
+    [InlineData("testPost", true)]
+    [InlineData("takeJobs", true)] // the schedules' "take the due posts now" makes the extension post
+    [InlineData("stop", false)]
+    [InlineData("syncNow", false)]
+    [InlineData("clearLogs", false)]
+    public void The_buttons_that_make_the_extension_post_are_refused_for_blocked_owners(string cmd, bool posts)
+    {
+        Assert.Contains(cmd, DeviceCommand.Allowed);
+        Assert.Equal(posts, DeviceCommand.StartsPosting(cmd));
+    }
+
     [Fact]
     public void Log_lines_are_cut_to_size()
     {

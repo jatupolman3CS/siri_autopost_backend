@@ -13,6 +13,7 @@ public sealed class LinkSetsController : ControllerBase
 {
     public sealed record CreateLinkSetRequest(string Name, Guid? PostAsAccountId);
 
+    public sealed record SetActiveRequest(bool Active);
     public sealed record UpdateLinkSetRequest(string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds);
 
     /// <summary>A blank or invalid address is allowed: the row is created invalid so the web app can add an empty row.</summary>
@@ -42,6 +43,11 @@ public sealed class LinkSetsController : ControllerBase
         handler.HandleAsync(new UpdateLinkSetCommand(wsId, id, r.Name, r.PostAsAccountId, r.AccountIds), ct);
 
     /// <summary>Deletes the set and its links; 422 while a schedule uses it.</summary>
+    [HttpPut("link-sets/{id:guid}/active")]
+    public Task<LinkSetDto> SetSetActive(
+        Guid wsId, Guid id, SetActiveRequest r, [FromServices] ICommandHandler<SetLinkSetActiveCommand, LinkSetDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new SetLinkSetActiveCommand(wsId, id, r.Active), ct);
+
     [HttpDelete("link-sets/{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Delete(

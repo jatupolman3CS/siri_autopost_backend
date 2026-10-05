@@ -115,6 +115,8 @@ jobs:
           cat "$RUNNER_TEMP/api.log"; exit 1
       - name: Pair, sync groups, claim and post (faked Chrome and Facebook)
         run: node client/tools/test-cloud.mjs http://localhost:5100
+      - name: A web schedule alone hands work to an extension with no campaign setup
+        run: node client/tools/test-schedule-flow.mjs http://localhost:5100
       - name: API log
         if: failure()
         run: cat "$RUNNER_TEMP/api.log"

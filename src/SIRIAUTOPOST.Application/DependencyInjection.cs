@@ -81,6 +81,12 @@ public static class DependencyInjection
         services.AddCommand<MoveMediaCommand, IReadOnlyList<MediaDto>, MoveMediaCommandHandler>();
         services.AddQuery<GetSnippetsQuery, IReadOnlyList<SnippetDto>, GetSnippetsQueryHandler>();
         services.AddCommand<CreateSnippetCommand, SnippetDto, CreateSnippetCommandHandler>();
+        services.AddCommand<UpdateSnippetCommand, SnippetDto, UpdateSnippetCommandHandler>();
+        services.AddCommand<SetSnippetActiveCommand, SnippetDto, SetSnippetActiveCommandHandler>();
+        services.AddCommand<DeleteSnippetCommand, Unit, DeleteSnippetCommandHandler>();
+        services.AddCommand<RenameMediaCommand, MediaDto, RenameMediaCommandHandler>();
+        services.AddCommand<SetMediaActiveCommand, IReadOnlyList<MediaDto>, SetMediaActiveCommandHandler>();
+        services.AddCommand<DeleteMediaCommand, int, DeleteMediaCommandHandler>();
 
         // Notifications (Telegram / LINE), auto-reply rules and reports
         services.AddQuery<GetNotificationsQuery, NotificationSettingsDto, GetNotificationsQueryHandler>();
@@ -100,6 +106,7 @@ public static class DependencyInjection
         services.AddQuery<GetCollectionsQuery, IReadOnlyList<CollectionDto>, GetCollectionsQueryHandler>();
         services.AddCommand<CreateCollectionCommand, CollectionDto, CreateCollectionCommandHandler>();
         services.AddCommand<UpdateCollectionCommand, CollectionDto, UpdateCollectionCommandHandler>();
+        services.AddCommand<SetCollectionActiveCommand, CollectionDto, SetCollectionActiveCommandHandler>();
         services.AddCommand<DeleteCollectionCommand, Unit, DeleteCollectionCommandHandler>();
         services.AddCommand<AddCollectionPostCommand, CollectionPostDto, AddCollectionPostCommandHandler>();
         services.AddCommand<AddCollectionPostsBatchCommand, IReadOnlyList<CollectionPostDto>, AddCollectionPostsBatchCommandHandler>();
@@ -111,6 +118,7 @@ public static class DependencyInjection
         services.AddQuery<GetLinkSetsQuery, IReadOnlyList<LinkSetDto>, GetLinkSetsQueryHandler>();
         services.AddCommand<CreateLinkSetCommand, LinkSetDto, CreateLinkSetCommandHandler>();
         services.AddCommand<UpdateLinkSetCommand, LinkSetDto, UpdateLinkSetCommandHandler>();
+        services.AddCommand<SetLinkSetActiveCommand, LinkSetDto, SetLinkSetActiveCommandHandler>();
         services.AddCommand<DeleteLinkSetCommand, Unit, DeleteLinkSetCommandHandler>();
         services.AddCommand<AddLinkCommand, SetLinkDto, AddLinkCommandHandler>();
         services.AddCommand<UpdateLinkCommand, SetLinkDto, UpdateLinkCommandHandler>();
@@ -130,6 +138,7 @@ public static class DependencyInjection
         services.AddQuery<GetSchedulesQuery, IReadOnlyList<ScheduleDto>, GetSchedulesQueryHandler>();
         services.AddCommand<CreateScheduleCommand, ScheduleCreatedDto, CreateScheduleCommandHandler>();
         services.AddCommand<SetScheduleActiveCommand, ScheduleDto, SetScheduleActiveCommandHandler>();
+        services.AddCommand<RenameScheduleCommand, ScheduleDto, RenameScheduleCommandHandler>();
         services.AddCommand<DeleteScheduleCommand, Unit, DeleteScheduleCommandHandler>();
         services.AddQuery<GetBestTimesQuery, IReadOnlyList<string>, GetBestTimesQueryHandler>();
         services.AddCommand<CreateTestPostCommand, PostDto, CreateTestPostCommandHandler>();

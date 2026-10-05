@@ -110,6 +110,33 @@ public sealed class UpdateCollectionCommandHandler(
     }
 }
 
+/// <summary>
+/// Switches a collection on or off. Off: the schedules that use it queue nothing from it and the posts they still had queued
+/// for the future are removed. On: those schedules fill in what is missing.
+/// </summary>
+public sealed record SetCollectionActiveCommand(Guid WorkspaceId, Guid CollectionId, bool Active) : ICommand<CollectionDto>;
+
+public sealed class SetCollectionActiveCommandHandler(
+    IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IPostRepository postRepo,
+    IScheduleRepository schedules, ScheduleSync sync, ScheduleTopUp topUp, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SetCollectionActiveCommand, CollectionDto>
+{
+    public async Task<CollectionDto> HandleAsync(SetCollectionActiveCommand c, CancellationToken ct = default)
+    {
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var collection = await CollectionLookups.RequireAsync(collections, c.WorkspaceId, c.CollectionId, ct);
+        if (collection.Active != c.Active)
+        {
+            var used = await schedules.ListByCollectionAsync(c.WorkspaceId, c.CollectionId, ct);
+            collection.SetActive(c.Active);
+            await sync.SourceToggledAsync(used, c.Active, clock.GetUtcNow(), ct);
+            await uow.SaveChangesAsync(ct);
+            if (c.Active) await SourceTopUp.RunAsync(topUp, c.WorkspaceId, used, ct);
+        }
+        return await CollectionLookups.ViewAsync(collection, posts, postRepo, schedules, ct);
+    }
+}
+
 /// <summary>Deletes a collection and its posts. Refused while a schedule uses it.</summary>
 public sealed record DeleteCollectionCommand(Guid WorkspaceId, Guid CollectionId) : ICommand<Unit>;
 

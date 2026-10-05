@@ -331,7 +331,7 @@ public sealed class MediaRepository(AppDbContext db) : IMediaRepository
         await db.Media.AsNoTracking()
             .Where(x => x.WorkspaceId == workspaceId)
             .OrderByDescending(x => x.CreatedAt)
-            .Select(x => new MediaSummary(x.Id, x.Name, x.ContentType, x.Kind, x.Size, x.UsedCount, x.CreatedAt, x.FolderId))
+            .Select(x => new MediaSummary(x.Id, x.Name, x.ContentType, x.Kind, x.Size, x.UsedCount, x.CreatedAt, x.FolderId, x.Active))
             .ToListAsync(ct);
 
     public Task<MediaFile?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
@@ -361,6 +361,12 @@ public sealed class MediaRepository(AppDbContext db) : IMediaRepository
     public Task ClearFolderAsync(Guid workspaceId, Guid folderId, CancellationToken ct = default) =>
         db.Media.Where(x => x.WorkspaceId == workspaceId && x.FolderId == folderId)
             .ExecuteUpdateAsync(s => s.SetProperty(x => x.FolderId, (Guid?)null), ct);
+
+    public Task<int> RemoveManyAsync(Guid workspaceId, IReadOnlyCollection<Guid> ids, CancellationToken ct = default)
+    {
+        var list = ids.Distinct().ToList();
+        return db.Media.Where(x => x.WorkspaceId == workspaceId && list.Contains(x.Id)).ExecuteDeleteAsync(ct);
+    }
 }
 
 public sealed class MediaFolderRepository(AppDbContext db) : IMediaFolderRepository
@@ -384,7 +390,12 @@ public sealed class SnippetRepository(AppDbContext db) : ISnippetRepository
     public async Task<IReadOnlyList<Snippet>> ListAsync(Guid workspaceId, CancellationToken ct = default) =>
         await db.Snippets.AsNoTracking().Where(x => x.WorkspaceId == workspaceId).OrderByDescending(x => x.CreatedAt).ToListAsync(ct);
 
+    public Task<Snippet?> GetForUpdateAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.Snippets.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
     public void Add(Snippet snippet) => db.Snippets.Add(snippet);
+
+    public void Remove(Snippet snippet) => db.Snippets.Remove(snippet);
 }
 
 public sealed class DeviceRepository(AppDbContext db) : IDeviceRepository
@@ -655,6 +666,9 @@ public sealed class CollectionPostRepository(AppDbContext db) : ICollectionPostR
         var list = ids.Distinct().ToList();
         return await db.CollectionPosts.Where(x => x.WorkspaceId == workspaceId && list.Contains(x.Id)).ToListAsync(ct);
     }
+
+    public async Task<IReadOnlyList<CollectionPost>> ListForUpdateAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.CollectionPosts.Where(x => x.WorkspaceId == workspaceId).ToListAsync(ct);
 
     public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
         db.CollectionPosts.CountAsync(x => x.WorkspaceId == workspaceId, ct);

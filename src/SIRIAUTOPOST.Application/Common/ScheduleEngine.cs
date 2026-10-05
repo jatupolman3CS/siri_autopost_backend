@@ -72,7 +72,7 @@ public sealed class ScheduleMaterializer(
         if (toLocal < fromLocal) return MaterializeResult.None;
         var collection = await collections.GetAsync(ws.Id, s.CollectionId, ct);
         var set = await linkSets.GetAsync(ws.Id, s.LinkSetId, ct);
-        if (collection is null || set is null) return MaterializeResult.None;
+        if (collection is null || set is null || !collection.Active || !set.Active) return MaterializeResult.None;
 
         var usable = (await collectionPosts.ListByCollectionAsync(ws.Id, collection.Id, ct)).Where(p => p.IsUsable(collection)).ToList();
         if (usable.Count == 0) return MaterializeResult.None;

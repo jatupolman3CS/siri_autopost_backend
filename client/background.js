@@ -1573,6 +1573,13 @@ const remoteCommands = {
     return { ok: true };
   },
   syncNow: async () => ({ ok: true }),
+  // The web app's schedules: take the due post now instead of at the next 30-second round. Not awaited: a post
+  // lasts minutes and the command is answered at once (the round runs in the post queue, after any post going on).
+  takeJobs: async () => {
+    if (!(await getCloud()).enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+    enqueue(() => cloudTick()).catch(() => {});
+    return { ok: true };
+  },
 };
 
 // Runs commands sent from a web page; report(id, result) sends each result back.

@@ -13,6 +13,7 @@ namespace SIRIAUTOPOST.Api.Controllers;
 public sealed class SchedulesController : ControllerBase
 {
     public sealed record SetActiveRequest(bool Active);
+    public sealed record RenameRequest(string Name);
 
     /// <param name="LinkId">The group to post to; with neither it and AccountId, the set's first usable link.</param>
     /// <param name="AccountId">Another account instead of a link (it posts to its default target).</param>
@@ -44,6 +45,11 @@ public sealed class SchedulesController : ControllerBase
         handler.HandleAsync(new SetScheduleActiveCommand(wsId, id, r.Active), ct);
 
     /// <summary>Deletes the schedule and the posts it still has queued in the future.</summary>
+    [HttpPut("schedules/{id:guid}/name")]
+    public Task<ScheduleDto> Rename(
+        Guid wsId, Guid id, RenameRequest r, [FromServices] ICommandHandler<RenameScheduleCommand, ScheduleDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new RenameScheduleCommand(wsId, id, r.Name), ct);
+
     [HttpDelete("schedules/{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Delete(

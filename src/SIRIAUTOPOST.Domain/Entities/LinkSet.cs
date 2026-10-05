@@ -26,6 +26,8 @@ public class LinkSet : Entity
     /// <summary>Other accounts of the workspace that post the same content, each to its default target (no group code).</summary>
     public List<Guid> AccountIds { get; private set; } = [];
     public int SortOrder { get; private set; }
+    /// <summary>Off = schedules that use the set queue nothing to it until it is switched on again.</summary>
+    public bool Active { get; private set; } = true;
     public DateTimeOffset CreatedAt { get; private set; }
 
     private LinkSet() { } // EF Core
@@ -36,6 +38,8 @@ public class LinkSet : Entity
         set.Name = CleanName(name);
         return set;
     }
+
+    public void SetActive(bool active) => Active = active;
 
     public void Update(string name, Guid? postAsAccountId, IEnumerable<Guid>? accountIds)
     {

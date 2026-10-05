@@ -110,12 +110,20 @@ internal sealed class SchedulingWorld
         Ws.UpdateAntiBan(settings, advancedAllowed: true);
     }
 
+    /// <summary>The anti-ban "shuffle the order of target groups" switch (on by default: a slot's groups are taken in a random order).</summary>
+    public void SetGroupShuffle(bool on)
+    {
+        var settings = AntiBanDto.From(Ws.AntiBan).ToSettings();
+        settings.Shuffle = on;
+        Ws.UpdateAntiBan(settings, advancedAllowed: true);
+    }
+
     public Schedule NewSchedule(
         ScheduleMode mode = ScheduleMode.Daily, string[]? times = null, PostOrder order = PostOrder.Rotate, DateOnly? start = null,
         string onceTime = "14:00", int everyHours = 6, string firstTime = "09:00", string dripFrom = "09:00", string dripTo = "21:00", int dripCount = 3,
-        Dictionary<string, IReadOnlyList<string>>? overrides = null, int offsetMinutes = 420) =>
+        Dictionary<string, IReadOnlyList<string>>? overrides = null, int offsetMinutes = 420, bool startNow = false) =>
         Schedule.Create(Ws.Id, "ตาราง", Collection.Id, Set.Id, mode, times ?? ["18:00"], everyHours, firstTime, start ?? Today, onceTime, order,
-            dripFrom, dripTo, dripCount, 0, 0, overrides, offsetMinutes, Now);
+            dripFrom, dripTo, dripCount, 0, 0, overrides, offsetMinutes, Now, startNow);
 
     public ScheduleMaterializer Materializer(IRandomSource? random = null) =>
         new(PostRepo, Collections, CollectionPosts, LinkSets, SetLinks, AccountRepo, random ?? new FixedRandom(0.5));

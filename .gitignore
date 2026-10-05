@@ -19,3 +19,6 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Fixed ad images: kept on Cloudflare R2 (image-fixes/ prefix), only local inputs for tools/siri-to-config.mjs
+client/config/image-fixes/

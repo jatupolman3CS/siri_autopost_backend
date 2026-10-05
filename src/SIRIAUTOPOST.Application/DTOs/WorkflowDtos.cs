@@ -98,15 +98,19 @@ public sealed record ScheduleDto(
     Guid Id, string Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, IReadOnlyList<string> Slots,
-    int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt);
+    int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false);
 
 /// <param name="StartDate">"yyyy-MM-dd" in the schedule's local calendar; empty = today.</param>
 /// <param name="Overrides">Own times per link (its id, 32 hex digits) or "account:&lt;id&gt;"; empty list = follow the schedule.</param>
 /// <param name="UtcOffsetMinutes">The browser's UTC offset.</param>
+/// <param name="StartNow">
+/// True = start when the schedule is created: the groups go out one after the other from this moment (the start date and,
+/// for Once, the time are ignored), then the regular times go on. False (default) = wait for the times.
+/// </param>
 public sealed record SaveScheduleRequest(
     string? Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string>? Times, int EveryHours, string? FirstTime,
     string? StartDate, string? OnceTime, PostOrder Order, string? DripFrom, string? DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false);
 
 public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateTimeOffset? FirstAt, DateTimeOffset? LastAt);
 

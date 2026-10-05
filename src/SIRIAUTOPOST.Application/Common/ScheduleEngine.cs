@@ -120,7 +120,64 @@ public sealed class ScheduleMaterializer(
 
         var cursor = s.Cursor;
         var created = new List<Post>();
-        for (var day = fromLocal; day <= toLocal; day = day.AddDays(1))
+
+        // One round of a slot: its collection post (one for all in Rotate, one per target otherwise), the composed text, the post.
+        void Queue(string slotKey, List<(ScheduleTarget Target, DateTimeOffset At)> fresh)
+        {
+            if (created.Count + fresh.Count > Schedule.MaxPostsPerRun)
+                throw new DomainException(
+                    $"ตารางนี้จะสร้างโพสต์เกิน {Schedule.MaxPostsPerRun:N0} โพสต์ในครั้งเดียว ลดจำนวนกลุ่มหรือจำนวนเวลาโพสต์ แล้วลองใหม่");
+
+            CollectionPost? shared = null;
+            if (s.Order == PostOrder.Rotate)
+            {
+                shared = usable[cursor % usable.Count];
+                cursor++;
+            }
+            foreach (var (t, when) in fresh)
+            {
+                var cp = shared ?? Draw(t.TargetKey);
+                var code = t.Link?.Code;
+                var text = PostComposer.ComposeFull(cp.Text, code, collection.Settings, random.NextDouble);
+                var target = t.Link is { } l ? l.Name : t.Account!.DefaultTarget;
+                created.Add(Post.FromSchedule(
+                    ws.Id, t.Account!, target, text, cp.MediaIds, when, now, s.Id, cp.Id, t.Link?.Id, t.TargetKey, slotKey, t.Link?.Url, code));
+            }
+        }
+
+        // The groups of a round follow each other like a person moving from group to group: in a random order (when
+        // the anti-ban "shuffle the order of target groups" is on), the first at the start of the round and each next one
+        // after the smart delay (a random time between Min and Max minutes). Whole seconds: the database keeps
+        // microseconds and a time should read back as it was made.
+        List<ScheduleTarget> Ordered(List<ScheduleTarget> members) => anti.Shuffle ? ShuffledTargets(members) : members;
+
+        List<(ScheduleTarget Target, DateTimeOffset At)> Stagger(
+            IReadOnlyList<ScheduleTarget> members, DateTimeOffset first, string slotKey, bool firstIsNow)
+        {
+            var at = first;
+            var fresh = new List<(ScheduleTarget Target, DateTimeOffset At)>();
+            for (var i = 0; i < members.Count; i++)
+            {
+                if (i > 0) at = at.AddSeconds(Math.Round((anti.Min + random.NextDouble() * (anti.Max - anti.Min)) * 60));
+                // A start-now round begins a few seconds after the click, not on the very second.
+                else if (firstIsNow) at = at.AddSeconds(Math.Round(2 + random.NextDouble() * 18));
+                if (at > now && !existing.Contains((members[i].TargetKey, slotKey))) fresh.Add((members[i], at));
+            }
+            return fresh;
+        }
+
+        // "Start now": every target once, beginning at this moment, before the regular times.
+        if (s.NowPending)
+        {
+            var slotKey = Schedule.SlotKey(s.LocalDay(now), Schedule.NowSlot);
+            var fresh = Stagger(Ordered(targets), now, slotKey, firstIsNow: true);
+            if (fresh.Count > 0) Queue(slotKey, fresh);
+            s.ClearNowPending();
+        }
+
+        // A Once schedule that starts now has no time of its own: the round above is all of it.
+        var regular = !(s.Mode == ScheduleMode.Once && s.StartNow);
+        for (var day = fromLocal; regular && day <= toLocal; day = day.AddDays(1))
         {
             if (!s.Matches(day)) continue;
             var buckets = new SortedDictionary<string, List<ScheduleTarget>>(StringComparer.Ordinal);
@@ -133,36 +190,9 @@ public sealed class ScheduleMaterializer(
 
             foreach (var (slot, members) in buckets)
             {
-                var at = s.ToUtc(day, slot);
                 var slotKey = Schedule.SlotKey(day, slot);
-                var fresh = new List<(ScheduleTarget Target, DateTimeOffset At)>();
-                for (var i = 0; i < members.Count; i++)
-                {
-                    // The ones of a slot follow each other: the first at the slot, the rest after the smart delay.
-                    // (whole seconds: the database keeps microseconds and a time should read back as it was made)
-                    if (i > 0) at = at.AddSeconds(Math.Round((anti.Min + random.NextDouble() * (anti.Max - anti.Min)) * 60));
-                    if (at > now && !existing.Contains((members[i].TargetKey, slotKey))) fresh.Add((members[i], at));
-                }
-                if (fresh.Count == 0) continue;
-                if (created.Count + fresh.Count > Schedule.MaxPostsPerRun)
-                    throw new DomainException(
-                        $"ตารางนี้จะสร้างโพสต์เกิน {Schedule.MaxPostsPerRun:N0} โพสต์ในครั้งเดียว ลดจำนวนกลุ่มหรือจำนวนเวลาโพสต์ แล้วลองใหม่");
-
-                CollectionPost? shared = null;
-                if (s.Order == PostOrder.Rotate)
-                {
-                    shared = usable[cursor % usable.Count];
-                    cursor++;
-                }
-                foreach (var (t, when) in fresh)
-                {
-                    var cp = shared ?? Draw(t.TargetKey);
-                    var code = t.Link?.Code;
-                    var text = PostComposer.ComposeFull(cp.Text, code, collection.Settings, random.NextDouble);
-                    var target = t.Link is { } l ? l.Name : t.Account!.DefaultTarget;
-                    created.Add(Post.FromSchedule(
-                        ws.Id, t.Account!, target, text, cp.MediaIds, when, now, s.Id, cp.Id, t.Link?.Id, t.TargetKey, slotKey, t.Link?.Url, code));
-                }
+                var fresh = Stagger(Ordered(members), s.ToUtc(day, slot), slotKey, firstIsNow: false);
+                if (fresh.Count > 0) Queue(slotKey, fresh);
             }
         }
 
@@ -179,6 +209,17 @@ public sealed class ScheduleMaterializer(
             ? new MaterializeResult(0, null, null, [], usable.Count, Advanced: true)
             : new MaterializeResult(created.Count, created.Min(p => p.ScheduledAt), created.Max(p => p.ScheduledAt),
                 created.SelectMany(p => p.MediaIds).Distinct().ToList(), usable.Count, Advanced: true);
+    }
+
+    private List<ScheduleTarget> ShuffledTargets(List<ScheduleTarget> source)
+    {
+        var list = source.ToList();
+        for (var i = list.Count - 1; i > 0; i--)
+        {
+            var j = Math.Min(i, (int)(random.NextDouble() * (i + 1)));
+            (list[i], list[j]) = (list[j], list[i]);
+        }
+        return list;
     }
 
     // Fisher-Yates with the injected randomness (deterministic in tests).

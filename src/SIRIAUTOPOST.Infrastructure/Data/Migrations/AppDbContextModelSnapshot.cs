@@ -790,8 +790,8 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
                     b.Property<string>("Content")
                         .IsRequired()
-                        .HasMaxLength(5000)
-                        .HasColumnType("character varying(5000)")
+                        .HasMaxLength(7000)
+                        .HasColumnType("character varying(7000)")
                         .HasColumnName("content");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -1167,6 +1167,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(120)")
                         .HasColumnName("name");
 
+                    b.Property<bool>("NowPending")
+                        .HasColumnType("boolean")
+                        .HasColumnName("now_pending");
+
                     b.Property<string>("OnceTime")
                         .IsRequired()
                         .HasMaxLength(5)
@@ -1187,6 +1191,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Property<DateOnly>("StartDate")
                         .HasColumnType("date")
                         .HasColumnName("start_date");
+
+                    b.Property<bool>("StartNow")
+                        .HasColumnType("boolean")
+                        .HasColumnName("start_now");
 
                     b.PrimitiveCollection<List<string>>("Times")
                         .IsRequired()

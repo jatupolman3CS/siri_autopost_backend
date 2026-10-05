@@ -57,7 +57,7 @@ public class ScheduledPostTests
     public void A_scheduled_post_checks_its_text_and_workspace()
     {
         Assert.Throws<DomainException>(() => Post.FromSchedule(Ws, Page, "g", " ", [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null, "k", "s", null, null));
-        Assert.Throws<DomainException>(() => Post.FromSchedule(Ws, Page, "g", new string('x', 5001), [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null, "k", "s", null, null));
+        Assert.Throws<DomainException>(() => Post.FromSchedule(Ws, Page, "g", new string('x', 7001), [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null, "k", "s", null, null));
         Assert.Throws<DomainException>(() => Post.FromSchedule(Guid.NewGuid(), Page, "g", "x", [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null, "k", "s", null, null));
         Assert.Throws<DomainException>(() => Post.FromSchedule(Ws, Page, "g", "x", [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null, "k", "s", new string('x', 301), null));
         Assert.Throws<DomainException>(() => Post.FromSchedule(Ws, Page, "g", "x", [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null, "k", "s", null, new string('x', 101)));

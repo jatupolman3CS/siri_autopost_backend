@@ -140,13 +140,13 @@ public class PostComposerTests
     [Fact]
     public void A_text_that_gets_too_long_is_refused_and_says_what_to_shorten()
     {
-        var long1 = new string('ก', 4990);
+        var long1 = new string('ก', 6990);
         var ex = Assert.Throws<DomainException>(() => PostComposer.ComposeFull(long1, "", Settings("ส่วนท้ายยาวมาก"), Always(0.0)));
-        Assert.Contains("5000", ex.Message);
+        Assert.Contains("7000", ex.Message);
         Assert.Contains("ข้อความโพสต์", ex.Message);
 
         var tags = new string('#', 400);
-        var ex2 = Assert.Throws<DomainException>(() => PostComposer.ComposeFull(new string('ก', 4700), "", Settings(hashtags: tags), Always(0.0)));
+        var ex2 = Assert.Throws<DomainException>(() => PostComposer.ComposeFull(new string('ก', 6700), "", Settings(hashtags: tags), Always(0.0)));
         Assert.Contains("ข้อความโพสต์", ex2.Message); // the post itself is the longest part
 
         // Footer and hashtags together can push a short post over the limit as well.
@@ -155,9 +155,31 @@ public class PostComposerTests
     }
 
     [Fact]
+    public void A_spin_pick_that_is_too_long_is_spun_again()
+    {
+        var text = "{" + new string('ก', 7010) + "|สั้น}";
+        // First pick: the long option (0.0); second pick: the short one (0.9).
+        Assert.Equal("สั้น", PostComposer.ComposeFull(text, "", Settings(), Sequence(0.0, 0.9)));
+
+        // Every option is too long: still refused, with the shortest pick's numbers.
+        var allLong = "{" + new string('ก', 7010) + "|" + new string('ข', 7020) + "}";
+        var ex = Assert.Throws<DomainException>(() => PostComposer.ComposeFull(allLong, "", Settings(), Sequence(0.0, 0.9)));
+        Assert.Contains("7010", ex.Message);
+    }
+
+    [Fact]
+    public void A_full_size_post_with_a_code_footer_and_hashtags_fits()
+    {
+        // The case that failed in production: a 5000-character post plus the group code went over 5000.
+        var tags = new string('#', 500);
+        var text = PostComposer.ComposeFull(new string('ก', 5000), "GROUPCODE123456", Settings(new string('ท', 1000), tags), Always(0.0));
+        Assert.True(text.Length > 5000 && text.Length <= Post.MaxComposedLength);
+    }
+
+    [Fact]
     public void A_text_exactly_at_the_limit_is_fine()
     {
-        var text = PostComposer.ComposeFull(new string('ก', Post.MaxContentLength), "", Settings(), Always(0.0));
-        Assert.Equal(Post.MaxContentLength, text.Length);
+        var text = PostComposer.ComposeFull(new string('ก', Post.MaxComposedLength), "", Settings(), Always(0.0));
+        Assert.Equal(Post.MaxComposedLength, text.Length);
     }
 }

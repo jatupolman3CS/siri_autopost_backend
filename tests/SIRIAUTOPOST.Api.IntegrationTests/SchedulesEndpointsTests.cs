@@ -162,6 +162,28 @@ public class SchedulesEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task Start_now_queues_a_round_that_goes_out_one_group_at_a_time_and_only_once()
+    {
+        using var shop = await factory.ShopAsync(links: 3);
+
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Mode: "once", StartNow: true, OnceTime: "03:00", Offset: Bangkok));
+
+        Assert.True(created.Schedule.StartNow);
+        Assert.Equal(LocalDay(shop.Now), created.Schedule.StartDate); // today, not the date or time that was sent
+        Assert.Equal(3, created.Created);
+        var posts = (await shop.PostsAsync(created.Schedule.Id)).OrderBy(p => p.ScheduledAt).ToList();
+        Assert.Equal(3, posts.Count);
+        Assert.InRange((posts[0].ScheduledAt - shop.Now).TotalSeconds, 1, 25); // the first group starts a moment after the click
+        Assert.All(posts.Zip(posts.Skip(1)), pair => Assert.True(pair.Second.ScheduledAt - pair.First.ScheduledAt >= TimeSpan.FromMinutes(1)));
+        Assert.Equal(3, posts.Select(p => p.LinkId).Distinct().Count());
+
+        // Pausing and resuming does not start another opening round.
+        Assert.True((await shop.SetActiveAsync(created.Schedule.Id, false)).IsSuccessStatusCode);
+        Assert.True((await shop.SetActiveAsync(created.Schedule.Id, true)).IsSuccessStatusCode);
+        Assert.DoesNotContain((await shop.PostsAsync(created.Schedule.Id)), p => p.ScheduledAt < shop.Now.AddSeconds(1));
+    }
+
+    [Fact]
     public async Task A_time_that_is_over_makes_nothing_but_the_schedule_is_made()
     {
         using var shop = await factory.ShopAsync();

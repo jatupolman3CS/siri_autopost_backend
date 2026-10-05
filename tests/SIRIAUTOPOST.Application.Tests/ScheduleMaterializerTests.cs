@@ -39,6 +39,7 @@ public class ScheduleMaterializerTests
     {
         var w = new SchedulingWorld(links: 3);
         w.SetDelay(5, 9);
+        w.SetGroupShuffle(false); // the order of the set, so the times can be read in it
         var s = w.NewSchedule(times: ["18:00"]);
 
         await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new FixedRandom(0.5)); // 5 + 0.5 x 4 = 7 minutes apart
@@ -54,6 +55,7 @@ public class ScheduleMaterializerTests
     public async Task A_slot_that_has_started_keeps_the_targets_that_are_still_to_come()
     {
         var w = new SchedulingWorld(links: 3); // 09:00, 09:07:30, 09:15
+        w.SetGroupShuffle(false);
         var s = w.NewSchedule(times: ["09:00"]);
 
         var result = await w.RunAsync(s, Today, Today, now: Bkk(3, 9, 10));
@@ -61,6 +63,95 @@ public class ScheduleMaterializerTests
         Assert.Equal(1, result.Created);
         Assert.Equal(w.Links[2].Id, w.Added.Single().LinkId);
         Assert.Equal(Bkk(3, 9, 15), w.Added.Single().ScheduledAt);
+    }
+
+    [Fact]
+    public async Task The_groups_of_a_slot_go_out_one_by_one_in_a_random_order_with_the_smart_delay_between_them()
+    {
+        var w = new SchedulingWorld(links: 8);
+        w.SetDelay(5, 9);
+        var s = w.NewSchedule(times: ["18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(11));
+
+        var times = w.Added.Select(p => p.ScheduledAt).ToList();
+        Assert.Equal(8, times.Count);
+        Assert.Equal(Bkk(4, 18), times[0]); // the first group opens the slot
+        for (var i = 1; i < times.Count; i++)
+        {
+            var gap = (times[i] - times[i - 1]).TotalMinutes;
+            Assert.InRange(gap, 5, 9); // never together, never a robot's fixed beat
+        }
+        Assert.Equal(8, times.Distinct().Count());
+        Assert.Equal(w.Links.Select(l => l.Id).Order(), w.Added.Select(p => p.LinkId!.Value).Order()); // every group once
+        Assert.NotEqual(w.Links.Select(l => l.Id), w.Added.Select(p => p.LinkId!.Value)); // not in the order of the set
+    }
+
+    [Fact]
+    public async Task Start_now_queues_a_round_that_begins_a_few_seconds_from_now_and_then_the_regular_times_go_on()
+    {
+        var w = new SchedulingWorld(links: 3);
+        w.SetDelay(5, 9);
+        var s = w.NewSchedule(times: ["09:00", "18:00"], startNow: true);
+        Assert.True(s.StartNow);
+        Assert.True(s.NowPending);
+
+        var result = await w.RunAsync(s, Today, Today);
+
+        var now = w.Added.Where(p => p.SlotKey == Schedule.SlotKey(Today, Schedule.NowSlot)).OrderBy(p => p.ScheduledAt).ToList();
+        Assert.Equal(3, now.Count);
+        Assert.InRange((now[0].ScheduledAt - Now).TotalSeconds, 2, 20);
+        for (var i = 1; i < now.Count; i++) Assert.InRange((now[i].ScheduledAt - now[i - 1].ScheduledAt).TotalMinutes, 5, 9);
+        Assert.Equal(w.Links.Select(l => l.Id).Order(), now.Select(p => p.LinkId!.Value).Order());
+        Assert.Equal(3 + 3, result.Created); // the round now, and tonight's 18:00 (09:00 is over)
+        Assert.All(w.Added, p => Assert.True(p.ScheduledAt > Now));
+        Assert.False(s.NowPending);
+        Assert.True(s.StartNow); // the choice stays on record
+    }
+
+    [Fact]
+    public async Task The_start_now_round_is_made_only_once_even_when_the_schedule_is_run_again()
+    {
+        var w = new SchedulingWorld(links: 2);
+        var s = w.NewSchedule(times: ["18:00"], startNow: true);
+        await w.RunAsync(s, Today, Today);
+        var first = w.Added.Count(p => p.SlotKey?.EndsWith("now") == true);
+        Assert.Equal(2, first);
+
+        // Paused and resumed a day later: the regular times come back, the opening round does not.
+        s.SetActive(false);
+        s.SetActive(true);
+        w.Added.Clear();
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), now: Now.AddDays(1));
+
+        Assert.DoesNotContain(w.Added, p => p.SlotKey?.EndsWith("now") == true);
+        Assert.Equal(2, w.Added.Count);
+    }
+
+    [Fact]
+    public async Task A_once_schedule_that_starts_now_ignores_its_time_and_makes_only_the_round_now()
+    {
+        var w = new SchedulingWorld(links: 3);
+        var s = w.NewSchedule(mode: ScheduleMode.Once, onceTime: "23:00", startNow: true, start: Today.AddDays(30));
+
+        var result = await w.RunAsync(s, s.StartDate, s.StartDate);
+
+        Assert.Equal(Today, s.StartDate); // today, whatever date was sent
+        Assert.Equal(3, result.Created);
+        Assert.All(w.Added, p => Assert.Equal(Schedule.SlotKey(Today, Schedule.NowSlot), p.SlotKey));
+        Assert.All(w.Added, p => Assert.True(p.ScheduledAt < Bkk(3, 23)));
+    }
+
+    [Fact]
+    public async Task Start_now_waits_while_nothing_can_be_posted()
+    {
+        var w = new SchedulingWorld(links: 0); // no group to post to
+        var s = w.NewSchedule(times: ["18:00"], startNow: true);
+
+        await w.RunAsync(s, Today, Today);
+
+        Assert.True(s.NowPending); // the round is still owed when a group arrives
+        Assert.Empty(w.Added);
     }
 
     [Fact]
@@ -526,14 +617,14 @@ public class ScheduleMaterializerTests
     [Fact]
     public async Task A_post_too_long_once_composed_stops_the_run_with_a_message_saying_what_to_shorten()
     {
-        var w = new SchedulingWorld(links: 1, posts: 0);
-        w.AddPost(new string('ก', 4990));
-        w.Collection.Update(w.Collection.Name, null, null, new CollectionSettings { Footer = new string('ข', 30) });
+        var w = new SchedulingWorld(links: 0, posts: 0);
+        w.AddLink("group0", new string('C', 100));
+        w.AddPost(new string('ก', 4800) + string.Concat(Enumerable.Repeat("{{code}}", 25)));
         var s = w.NewSchedule();
 
         var ex = await Assert.ThrowsAsync<DomainException>(() => w.RunAsync(s, Today, Last));
 
-        Assert.Contains("5000", ex.Message);
+        Assert.Contains("7000", ex.Message);
         Assert.Empty(w.Added);
     }
 

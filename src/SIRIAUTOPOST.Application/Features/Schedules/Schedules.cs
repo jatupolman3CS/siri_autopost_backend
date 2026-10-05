@@ -56,7 +56,7 @@ public sealed class ScheduleViews(
             s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount,
             s.BumpHours, s.AutoDeleteDays,
             s.Overrides.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value),
-            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt);
+            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow);
 }
 
 public sealed record GetSchedulesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ScheduleDto>>;
@@ -98,7 +98,7 @@ public sealed class CreateScheduleCommandHandler(
         var now = clock.GetUtcNow();
         if (r.UtcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
         var today = Schedule.LocalDayOf(now, r.UtcOffsetMinutes);
-        var start = string.IsNullOrWhiteSpace(r.StartDate)
+        var start = r.StartNow || string.IsNullOrWhiteSpace(r.StartDate)
             ? today
             : DateOnly.TryParseExact(r.StartDate.Trim(), "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var d)
                 ? d
@@ -132,7 +132,7 @@ public sealed class CreateScheduleCommandHandler(
         }
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
-            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now);
+            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow);
         var made = MaterializeResult.None;
         // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
         await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>

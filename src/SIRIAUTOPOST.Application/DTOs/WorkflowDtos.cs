@@ -1,6 +1,7 @@
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Domain.Services;
 using SIRIAUTOPOST.Domain.ValueObjects;
 
@@ -25,13 +26,54 @@ public sealed record CollectionSettingsDto(
     };
 }
 
-/// <param name="PostedCount">Successful posts (not tests) made from it.</param>
-public sealed record CollectionPostDto(
-    Guid Id, Guid CollectionId, string Text, IReadOnlyList<Guid> MediaIds, PostApproval Approval, int PostedCount, DateTimeOffset CreatedAt,
-    DateTimeOffset UpdatedAt)
+/// <summary>
+/// A master post's own settings. Null hashtags, footer and position follow the collection; dates are "yyyy-MM-dd" in the
+/// schedule's calendar, weekdays 0 = Sunday to 6 = Saturday (empty = every day), the window "HH:mm", MaxPerDay 0 = no limit.
+/// </summary>
+public sealed record CollectionPostSettingsDto(
+    string? Hashtags, string? Footer, FooterPosition? FooterPos, string? ValidFrom, string? ValidUntil, IReadOnlyList<int>? Weekdays,
+    string? TimeFrom, string? TimeTo, int MaxPerDay)
 {
-    public static CollectionPostDto From(CollectionPost p, int postedCount) =>
-        new(p.Id, p.CollectionId, p.Text, p.MediaIds, p.Approval, postedCount, p.CreatedAt, p.UpdatedAt);
+    public static CollectionPostSettingsDto From(CollectionPostSettings s) =>
+        new(s.Hashtags, s.Footer, s.FooterPos, Date(s.ValidFrom), Date(s.ValidUntil), s.Weekdays, s.TimeFrom, s.TimeTo, s.MaxPerDay);
+
+    public CollectionPostSettings ToSettings() => new()
+    {
+        Hashtags = Hashtags, Footer = Footer, FooterPos = FooterPos, ValidFrom = ParseDate(ValidFrom), ValidUntil = ParseDate(ValidUntil),
+        Weekdays = [.. Weekdays ?? []], TimeFrom = TimeFrom, TimeTo = TimeTo, MaxPerDay = MaxPerDay,
+    };
+
+    private static string? Date(DateOnly? d) => d?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static DateOnly? ParseDate(string? text) =>
+        string.IsNullOrWhiteSpace(text) ? null
+        : DateOnly.TryParseExact(text.Trim(), "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var d)
+            ? d
+            : throw new DomainException("วันที่ของโพสต์ไม่ถูกต้อง ใช้รูปแบบ ปปปป-ดด-วว");
+}
+
+/// <summary>
+/// A master post. The numbers count what schedules made from it (tests excluded): <paramref name="PostedCount"/> went out,
+/// <paramref name="QueuedCount"/> wait or are being posted, <paramref name="FailedCount"/> failed and were not dismissed.
+/// </summary>
+/// <param name="CollectionIds">The collections the post sits in (oldest membership first).</param>
+public sealed record CollectionPostDto(
+    Guid Id, string Text, IReadOnlyList<Guid> MediaIds, PostApproval Approval, bool Active, CollectionPostSettingsDto Settings,
+    IReadOnlyList<Guid> CollectionIds, int PostedCount, int QueuedCount, int FailedCount, DateTimeOffset? LastPostedAt, DateTimeOffset? NextAt,
+    DateTimeOffset CreatedAt, DateTimeOffset UpdatedAt)
+{
+    public static CollectionPostDto From(CollectionPost p, IReadOnlyList<Guid> collectionIds, CollectionPostUsage? usage) =>
+        new(p.Id, p.Text, p.MediaIds, p.Approval, p.Active, CollectionPostSettingsDto.From(p.Settings), collectionIds,
+            usage?.Posted ?? 0, usage?.Queued ?? 0, usage?.Failed ?? 0, usage?.LastPublishedAt, usage?.NextAt, p.CreatedAt, p.UpdatedAt);
+}
+
+/// <summary>One post a master post made: where it went, when and how it ended.</summary>
+public sealed record CollectionPostActivityDto(
+    Guid Id, string Target, string? TargetUrl, PostStatus Status, DateTimeOffset ScheduledAt, DateTimeOffset? PublishedAt, string? FailureDetail,
+    Guid? ScheduleId)
+{
+    public static CollectionPostActivityDto From(Post p) =>
+        new(p.Id, p.Target, p.TargetUrl, p.Status, p.ScheduledAt, p.PublishedAt, p.FailureDetail, p.ScheduleId);
 }
 
 /// <param name="Posts">Oldest first (the newest is last).</param>
@@ -98,7 +140,8 @@ public sealed record ScheduleDto(
     Guid Id, string Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, IReadOnlyList<string> Slots,
-    int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false);
+    int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false,
+    PostRepeat Repeat = PostRepeat.Recent);
 
 /// <param name="StartDate">"yyyy-MM-dd" in the schedule's local calendar; empty = today.</param>
 /// <param name="Overrides">Own times per link (its id, 32 hex digits) or "account:&lt;id&gt;"; empty list = follow the schedule.</param>
@@ -107,10 +150,15 @@ public sealed record ScheduleDto(
 /// True = start when the schedule is created: the groups go out one after the other from this moment (the start date and,
 /// for Once, the time are ignored), then the regular times go on. False (default) = wait for the times.
 /// </param>
+/// <param name="Repeat">
+/// With shuffle, whether a group may get a post again: recent (default) = not its last few, any = yes, even within a day,
+/// never = not until it has had every post. Ignored by rotate.
+/// </param>
 public sealed record SaveScheduleRequest(
     string? Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string>? Times, int EveryHours, string? FirstTime,
     string? StartDate, string? OnceTime, PostOrder Order, string? DripFrom, string? DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
-    IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false);
+    IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false,
+    PostRepeat Repeat = PostRepeat.Recent);
 
 public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateTimeOffset? FirstAt, DateTimeOffset? LastAt);
 

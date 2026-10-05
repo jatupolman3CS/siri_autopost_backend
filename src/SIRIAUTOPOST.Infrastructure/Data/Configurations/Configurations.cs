@@ -380,9 +380,22 @@ public sealed class CollectionPostConfiguration : IEntityTypeConfiguration<Colle
     {
         b.ToTable("COLLECTION_POSTS");
         b.Property(x => x.Text).HasMaxLength(CollectionPost.MaxTextLength).IsRequired();
-        b.HasIndex(x => new { x.CollectionId, x.CreatedAt });
+        b.Property(x => x.Settings).HasColumnType("jsonb").HasJsonConversion(() => new CollectionPostSettings());
+        b.HasIndex(x => new { x.WorkspaceId, x.CreatedAt });
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class CollectionMemberConfiguration : IEntityTypeConfiguration<CollectionMember>
+{
+    public void Configure(EntityTypeBuilder<CollectionMember> b)
+    {
+        b.ToTable("COLLECTION_MEMBERS");
+        b.HasKey(x => new { x.CollectionId, x.PostId });
+        b.HasIndex(x => x.PostId);
         b.HasIndex(x => x.WorkspaceId);
         b.HasOne<PostCollection>().WithMany().HasForeignKey(x => x.CollectionId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<CollectionPost>().WithMany().HasForeignKey(x => x.PostId).OnDelete(DeleteBehavior.Cascade);
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
     }
 }

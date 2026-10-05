@@ -46,6 +46,8 @@ internal sealed class SchedulingWorld
     public List<(string TargetKey, string SlotKey)> ExistingKeys { get; } = [];
     /// <summary>What <c>ListRecentCollectionPostIdsByLinkAsync</c> says the links had lately (newest first).</summary>
     public Dictionary<Guid, IReadOnlyList<Guid>> History { get; } = new();
+    /// <summary>What <c>ListAllCollectionPostIdsByLinkAsync</c> says the links ever had (the order means nothing).</summary>
+    public Dictionary<Guid, IReadOnlyList<Guid>> AllHistory { get; } = new();
     /// <summary>The posts the materializer added.</summary>
     public List<Post> Added { get; } = [];
 
@@ -68,6 +70,8 @@ internal sealed class SchedulingWorld
             .Returns(_ => ExistingKeys.ToList());
         PostRepo.ListRecentCollectionPostIdsByLinkAsync(Arg.Any<IEnumerable<Guid>>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(_ => History);
+        PostRepo.ListAllCollectionPostIdsByLinkAsync(Arg.Any<IEnumerable<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => AllHistory);
         PostRepo.When(r => r.Add(Arg.Any<Post>())).Do(call => Added.Add(call.Arg<Post>()));
     }
 
@@ -121,9 +125,10 @@ internal sealed class SchedulingWorld
     public Schedule NewSchedule(
         ScheduleMode mode = ScheduleMode.Daily, string[]? times = null, PostOrder order = PostOrder.Rotate, DateOnly? start = null,
         string onceTime = "14:00", int everyHours = 6, string firstTime = "09:00", string dripFrom = "09:00", string dripTo = "21:00", int dripCount = 3,
-        Dictionary<string, IReadOnlyList<string>>? overrides = null, int offsetMinutes = 420, bool startNow = false) =>
+        Dictionary<string, IReadOnlyList<string>>? overrides = null, int offsetMinutes = 420, bool startNow = false,
+        PostRepeat repeat = PostRepeat.Recent) =>
         Schedule.Create(Ws.Id, "ตาราง", Collection.Id, Set.Id, mode, times ?? ["18:00"], everyHours, firstTime, start ?? Today, onceTime, order,
-            dripFrom, dripTo, dripCount, 0, 0, overrides, offsetMinutes, Now, startNow);
+            dripFrom, dripTo, dripCount, 0, 0, overrides, offsetMinutes, Now, startNow, repeat);
 
     public ScheduleMaterializer Materializer(IRandomSource? random = null) =>
         new(PostRepo, Collections, CollectionPosts, LinkSets, SetLinks, AccountRepo, random ?? new FixedRandom(0.5));

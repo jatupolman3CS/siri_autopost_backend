@@ -96,9 +96,11 @@ r = await api('POST', `/api/workspaces/${ws.id}/schedules`, {
   startNow: true,
   utcOffsetMinutes: 420,
   order: 'shuffle',
+  repeat: 'never',
 });
 assert.equal(r.status, 200, r.text);
 assert.ok(r.json.created >= 1, 'queued for the new browser');
+assert.equal(r.json.schedule.repeat, 'never', 'the post-repeat choice is kept');
 
 console.log('\nผ่านทุกข้อ ✔');
 process.exit(0);

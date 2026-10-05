@@ -34,25 +34,18 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task New_workspaces_start_with_sample_history_and_error_reports()
+    public async Task New_workspaces_start_with_no_posts_and_no_error_reports()
     {
         var (client, _, ws) = await factory.SignUpAsync();
 
+        // The calendar and the error list only show what schedules and the extension made: nothing is made up.
+        var posts = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!;
+        Assert.Empty(posts);
         var errors = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/errors", Json))!;
-        Assert.Equal(5, errors.Count);
-        Assert.Single(errors, e => e.Status == PostStatus.Pending && e.FailureCode == FailureCode.PendingApproval);
-
-        // Retrying puts the failed post back in the queue; dismissing closes the report.
-        var failed = errors.First(e => e.FailureCode == FailureCode.Network);
-        var retried = await client.PostAsync($"/api/workspaces/{ws}/posts/{failed.Id}/retry", null);
-        Assert.Equal(PostStatus.Queued, (await retried.Content.ReadFromJsonAsync<PostDto>(Json))!.Status);
-        var pending = errors.First(e => e.Status == PostStatus.Pending);
-        (await client.PostAsync($"/api/workspaces/{ws}/posts/{pending.Id}/dismiss", null)).EnsureSuccessStatusCode();
-        errors = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/errors", Json))!;
-        Assert.Equal(3, errors.Count);
+        Assert.Empty(errors);
 
         var list = (await client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!;
-        Assert.True(list.Single().Posts7 > 0);
+        Assert.Equal(0, list.Single().Posts7);
     }
 
     [Fact]
@@ -74,7 +67,6 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
         res.EnsureSuccessStatusCode();
         Assert.Equal(3, (await res.Content.ReadFromJsonAsync<ScheduleResultDto>(Json))!.Created);
 
-        // The demo workspace has sample posts of its own; look at ours only.
         async Task<List<PostDto>> Ours() =>
             (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?{Range()}", Json))!
                 .Where(p => p.Content == "โปรวันนี้").ToList();

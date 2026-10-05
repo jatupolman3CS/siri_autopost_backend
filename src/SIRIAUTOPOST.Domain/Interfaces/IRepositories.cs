@@ -166,6 +166,21 @@ public interface IPostRepository
     /// </summary>
     Task<Dictionary<Guid, IReadOnlyList<Guid>>> ListRecentCollectionPostIdsByLinkAsync(IEnumerable<Guid> linkIds, int take, CancellationToken ct = default);
 
+    /// <summary>Every collection post each link has ever been given (queued, waiting, posting, published or awaiting approval), each once; the order means nothing.</summary>
+    Task<Dictionary<Guid, IReadOnlyList<Guid>>> ListAllCollectionPostIdsByLinkAsync(IEnumerable<Guid> linkIds, CancellationToken ct = default);
+
+    // ---- master posts: what a collection post made ----
+
+    /// <summary>Queued posts that schedules made from these collection posts and that are still in the future (tracked: the caller removes them).</summary>
+    Task<IReadOnlyList<Post>> ListFutureQueuedByCollectionPostAsync(IEnumerable<Guid> collectionPostIds, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>When schedules queued or sent these collection posts in [from, to): every status but failed and skipped, tests excluded.</summary>
+    Task<IReadOnlyList<(Guid CollectionPostId, DateTimeOffset ScheduledAt)>> ListScheduledAtByCollectionPostAsync(
+        IEnumerable<Guid> collectionPostIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
+    /// <summary>How each collection post of the workspace is doing (posts that made nothing are left out; tests excluded).</summary>
+    Task<Dictionary<Guid, CollectionPostUsage>> UsageByCollectionPostAsync(Guid workspaceId, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>The newest posts made from one collection post, newest first.</summary>
+    Task<IReadOnlyList<Post>> ListRecentByCollectionPostAsync(Guid workspaceId, Guid collectionPostId, int take, CancellationToken ct = default);
+
     // ---- limits and health of the engine (connected accounts only, tests excluded from the failure rate) ----
 
     /// <summary>Posts published in a workspace since a time, all platforms.</summary>
@@ -188,6 +203,9 @@ public interface IPostRepository
     /// <summary>Posts published since a time per hour of the day (0-23) in a local calendar: the best-times suggestion.</summary>
     Task<IReadOnlyDictionary<int, int>> CountPublishedByHourAsync(Guid workspaceId, DateTimeOffset since, int utcOffsetMinutes, CancellationToken ct = default);
 }
+
+/// <summary>What a collection post made so far: the numbers shown on its management card.</summary>
+public sealed record CollectionPostUsage(int Queued, int Posted, int Failed, DateTimeOffset? LastPublishedAt, DateTimeOffset? NextAt);
 
 /// <summary>A finished post without its text: what the reports count.</summary>
 public sealed record PostOutcome(
@@ -308,7 +326,7 @@ public interface ICollectionRepository
     /// <summary>The highest SortOrder in the workspace; -1 when there is no collection.</summary>
     Task<int> MaxSortOrderAsync(Guid workspaceId, CancellationToken ct = default);
     void Add(PostCollection collection);
-    /// <summary>The collection's posts go with it (the database cascades).</summary>
+    /// <summary>The collection's memberships go with it (the database cascades); its posts stay in the library.</summary>
     void Remove(PostCollection collection);
     void RemoveRange(IEnumerable<PostCollection> collections);
 }
@@ -317,8 +335,17 @@ public interface ICollectionPostRepository
 {
     /// <summary>Every post of the workspace, oldest first.</summary>
     Task<IReadOnlyList<CollectionPost>> ListAsync(Guid workspaceId, CancellationToken ct = default);
-    /// <summary>Posts of one collection, oldest first.</summary>
+    /// <summary>Posts of one collection (through its members), oldest first.</summary>
     Task<IReadOnlyList<CollectionPost>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default);
+    /// <summary>Which collections each post sits in (memberships of the whole workspace, untracked).</summary>
+    Task<IReadOnlyList<CollectionMember>> ListMembersAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>The memberships of one post, tracked.</summary>
+    Task<IReadOnlyList<CollectionMember>> ListMembersOfPostAsync(Guid workspaceId, Guid postId, CancellationToken ct = default);
+    /// <summary>The memberships of the given collections, tracked.</summary>
+    Task<IReadOnlyList<CollectionMember>> ListMembersOfCollectionsAsync(Guid workspaceId, IEnumerable<Guid> collectionIds, CancellationToken ct = default);
+    void AddMember(CollectionMember member);
+    void AddMembers(IEnumerable<CollectionMember> members);
+    void RemoveMembers(IEnumerable<CollectionMember> members);
     Task<CollectionPost?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     Task<IReadOnlyList<CollectionPost>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     /// <summary>Every post of the workspace, tracked (library files are being taken out of them).</summary>

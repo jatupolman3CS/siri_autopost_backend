@@ -84,37 +84,89 @@ public sealed class ScheduleMaterializer(
 
         var anti = ws.AntiBan;
         var avoidLast = anti.Advanced.RecentAvoid;
-        // Shuffle: what each target had lately (newest first), from the database and then from this run.
+        var repeat = s.Repeat;
+        // Shuffle: what each target had lately (newest first) and, for "never", every post it ever had; from the database
+        // first, then from this run.
         var recent = new Dictionary<string, List<Guid>>();
+        var everHad = new Dictionary<string, HashSet<Guid>>();
+        var usableIds = usable.Select(p => p.Id).ToHashSet();
         if (s.Order == PostOrder.Shuffle)
         {
-            var history = await posts.ListRecentCollectionPostIdsByLinkAsync(
-                targets.Where(t => t.Link is not null).Select(t => t.Link!.Id), Math.Max(1, avoidLast), ct);
+            var linkIds = targets.Where(t => t.Link is not null).Select(t => t.Link!.Id).ToList();
+            // "Any" asks the database for nothing: a group may get any post again.
+            var history = repeat == PostRepeat.Any
+                ? new Dictionary<Guid, IReadOnlyList<Guid>>()
+                : await posts.ListRecentCollectionPostIdsByLinkAsync(linkIds, Math.Max(1, avoidLast), ct);
+            var all = repeat == PostRepeat.Never
+                ? await posts.ListAllCollectionPostIdsByLinkAsync(linkIds, ct)
+                : new Dictionary<Guid, IReadOnlyList<Guid>>();
             foreach (var t in targets)
+            {
                 recent[t.TargetKey] = t.Link is { } l && history.TryGetValue(l.Id, out var h) ? h.ToList() : [];
+                everHad[t.TargetKey] = t.Link is { } l2 && all.TryGetValue(l2.Id, out var ever) ? ever.ToHashSet() : [];
+            }
         }
         var deck = new List<CollectionPost>();
         // With a lot of posts a link avoids the last N it had; with few it can only avoid the last one (or nothing, with one post).
-        var avoidCount = usable.Count <= 1 ? 0 : avoidLast > 0 && usable.Count > avoidLast + 1 ? avoidLast : 1;
+        var avoidCount = repeat == PostRepeat.Any || usable.Count <= 1 ? 0 : avoidLast > 0 && usable.Count > avoidLast + 1 ? avoidLast : 1;
 
-        CollectionPost Draw(string targetKey)
+        // The posts a target must not get now.
+        HashSet<Guid> Avoid(string targetKey)
+        {
+            if (repeat == PostRepeat.Any) return [];
+            var history = recent[targetKey];
+            if (repeat == PostRepeat.Never)
+            {
+                var had = everHad[targetKey];
+                if (usableIds.Count(had.Contains) < usable.Count) return had; // a post it has not had is left: nothing is given twice
+                // It has had them all: it starts over, keeping away from only the last ones it had.
+                had.Clear();
+                had.UnionWith(history.Take(avoidCount));
+                return had;
+            }
+            return history.Take(avoidCount).ToHashSet();
+        }
+
+        // A post's own limits: its days, hours, dates, and how many times a local day it may go out (over every group).
+        var perDay = new Dictionary<(Guid Post, DateOnly Day), int>();
+        var limited = usable.Where(p => p.Settings.MaxPerDay > 0).Select(p => p.Id).ToList();
+        if (limited.Count > 0)
+        {
+            var offset = TimeSpan.FromMinutes(s.UtcOffsetMinutes);
+            foreach (var (postId, at) in await posts.ListScheduledAtByCollectionPostAsync(
+                         limited, s.ToUtc(fromLocal, "00:00"), s.ToUtc(toLocal.AddDays(1), "00:00"), ct))
+            {
+                var key = (postId, DateOnly.FromDateTime(at.ToOffset(offset).DateTime));
+                perDay[key] = perDay.GetValueOrDefault(key) + 1;
+            }
+        }
+
+        bool Allowed(CollectionPost p, DateOnly day, int minutes, int uses = 1) =>
+            p.Settings.AllowsAt(day, minutes) && (p.Settings.MaxPerDay == 0 || perDay.GetValueOrDefault((p.Id, day)) + uses <= p.Settings.MaxPerDay);
+
+        // The post a target gets now, among the posts that allow this slot. A post the group had lately is left alone when
+        // another one can go; when only that one can, it goes (the schedule is not left empty because of a rule).
+        CollectionPost? Draw(string targetKey, Func<CollectionPost, bool> allowed)
         {
             var history = recent[targetKey];
-            var avoid = history.Take(avoidCount).ToHashSet();
+            var avoid = Avoid(targetKey);
             for (var attempt = 0; attempt < 2; attempt++)
             {
-                var i = deck.FindIndex(p => !avoid.Contains(p.Id));
+                var i = deck.FindIndex(p => !avoid.Contains(p.Id) && allowed(p));
                 if (i >= 0)
                 {
                     var picked = deck[i];
                     deck.RemoveAt(i);
                     history.Insert(0, picked.Id);
+                    everHad[targetKey].Add(picked.Id);
                     return picked;
                 }
-                deck = Shuffled(usable); // the deck is empty, or only holds what this link just had: deal a new one
+                deck = Shuffled(usable); // the deck is empty, or only holds what this link just had or what this slot does not allow: deal a new one
             }
-            var last = usable[0]; // unreachable: at least one post is not in the avoid set
+            var last = usable.FirstOrDefault(allowed);
+            if (last is null) return null;
             history.Insert(0, last.Id);
+            everHad[targetKey].Add(last.Id);
             return last;
         }
 
@@ -122,7 +174,8 @@ public sealed class ScheduleMaterializer(
         var created = new List<Post>();
 
         // One round of a slot: its collection post (one for all in Rotate, one per target otherwise), the composed text, the post.
-        void Queue(string slotKey, List<(ScheduleTarget Target, DateTimeOffset At)> fresh)
+        // A slot nobody's post allows (a post limited to evenings, to a weekday, to a date range) makes nothing.
+        void Queue(string slotKey, DateOnly day, int minutes, List<(ScheduleTarget Target, DateTimeOffset At)> fresh)
         {
             if (created.Count + fresh.Count > Schedule.MaxPostsPerRun)
                 throw new DomainException(
@@ -131,14 +184,23 @@ public sealed class ScheduleMaterializer(
             CollectionPost? shared = null;
             if (s.Order == PostOrder.Rotate)
             {
-                shared = usable[cursor % usable.Count];
-                cursor++;
+                // The next post in turn that allows the slot; the cursor moves past the ones that did not.
+                for (var step = 0; step < usable.Count && shared is null; step++)
+                {
+                    var candidate = usable[(cursor + step) % usable.Count];
+                    if (!Allowed(candidate, day, minutes, fresh.Count)) continue;
+                    shared = candidate;
+                    cursor += step + 1;
+                }
+                if (shared is null) return;
             }
             foreach (var (t, when) in fresh)
             {
-                var cp = shared ?? Draw(t.TargetKey);
+                var cp = shared ?? Draw(t.TargetKey, p => Allowed(p, day, minutes));
+                if (cp is null) continue;
+                if (cp.Settings.MaxPerDay > 0) perDay[(cp.Id, day)] = perDay.GetValueOrDefault((cp.Id, day)) + 1;
                 var code = t.Link?.Code;
-                var text = PostComposer.ComposeFull(cp.Text, code, collection.Settings, random.NextDouble);
+                var text = PostComposer.ComposeFull(cp.Text, code, cp.SettingsIn(collection), random.NextDouble);
                 var target = t.Link is { } l ? l.Name : t.Account!.DefaultTarget;
                 created.Add(Post.FromSchedule(
                     ws.Id, t.Account!, target, text, cp.MediaIds, when, now, s.Id, cp.Id, t.Link?.Id, t.TargetKey, slotKey, t.Link?.Url, code));
@@ -171,7 +233,8 @@ public sealed class ScheduleMaterializer(
         {
             var slotKey = Schedule.SlotKey(s.LocalDay(now), Schedule.NowSlot);
             var fresh = Stagger(Ordered(targets), now, slotKey, firstIsNow: true);
-            if (fresh.Count > 0) Queue(slotKey, fresh);
+            var localNow = now.ToOffset(TimeSpan.FromMinutes(s.UtcOffsetMinutes));
+            if (fresh.Count > 0) Queue(slotKey, s.LocalDay(now), localNow.Hour * 60 + localNow.Minute, fresh);
             s.ClearNowPending();
         }
 
@@ -192,7 +255,7 @@ public sealed class ScheduleMaterializer(
             {
                 var slotKey = Schedule.SlotKey(day, slot);
                 var fresh = Stagger(Ordered(members), s.ToUtc(day, slot), slotKey, firstIsNow: false);
-                if (fresh.Count > 0) Queue(slotKey, fresh);
+                if (fresh.Count > 0) Queue(slotKey, day, TimeOfDay.Parse(slot) ?? 0, fresh);
             }
         }
 

@@ -49,6 +49,7 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
         RuleFor(x => x.Name).MaximumLength(Schedule.MaxNameLength).WithMessage($"ชื่อตารางยาวเกิน {Schedule.MaxNameLength} ตัวอักษร");
         RuleFor(x => x.Mode).IsInEnum().WithMessage("รูปแบบตารางไม่ถูกต้อง");
         RuleFor(x => x.Order).IsInEnum().WithMessage("ลำดับโพสต์ไม่ถูกต้อง");
+        RuleFor(x => x.Repeat).IsInEnum().WithMessage("ตัวเลือกการซ้ำโพสต์ไม่ถูกต้อง");
         RuleFor(x => x.Times).Must(ScheduleRules.IsTimeList)
             .WithMessage($"เวลาโพสต์ต้องเป็นรูปแบบ HH:mm และเลือกได้ไม่เกิน {Schedule.MaxTimes} เวลา");
         RuleFor(x => x.FirstTime).Must(ScheduleRules.IsTimeOrEmpty).WithMessage("เวลาเริ่มต้นไม่ถูกต้อง ใช้รูปแบบ HH:mm");

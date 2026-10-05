@@ -33,6 +33,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<DeviceEvent> DeviceEvents => Set<DeviceEvent>();
     public DbSet<PostCollection> Collections => Set<PostCollection>();
     public DbSet<CollectionPost> CollectionPosts => Set<CollectionPost>();
+    public DbSet<CollectionMember> CollectionMembers => Set<CollectionMember>();
     public DbSet<LinkSet> LinkSets => Set<LinkSet>();
     public DbSet<SetLink> SetLinks => Set<SetLink>();
     public DbSet<Schedule> Schedules => Set<Schedule>();

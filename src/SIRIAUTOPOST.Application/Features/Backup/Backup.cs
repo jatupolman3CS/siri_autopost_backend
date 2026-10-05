@@ -29,7 +29,7 @@ public sealed class GetBackupQueryHandler(
     {
         var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var allCollections = await collections.ListAsync(ws.Id, ct);
-        var postsBy = (await collectionPosts.ListAsync(ws.Id, ct)).ToLookup(p => p.CollectionId);
+        var allPosts = await collectionPosts.ListAsync(ws.Id, ct);
         var allSets = await linkSets.ListAsync(ws.Id, ct);
         var linksBy = (await setLinks.ListAsync(ws.Id, ct)).ToLookup(l => l.LinkSetId);
 
@@ -40,9 +40,19 @@ public sealed class GetBackupQueryHandler(
         var setName = allSets.Select((s, i) => (s.Id, Name: setNames[i])).ToDictionary(x => x.Id, x => x.Name);
         var linkUrl = allSets.SelectMany(s => linksBy[s.Id]).ToDictionary(l => l.Id, l => l.Url);
 
+        // A post in several collections carries the same key in each of them; one in none goes to the file's own list.
+        var members = await collectionPosts.ListMembersAsync(ws.Id, ct);
+        var membersOf = members.ToLookup(m => m.CollectionId);
+        var inCollections = members.Select(m => m.PostId).ToHashSet();
+        var sharedKeys = members.GroupBy(m => m.PostId).Where(g => g.Count() > 1).Select(g => g.Key).ToHashSet();
+        BackupPostDto Backed(CollectionPost p) => new(
+            p.Text, p.MediaIds, p.Approval, p.Active, CollectionPostSettingsDto.From(p.Settings), sharedKeys.Contains(p.Id) ? p.Id.ToString("N") : null);
+        var postById = allPosts.ToDictionary(p => p.Id);
         var backupCollections = allCollections.Select((c, i) => new BackupCollectionDto(
             collectionNames[i], c.Description, c.Icon, CollectionSettingsDto.From(c.Settings),
-            postsBy[c.Id].Select(p => new BackupPostDto(p.Text, p.MediaIds, p.Approval)).ToList())).ToList();
+            membersOf[c.Id].Where(m => postById.ContainsKey(m.PostId)).Select(m => postById[m.PostId]).OrderBy(p => p.CreatedAt).ThenBy(p => p.Id)
+                .Select(Backed).ToList())).ToList();
+        var backupPosts = allPosts.Where(p => !inCollections.Contains(p.Id)).Select(Backed).ToList();
         var backupSets = allSets.Select((s, i) => new BackupLinkSetDto(
             setNames[i], s.PostAsAccountId, s.AccountIds,
             linksBy[s.Id].Select(l => new BackupLinkDto(l.Name, l.Url, l.Code, l.DailyMax, l.Enabled)).ToList())).ToList();
@@ -60,7 +70,7 @@ public sealed class GetBackupQueryHandler(
             }
             backupSchedules.Add(new BackupScheduleDto(
                 s.Name, cName, lName, s.Mode, s.Times, s.EveryHours, s.FirstTime, s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays, overrides, s.Active, s.UtcOffsetMinutes));
+                s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays, overrides, s.Active, s.UtcOffsetMinutes, s.Repeat));
         }
 
         var n = ws.Notifications;
@@ -76,7 +86,7 @@ public sealed class GetBackupQueryHandler(
 
         return new BackupDto(
             Version, clock.GetUtcNow(), backupCollections, backupSets, backupSchedules, AdvancedAntiBanDto.From(ws.AntiBan.Advanced), notifications,
-            autoReply);
+            autoReply, backupPosts);
     }
 
     /// <summary>The names, with " (2)", " (3)"... after a name that already came before.</summary>
@@ -118,8 +128,8 @@ public sealed class RestoreBackupCommandHandler(
         if (b.Collections.Count > PostCollection.MaxPerWorkspace) throw new DomainException($"ไฟล์มีชุดโพสต์เกิน {PostCollection.MaxPerWorkspace} ชุด");
         if (b.LinkSets.Count > LinkSet.MaxPerWorkspace) throw new DomainException($"ไฟล์มีชุดลิงก์เกิน {LinkSet.MaxPerWorkspace} ชุด");
         if (b.Schedules.Count > Schedule.MaxPerWorkspace) throw new DomainException($"ไฟล์มีตารางโพสต์เกิน {Schedule.MaxPerWorkspace} ตาราง");
-        if (b.Collections.Sum(x => x.Posts.Count) > CollectionPost.MaxPerWorkspace)
-            throw new DomainException($"ไฟล์มีโพสต์ในชุดโพสต์เกิน {CollectionPost.MaxPerWorkspace:N0} โพสต์");
+        if (b.Collections.Sum(x => x.Posts?.Count ?? 0) + (b.Posts?.Count ?? 0) > CollectionPost.MaxPerWorkspace)
+            throw new DomainException($"ไฟล์มีโพสต์เกิน {CollectionPost.MaxPerWorkspace:N0} โพสต์");
         RequireUnique(b.Collections.Select(x => x.Name), "ชื่อชุดโพสต์");
         RequireUnique(b.LinkSets.Select(x => x.Name), "ชื่อชุดลิงก์");
 
@@ -133,23 +143,40 @@ public sealed class RestoreBackupCommandHandler(
         // ---- build the new parts in memory (nothing is touched until they all pass) ----
         var newCollections = new Dictionary<string, PostCollection>(StringComparer.Ordinal);
         var newPosts = new List<CollectionPost>();
+        var newMembers = new List<CollectionMember>();
+        var byKey = new Dictionary<string, CollectionPost>(StringComparer.Ordinal);
         var tick = 0;
+
+        // One post of the file: the copies that share a key are one post. It starts as a draft, so it can be moved to the
+        // approval state it had.
+        CollectionPost PostOf(BackupPostDto bp)
+        {
+            var key = string.IsNullOrWhiteSpace(bp.Key) ? null : bp.Key.Trim();
+            if (key is not null && byKey.TryGetValue(key, out var same)) return same;
+            var post = CollectionPost.Create(ws.Id, bp.Text, (bp.MediaIds ?? []).Where(library.Contains), requireApproval: true, now.AddMilliseconds(tick++));
+            if (bp.Approval != PostApproval.Draft) post.RequestApproval(now);
+            if (bp.Approval == PostApproval.Approved) post.Approve(now);
+            if (bp.Settings is not null) post.UpdateSettings(bp.Settings.ToSettings(), now);
+            post.SetActive(bp.Active, now);
+            newPosts.Add(post);
+            if (key is not null) byKey[key] = post;
+            return post;
+        }
+
         for (var i = 0; i < b.Collections.Count; i++)
         {
             var bc = b.Collections[i];
             var collection = PostCollection.Create(ws.Id, bc.Name, bc.Description, now, i);
-            // The posts start as drafts of a collection that asks for approval, so each can be moved to the state it had.
-            collection.Update(bc.Name, bc.Description, bc.Icon, bc.Settings.ToSettings().WithApproval());
-            foreach (var bp in bc.Posts)
-            {
-                var post = CollectionPost.Create(collection, bp.Text, (bp.MediaIds ?? []).Where(library.Contains), now.AddMilliseconds(tick++));
-                if (bp.Approval != PostApproval.Draft) post.RequestApproval(now);
-                if (bp.Approval == PostApproval.Approved) post.Approve(now);
-                newPosts.Add(post);
-            }
             collection.Update(bc.Name, bc.Description, bc.Icon, bc.Settings.ToSettings());
+            foreach (var bp in bc.Posts ?? [])
+            {
+                var post = PostOf(bp);
+                if (!newMembers.Any(m => m.CollectionId == collection.Id && m.PostId == post.Id))
+                    newMembers.Add(CollectionMember.Create(ws.Id, collection.Id, post.Id, now));
+            }
             newCollections[collection.Name] = collection;
         }
+        foreach (var bp in b.Posts ?? []) PostOf(bp); // posts that sit in no collection wait in the library
 
         var newSets = new Dictionary<string, LinkSet>(StringComparer.Ordinal);
         var newLinks = new List<SetLink>();
@@ -186,7 +213,7 @@ public sealed class RestoreBackupCommandHandler(
             var schedule = Schedule.Create(
                 ws.Id, bsc.Name, collection.Id, set.Id, bsc.Mode, bsc.Times, bsc.EveryHours, bsc.FirstTime, start, bsc.OnceTime, bsc.Order,
                 bsc.DripFrom, bsc.DripTo, bsc.DripCount, bsc.BumpHours, bsc.AutoDeleteDays,
-                TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count));
+                TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count), repeat: bsc.Repeat);
             if (!bsc.Active) schedule.SetActive(false);
             newSchedules.Add(schedule);
         }
@@ -211,9 +238,11 @@ public sealed class RestoreBackupCommandHandler(
             foreach (var s in oldSchedules) posts.RemoveRange(await posts.ListOpenByScheduleAsync(s.Id, ct));
             schedules.RemoveRange(oldSchedules);
             collections.RemoveRange(await collections.ListAsync(ws.Id, ct));
+            collectionPosts.RemoveRange(await collectionPosts.ListForUpdateAsync(ws.Id, ct));
             linkSets.RemoveRange(await linkSets.ListAsync(ws.Id, ct));
             foreach (var collection in newCollections.Values) collections.Add(collection);
             collectionPosts.AddRange(newPosts);
+            collectionPosts.AddMembers(newMembers);
             foreach (var set in newSets.Values) linkSets.Add(set);
             setLinks.AddRange(newLinks);
             foreach (var s in newSchedules) schedules.Add(s);

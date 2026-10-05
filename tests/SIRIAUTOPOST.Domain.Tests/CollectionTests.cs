@@ -71,7 +71,6 @@ public class CollectionTests
         var p = CollectionPost.Create(c, "  hello  ", [media, media], Now);
         Assert.Equal("hello", p.Text);
         Assert.Equal([media], p.MediaIds);
-        Assert.Equal(c.Id, p.CollectionId);
         Assert.Equal(Ws, p.WorkspaceId);
     }
 
@@ -190,25 +189,109 @@ public class CollectionTests
     }
 
     [Fact]
-    public void Moving_a_post_into_an_approval_collection_makes_it_a_draft_there()
+    public void A_post_that_is_switched_off_is_not_usable_anywhere()
     {
-        var plain = Collection();
-        var strict = Collection(approval: true, name: "ตรวจก่อนโพสต์");
-        var p = CollectionPost.Create(plain, "hello", [], Now);
+        var c = Collection();
+        var p = CollectionPost.Create(c, "hello", [], Now);
+        Assert.True(p.Active);
+        Assert.True(p.IsUsable(c));
 
-        p.Move(strict, Now);
-        Assert.Equal(strict.Id, p.CollectionId);
-        Assert.Equal(PostApproval.Draft, p.Approval);
+        p.SetActive(false, Now.AddMinutes(1));
+        Assert.False(p.IsUsable(c));
+        Assert.Equal(Now.AddMinutes(1), p.UpdatedAt);
 
-        p.Move(plain, Now);
-        Assert.Equal(plain.Id, p.CollectionId);
+        p.SetActive(true, Now.AddMinutes(2));
+        Assert.True(p.IsUsable(c));
     }
 
     [Fact]
-    public void A_post_cannot_move_to_another_workspace()
+    public void A_post_of_the_library_is_a_draft_only_when_it_goes_into_an_approval_collection()
     {
-        var other = PostCollection.Create(Guid.NewGuid(), "x", null, Now);
-        var p = CollectionPost.Create(Collection(), "hello", [], Now);
-        Assert.Throws<DomainException>(() => p.Move(other, Now));
+        Assert.Equal(PostApproval.Approved, CollectionPost.Create(Ws, "hello", [], requireApproval: false, Now).Approval);
+        Assert.Equal(PostApproval.Draft, CollectionPost.Create(Ws, "hello", [], requireApproval: true, Now).Approval);
+    }
+
+    [Fact]
+    public void Content_changes_send_an_approved_post_back_to_draft_when_any_of_its_collections_asks_for_approval()
+    {
+        var p = CollectionPost.Create(Ws, "hello", [], requireApproval: true, Now);
+        p.RequestApproval(Now);
+        p.Approve(Now);
+
+        p.Edit("hello", [], requireApproval: false, Now); // none of its collections asks: stays approved
+        p.Edit("hello 2", [], requireApproval: false, Now);
+        Assert.Equal(PostApproval.Approved, p.Approval);
+
+        p.Edit("hello 3", [], requireApproval: true, Now);
+        Assert.Equal(PostApproval.Draft, p.Approval);
+    }
+
+    [Fact]
+    public void A_post_has_no_limits_until_it_is_given_some()
+    {
+        var s = new CollectionPostSettings();
+        Assert.True(s.AllowsAt(new DateOnly(2026, 10, 3), 0));
+        Assert.True(s.AllowsAt(new DateOnly(2026, 10, 3), 23 * 60 + 59));
+    }
+
+    [Fact]
+    public void A_post_allows_only_its_weekdays_dates_and_hours()
+    {
+        var saturday = new DateOnly(2026, 10, 3);
+        var weekdays = new CollectionPostSettings { Weekdays = [1, 2, 3, 4, 5] };
+        Assert.False(weekdays.AllowsAt(saturday, 600));
+        Assert.True(weekdays.AllowsAt(saturday.AddDays(2), 600)); // Monday
+
+        var dates = new CollectionPostSettings { ValidFrom = saturday, ValidUntil = saturday.AddDays(6) };
+        Assert.False(dates.AllowsAt(saturday.AddDays(-1), 600));
+        Assert.True(dates.AllowsAt(saturday, 600));
+        Assert.True(dates.AllowsAt(saturday.AddDays(6), 600));
+        Assert.False(dates.AllowsAt(saturday.AddDays(7), 600));
+
+        var evening = new CollectionPostSettings { TimeFrom = "18:00", TimeTo = "21:00" };
+        Assert.False(evening.AllowsAt(saturday, 17 * 60 + 59));
+        Assert.True(evening.AllowsAt(saturday, 18 * 60));
+        Assert.True(evening.AllowsAt(saturday, 21 * 60));
+        Assert.False(evening.AllowsAt(saturday, 21 * 60 + 1));
+
+        // A window whose end is before its start runs past midnight.
+        var night = new CollectionPostSettings { TimeFrom = "22:00", TimeTo = "02:00" };
+        Assert.True(night.AllowsAt(saturday, 23 * 60));
+        Assert.True(night.AllowsAt(saturday, 60));
+        Assert.False(night.AllowsAt(saturday, 12 * 60));
+    }
+
+    [Fact]
+    public void A_post_checks_its_own_settings()
+    {
+        var p = CollectionPost.Create(Ws, "hello", [], requireApproval: false, Now);
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { TimeFrom = "18:00" }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { TimeFrom = "25:00", TimeTo = "26:00" }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { Weekdays = [7] }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { MaxPerDay = 51 }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(
+            new CollectionPostSettings { ValidFrom = new DateOnly(2026, 10, 5), ValidUntil = new DateOnly(2026, 10, 4) }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { Hashtags = new string('x', 501) }, Now));
+
+        p.UpdateSettings(new CollectionPostSettings { Weekdays = [5, 1, 1], TimeFrom = " 09:00 ", TimeTo = "10:30", MaxPerDay = 2 }, Now.AddMinutes(1));
+        Assert.Equal([1, 5], p.Settings.Weekdays);
+        Assert.Equal(("09:00", "10:30", 2), (p.Settings.TimeFrom, p.Settings.TimeTo, p.Settings.MaxPerDay));
+        Assert.Equal(Now.AddMinutes(1), p.UpdatedAt);
+    }
+
+    [Fact]
+    public void A_post_writes_with_its_own_hashtags_and_footer_when_it_has_them()
+    {
+        var c = Collection();
+        c.Update(c.Name, c.Description, null, new CollectionSettings { Hashtags = "#ร้าน", Footer = "ติดต่อ 081", FooterPos = FooterPosition.End });
+        var p = CollectionPost.Create(c, "hello", [], Now);
+
+        var follow = p.SettingsIn(c);
+        Assert.Equal(("#ร้าน", "ติดต่อ 081", FooterPosition.End), (follow.Hashtags, follow.Footer, follow.FooterPos));
+
+        p.UpdateSettings(new CollectionPostSettings { Hashtags = "#โปร", Footer = "", FooterPos = FooterPosition.Top }, Now);
+        var own = p.SettingsIn(c);
+        Assert.Equal(("#โปร", "", FooterPosition.Top), (own.Hashtags, own.Footer, own.FooterPos));
+        Assert.Equal("#ร้าน", c.Settings.Hashtags); // the collection is not touched
     }
 }

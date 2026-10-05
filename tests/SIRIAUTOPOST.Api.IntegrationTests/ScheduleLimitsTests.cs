@@ -65,7 +65,7 @@ public class ScheduleLimitsTests(ApiFactory factory)
     public async Task Creating_a_schedule_that_would_overfill_the_queue_is_refused_saying_how_many_are_queued_and_leaves_nothing()
     {
         using var shop = await factory.ShopAsync(links: 2);
-        var queued = await FillToAsync(shop, 10_000 - 10); // room for ten: a daily schedule of two groups needs 28 (the demo posts of a new workspace count too)
+        var queued = await FillToAsync(shop, 10_000 - 10); // room for ten: a daily schedule of two groups needs 28
 
         var res = await shop.TryCreateScheduleAsync(new ScheduleSpec(Times: ["18:00"], Offset: Bangkok));
 

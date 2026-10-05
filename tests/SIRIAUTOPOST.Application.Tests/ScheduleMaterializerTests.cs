@@ -373,6 +373,156 @@ public class ScheduleMaterializerTests
         Assert.All(w.Added, p => Assert.Equal(w.Posts[0].Id, p.CollectionPostId));
     }
 
+    // The group is what a slot is built around: every group gets ONE post per slot, picked at random from the collection,
+    // never every post of the collection.
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task Shuffle_gives_every_group_one_post_a_slot_and_different_groups_different_posts(int seed)
+    {
+        var w = new SchedulingWorld(links: 6, posts: 20);
+        var s = w.NewSchedule(order: PostOrder.Shuffle);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(seed)); // one slot, 6 groups
+
+        Assert.Equal(6, w.Added.Count); // not 6 x 20
+        foreach (var link in w.Links) Assert.Single(w.Added, p => p.LinkId == link.Id);
+        Assert.Equal(6, w.Added.Select(p => p.CollectionPostId).Distinct().Count()); // nobody posts the same text in the same round
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Shuffle_with_fewer_posts_than_groups_still_gives_each_group_one_post_and_uses_them_all(int seed)
+    {
+        var w = new SchedulingWorld(links: 5, posts: 3);
+        var s = w.NewSchedule(order: PostOrder.Shuffle);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(seed));
+
+        Assert.Equal(5, w.Added.Count);
+        foreach (var link in w.Links) Assert.Single(w.Added, p => p.LinkId == link.Id);
+        Assert.Equal(3, w.Added.Select(p => p.CollectionPostId).Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Shuffle_spreads_the_posts_over_the_groups_across_slots_and_days_without_repeating_for_a_group(int seed)
+    {
+        var w = new SchedulingWorld(links: 4, posts: 12);
+        var s = w.NewSchedule(times: ["09:00", "18:00"], order: PostOrder.Shuffle);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3), new SeededRandom(seed)); // 3 days x 2 slots x 4 groups
+
+        Assert.Equal(24, w.Added.Count);
+        foreach (var slot in w.Added.GroupBy(p => p.SlotKey))
+            Assert.Equal(4, slot.Select(p => p.CollectionPostId).Distinct().Count()); // a round never repeats a text
+        foreach (var link in w.Links)
+        {
+            var seq = w.Added.Where(p => p.LinkId == link.Id).OrderBy(p => p.ScheduledAt).Select(p => p.CollectionPostId).ToList();
+            Assert.Equal(6, seq.Count);
+            Assert.True(seq.Distinct().Count() > 1, "a group is not given one post again and again");
+            for (var i = 1; i < seq.Count; i++) Assert.NotEqual(seq[i - 1], seq[i]);
+        }
+    }
+
+    // ---- may a group get a post again? ----
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Repeat_any_lets_a_group_get_the_same_post_again_even_within_a_day(int seed)
+    {
+        var w = new SchedulingWorld(links: 1, posts: 2);
+        var s = w.NewSchedule(times: ["09:00", "13:00", "18:00"], order: PostOrder.Shuffle, repeat: PostRepeat.Any);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(8), new SeededRandom(seed)); // 8 days x 3 slots, 2 posts
+
+        var seq = w.Added.OrderBy(p => p.ScheduledAt).Select(p => p.CollectionPostId).ToList();
+        Assert.Equal(24, seq.Count);
+        Assert.Contains(true, seq.Zip(seq.Skip(1), (a, b) => a == b)); // the same post twice in a row happens
+        await w.PostRepo.DidNotReceive().ListRecentCollectionPostIdsByLinkAsync(Arg.Any<IEnumerable<Guid>>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Repeat_any_still_gives_the_groups_of_one_round_different_posts()
+    {
+        var w = new SchedulingWorld(links: 6, posts: 20);
+        var s = w.NewSchedule(order: PostOrder.Shuffle, repeat: PostRepeat.Any);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(5));
+
+        Assert.Equal(6, w.Added.Select(p => p.CollectionPostId).Distinct().Count());
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Repeat_never_gives_a_group_each_post_once_before_any_comes_again(int seed)
+    {
+        var w = new SchedulingWorld(links: 1, posts: 5);
+        w.AllHistory[w.Links[0].Id] = [w.Posts[0].Id, w.Posts[1].Id]; // it has had two of the five
+        var s = w.NewSchedule(order: PostOrder.Shuffle, repeat: PostRepeat.Never);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(7), new SeededRandom(seed)); // 7 posts for one group
+
+        var seq = w.Added.OrderBy(p => p.ScheduledAt).Select(p => p.CollectionPostId!.Value).ToList();
+        Assert.Equal(7, seq.Count);
+        Assert.Equal(new[] { w.Posts[2].Id, w.Posts[3].Id, w.Posts[4].Id }.Order(), seq.Take(3).Order()); // the three it has not had come first
+        Assert.Equal(5, seq.Take(8).Distinct().Count()); // then it starts over: every post is used
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task Repeat_never_holds_for_every_group_of_many(int seed)
+    {
+        var w = new SchedulingWorld(links: 4, posts: 12);
+        var s = w.NewSchedule(times: ["09:00", "18:00"], order: PostOrder.Shuffle, repeat: PostRepeat.Never);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3), new SeededRandom(seed)); // 6 posts per group of the 12
+
+        foreach (var link in w.Links)
+        {
+            var seq = w.Added.Where(p => p.LinkId == link.Id).Select(p => p.CollectionPostId).ToList();
+            Assert.Equal(6, seq.Count);
+            Assert.Equal(6, seq.Distinct().Count());
+        }
+    }
+
+    [Fact]
+    public async Task Repeat_never_after_every_post_was_had_starts_over_without_giving_the_last_one_again()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 3);
+        w.AllHistory[w.Links[0].Id] = w.Posts.Select(p => p.Id).ToList();
+        w.History[w.Links[0].Id] = [w.Posts[0].Id]; // the newest
+        var s = w.NewSchedule(order: PostOrder.Shuffle, repeat: PostRepeat.Never);
+
+        for (var seed = 1; seed <= 8; seed++)
+        {
+            w.Added.Clear();
+            await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(seed));
+            Assert.NotEqual(w.Posts[0].Id, w.Added.Single().CollectionPostId);
+        }
+    }
+
+    [Fact]
+    public async Task Repeat_recent_is_the_default()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 3);
+        Assert.Equal(PostRepeat.Recent, w.NewSchedule(order: PostOrder.Shuffle).Repeat);
+        await Task.CompletedTask;
+    }
+
     // ---- what a post looks like ----
 
     [Fact]
@@ -661,5 +811,122 @@ public class ScheduleMaterializerTests
         await w.RunAsync(s, Today, Today.AddDays(2));
 
         Assert.Equal(Last, s.GeneratedThrough);
+    }
+
+    // ---- a post's own limits ----
+
+    private static void Limit(CollectionPost p, Action<CollectionPostSettings> change)
+    {
+        var settings = p.Settings.Copy();
+        change(settings);
+        p.UpdateSettings(settings, Now);
+    }
+
+    [Fact]
+    public async Task A_post_limited_to_the_evening_is_only_made_for_slots_in_its_window()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 0);
+        var evening = w.AddPost("โปรเย็น");
+        Limit(evening, s => (s.TimeFrom, s.TimeTo) = ("17:00", "20:00"));
+        var s = w.NewSchedule(times: ["09:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(2));
+
+        Assert.Equal(["2026-10-04T18:00", "2026-10-05T18:00"], w.Added.Select(p => p.SlotKey));
+    }
+
+    [Fact]
+    public async Task A_post_limited_to_a_weekday_and_a_date_range_is_only_made_inside_them()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 0);
+        var monday = w.AddPost("โปรวันจันทร์");
+        Limit(monday, s => (s.Weekdays, s.ValidUntil) = ([1], Today.AddDays(8)));
+        var s = w.NewSchedule();
+
+        await w.RunAsync(s, Today.AddDays(1), Last); // Sun 4 Oct ... Fri 16 Oct
+
+        // Mondays are 5 and 12 Oct; the second is after the post's last day (11 Oct)? No: 12 > 11, so only the 5th.
+        Assert.Equal(["2026-10-05T18:00"], w.Added.Select(p => p.SlotKey));
+    }
+
+    [Fact]
+    public async Task A_post_that_is_switched_off_is_never_made()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 2);
+        w.Posts[0].SetActive(false, Now);
+        var s = w.NewSchedule(order: PostOrder.Shuffle);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(6));
+
+        Assert.NotEmpty(w.Added);
+        Assert.All(w.Added, p => Assert.Equal(w.Posts[1].Id, p.CollectionPostId));
+    }
+
+    [Fact]
+    public async Task Rotate_goes_past_a_post_that_does_not_allow_the_slot_and_comes_back_to_it_later()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 2);
+        Limit(w.Posts[0], s => (s.TimeFrom, s.TimeTo) = ("17:00", "20:00"));
+        var s = w.NewSchedule(times: ["09:00", "18:00"], order: PostOrder.Rotate);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1));
+
+        // 09:00: the first post does not allow it, so the second goes; 18:00: the turn is back at the first.
+        Assert.Equal([w.Posts[1].Id, w.Posts[0].Id], w.Added.OrderBy(p => p.ScheduledAt).Select(p => p.CollectionPostId!.Value));
+    }
+
+    [Fact]
+    public async Task A_post_with_a_daily_limit_is_used_that_many_times_a_day_over_all_groups()
+    {
+        var w = new SchedulingWorld(links: 4, posts: 2);
+        Limit(w.Posts[0], s => s.MaxPerDay = 1);
+        var s = w.NewSchedule(times: ["18:00"], order: PostOrder.Shuffle);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(7));
+
+        Assert.Equal(4, w.Added.Count);
+        Assert.True(w.Added.Count(p => p.CollectionPostId == w.Posts[0].Id) <= 1);
+    }
+
+    [Fact]
+    public async Task What_a_post_already_has_queued_that_day_counts_against_its_daily_limit()
+    {
+        var w = new SchedulingWorld(links: 2, posts: 2);
+        Limit(w.Posts[0], s => s.MaxPerDay = 1);
+        w.PostRepo.ListScheduledAtByCollectionPostAsync(Arg.Any<IEnumerable<Guid>>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns([(w.Posts[0].Id, Bkk(4, 12))]); // one use on the 4th already
+        var s = w.NewSchedule(times: ["18:00"], order: PostOrder.Shuffle);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(3));
+
+        Assert.All(w.Added, p => Assert.Equal(w.Posts[1].Id, p.CollectionPostId));
+    }
+
+    [Fact]
+    public async Task A_slot_no_post_allows_makes_nothing_and_does_not_stall_the_schedule()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 1);
+        Limit(w.Posts[0], s => (s.TimeFrom, s.TimeTo) = ("06:00", "07:00"));
+        var s = w.NewSchedule(times: ["18:00"]);
+
+        var result = await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3));
+
+        Assert.Equal(0, result.Created);
+        Assert.True(result.Advanced); // the days were looked at: the top-up does not retry them at once
+        Assert.Equal(Today.AddDays(3), s.GeneratedThrough);
+    }
+
+    [Fact]
+    public async Task A_post_with_its_own_hashtags_and_footer_is_composed_with_them()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 0);
+        var own = w.AddPost("สินค้า");
+        w.Collection.Update(w.Collection.Name, null, null, new CollectionSettings { Footer = "ท้ายชุด", Hashtags = "#ชุด" });
+        Limit(own, s => (s.Footer, s.Hashtags) = ("ท้ายโพสต์", "#โพสต์"));
+        var s = w.NewSchedule();
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1));
+
+        Assert.Equal("A1\nสินค้า\n\nท้ายโพสต์\n#โพสต์", w.Added.Single().Content); // the group code is the first line
     }
 }

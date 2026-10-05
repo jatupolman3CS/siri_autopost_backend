@@ -5,6 +5,7 @@ using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.Collections;
 using SIRIAUTOPOST.Application.Features.LinkSets;
+using SIRIAUTOPOST.Application.Features.MasterPosts;
 using SIRIAUTOPOST.Application.Features.Team;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Extension;
@@ -326,6 +327,72 @@ public sealed class UpdateCollectionPostCommandValidator : AbstractValidator<Upd
 public sealed class CollectionPostApprovalCommandValidator : AbstractValidator<CollectionPostApprovalCommand>
 {
     public CollectionPostApprovalCommandValidator() => RuleFor(x => x.Action).IsInEnum().WithMessage("คำสั่งอนุมัติไม่ถูกต้อง");
+}
+
+public sealed class AddPostsToCollectionCommandValidator : AbstractValidator<AddPostsToCollectionCommand>
+{
+    public AddPostsToCollectionCommandValidator() =>
+        RuleFor(x => x.PostIds).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ยังไม่ได้เลือกโพสต์")
+            .Must(i => i.Count <= AddPostsToCollectionCommandHandler.MaxItems)
+            .WithMessage($"เลือกโพสต์ได้ครั้งละไม่เกิน {AddPostsToCollectionCommandHandler.MaxItems} โพสต์");
+}
+
+internal static class MasterPostRules
+{
+    public static IRuleBuilderOptions<T, IReadOnlyList<Guid>?> Collections<T>(this IRuleBuilder<T, IReadOnlyList<Guid>?> rule) =>
+        rule.Must(c => c is null || c.Count <= CollectionPost.MaxCollections)
+            .WithMessage($"โพสต์หนึ่งอยู่ได้ไม่เกิน {CollectionPost.MaxCollections} ชุดโพสต์");
+
+    public static void PostSettings<T>(this IRuleBuilder<T, CollectionPostSettingsDto?> rule)
+    {
+        rule.Must(s => s?.FooterPos is not { } pos || Enum.IsDefined(pos)).WithMessage(Messages.BadValue);
+        rule.Must(s => s?.Weekdays is null || s.Weekdays.Count <= 7).WithMessage(Messages.BadValue);
+        rule.Must(s => s is null || s.MaxPerDay is >= 0 and <= CollectionPostSettings.MaxPerDayLimit)
+            .WithMessage($"จำนวนครั้งต่อวันของโพสต์ต้องอยู่ระหว่าง 0–{CollectionPostSettings.MaxPerDayLimit}");
+    }
+}
+
+public sealed class CreateMasterPostCommandValidator : AbstractValidator<CreateMasterPostCommand>
+{
+    public CreateMasterPostCommandValidator()
+    {
+        RuleFor(x => x.Text).Text();
+        RuleFor(x => x.MediaIds).Media();
+        RuleFor(x => x.CollectionIds).Collections();
+        RuleFor(x => x.Settings).PostSettings();
+    }
+}
+
+public sealed class UpdateMasterPostCommandValidator : AbstractValidator<UpdateMasterPostCommand>
+{
+    public UpdateMasterPostCommandValidator()
+    {
+        RuleFor(x => x.Text).Text();
+        RuleFor(x => x.MediaIds).Media();
+        RuleFor(x => x.CollectionIds).Collections();
+        RuleFor(x => x.Settings).PostSettings();
+    }
+}
+
+public sealed class MasterPostApprovalCommandValidator : AbstractValidator<MasterPostApprovalCommand>
+{
+    public MasterPostApprovalCommandValidator() => RuleFor(x => x.Action).IsInEnum().WithMessage("คำสั่งอนุมัติไม่ถูกต้อง");
+}
+
+public sealed class BulkMasterPostsCommandValidator : AbstractValidator<BulkMasterPostsCommand>
+{
+    public BulkMasterPostsCommandValidator()
+    {
+        RuleFor(x => x.Action).IsInEnum().WithMessage(Messages.BadValue);
+        RuleFor(x => x.PostIds).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ยังไม่ได้เลือกโพสต์")
+            .Must(i => i.Count <= BulkMasterPostsCommandHandler.MaxItems)
+            .WithMessage($"เลือกโพสต์ได้ครั้งละไม่เกิน {BulkMasterPostsCommandHandler.MaxItems} โพสต์");
+        RuleFor(x => x.CollectionId).NotNull()
+            .When(x => x.Action is BulkPostAction.AddToCollection or BulkPostAction.RemoveFromCollection)
+            .WithMessage("ยังไม่ได้เลือกชุดโพสต์");
+    }
 }
 
 // ---------- link sets ----------

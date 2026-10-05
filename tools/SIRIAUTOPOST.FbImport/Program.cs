@@ -193,7 +193,8 @@ await db.SaveChangesAsync();
     var lib = new Dictionary<string, MediaFile>();
     foreach (var f in await db.Media.Where(x => x.WorkspaceId == workspaceId && x.ExternalUrl != null).ToListAsync()) lib[KeyOf(f.ExternalUrl!)] = f;
     int newMedia = 0, newPosts = 0, tooLong = 0;
-    var existing = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).ToListAsync())
+    var inColl = db.CollectionMembers.Where(m => m.CollectionId == coll.Id).Select(m => m.PostId);
+    var existing = (await db.CollectionPosts.Where(x => inColl.Contains(x.Id)).ToListAsync())
         .Select(x => x.Text + "|" + string.Join(",", x.MediaIds)).ToHashSet();
     foreach (var ip in all.AsEnumerable().Reverse())
     {
@@ -216,16 +217,18 @@ await db.SaveChangesAsync();
         }
         ids = ids.Distinct().ToList();
         if (!existing.Add(text + "|" + string.Join(",", ids))) continue;
-        db.CollectionPosts.Add(CollectionPost.Create(coll, text, ids, ip.PostedAt));
+        var created = CollectionPost.Create(coll, text, ids, ip.PostedAt);
+        db.CollectionPosts.Add(created);
+        db.CollectionMembers.Add(CollectionMember.Create(workspaceId, coll.Id, created.Id, ip.PostedAt));
         newPosts++;
     }
     foreach (var f in lib.Values) if (f.FolderId is null) f.MoveToFolder(folder.Id);
     await db.SaveChangesAsync();
     // Remove copies made by an earlier run (same text and media): keep the oldest.
-    var dups = (await db.CollectionPosts.Where(x => x.CollectionId == coll.Id).OrderBy(x => x.CreatedAt).ThenBy(x => x.UpdatedAt).ToListAsync())
+    var dups = (await db.CollectionPosts.Where(x => inColl.Contains(x.Id)).OrderBy(x => x.CreatedAt).ThenBy(x => x.UpdatedAt).ToListAsync())
         .GroupBy(x => x.Text + "|" + string.Join(",", x.MediaIds)).SelectMany(g => g.Skip(1)).ToList();
     if (dups.Count > 0) { db.CollectionPosts.RemoveRange(dups); await db.SaveChangesAsync(); }
-    Console.WriteLine($"ชุดโพสต์ในเว็บ \"{CollName}\": รวม {await db.CollectionPosts.CountAsync(x => x.CollectionId == coll.Id)} โพสต์, ลบซ้ำ {dups.Count}, โพสต์ใหม่ {newPosts} (ตัดข้อความที่ยาวเกิน {tooLong}), ไฟล์ในคลังใหม่ {newMedia}");
+    Console.WriteLine($"ชุดโพสต์ในเว็บ \"{CollName}\": รวม {await db.CollectionMembers.CountAsync(m => m.CollectionId == coll.Id)} โพสต์, ลบซ้ำ {dups.Count}, โพสต์ใหม่ {newPosts} (ตัดข้อความที่ยาวเกิน {tooLong}), ไฟล์ในคลังใหม่ {newMedia}");
 }
 
 // 1) A campaign ("ชุดโพสต์") in the device's extension settings: one post per distinct text + media set.

@@ -26,6 +26,8 @@ public sealed class CollectionsController : ControllerBase
 
     public sealed record ApprovalRequest(ApprovalAction Action);
 
+    public sealed record AddExistingPostsRequest(IReadOnlyList<Guid> PostIds);
+
     [HttpGet]
     public Task<IReadOnlyList<CollectionDto>> List(
         Guid wsId, [FromServices] IQueryHandler<GetCollectionsQuery, IReadOnlyList<CollectionDto>> handler, CancellationToken ct) =>
@@ -42,7 +44,7 @@ public sealed class CollectionsController : ControllerBase
         CancellationToken ct) =>
         handler.HandleAsync(new UpdateCollectionCommand(wsId, id, r.Name, r.Description, r.Icon, r.Settings), ct);
 
-    /// <summary>Deletes the collection and its posts; 422 while a schedule uses it.</summary>
+    /// <summary>Deletes the collection (its posts stay in the library); 422 while a schedule uses it.</summary>
     [HttpPut("{id:guid}/active")]
     public Task<CollectionDto> SetActive(
         Guid wsId, Guid id, SetActiveRequest r, [FromServices] ICommandHandler<SetCollectionActiveCommand, CollectionDto> handler, CancellationToken ct) =>
@@ -70,12 +72,20 @@ public sealed class CollectionsController : ControllerBase
         [FromServices] ICommandHandler<AddCollectionPostsBatchCommand, IReadOnlyList<CollectionPostDto>> handler, CancellationToken ct) =>
         handler.HandleAsync(new AddCollectionPostsBatchCommand(wsId, id, r.Items), ct);
 
+    /// <summary>Puts posts of the library into the collection (up to 500; the ones already in it stay as they are).</summary>
+    [HttpPost("{id:guid}/posts/add")]
+    public Task<CollectionDto> AddExistingPosts(
+        Guid wsId, Guid id, AddExistingPostsRequest r, [FromServices] ICommandHandler<AddPostsToCollectionCommand, CollectionDto> handler,
+        CancellationToken ct) =>
+        handler.HandleAsync(new AddPostsToCollectionCommand(wsId, id, r.PostIds), ct);
+
     [HttpPut("{id:guid}/posts/{postId:guid}")]
     public Task<CollectionPostDto> UpdatePost(
         Guid wsId, Guid id, Guid postId, UpdateCollectionPostRequest r,
         [FromServices] ICommandHandler<UpdateCollectionPostCommand, CollectionPostDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new UpdateCollectionPostCommand(wsId, id, postId, r.Text, r.MediaIds, r.CollectionId), ct);
 
+    /// <summary>Takes the post out of the collection; it stays in the library.</summary>
     [HttpDelete("{id:guid}/posts/{postId:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> DeletePost(

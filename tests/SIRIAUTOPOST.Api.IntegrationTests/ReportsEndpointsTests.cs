@@ -146,7 +146,7 @@ public partial class ReportsEndpointsTests(ApiFactory factory)
         Assert.Equal(7, report.Days);
         Assert.InRange((report.To - DateTimeOffset.UtcNow).TotalSeconds, -30, 30);
         Assert.Equal(TimeSpan.FromDays(7), report.To - report.From);
-        // The demo accounts of a new workspace have a week of history; none of it counts (no browser posted it).
+        // The demo accounts of a new workspace have no history, and any a sample account might have never counts (no browser posted it).
         Assert.Equal(["กลุ่มร้านค้า", "กลุ่มขายส่ง", "กลุ่มที่ถูกลบ", "กลุ่มเก่า", "กลุ่มรออนุมัติ"], report.Groups.Select(g => g.Name));
 
         var l1 = report.Groups[0];
@@ -215,7 +215,7 @@ public partial class ReportsEndpointsTests(ApiFactory factory)
         Assert.Equal("โพสต์ 50", top.Posts[0].Text);
 
         // Delete the 25 most used: the ranking reaches past the first candidates to still find twenty that exist.
-        foreach (var p in posts.Skip(25)) (await client.DeleteAsync($"/api/workspaces/{ws}/collections/{collection.Id}/posts/{p.Id}")).EnsureSuccessStatusCode();
+        foreach (var p in posts.Skip(25)) (await client.DeleteAsync($"/api/workspaces/{ws}/master-posts/{p.Id}")).EnsureSuccessStatusCode();
         var rest = await ReportAsync(client, ws);
         Assert.Equal(Enumerable.Range(6, 20).Reverse(), rest.Posts.Select(p => p.Used)); // 25 down to 6
         Assert.Equal("โพสต์ 25", rest.Posts[0].Text);

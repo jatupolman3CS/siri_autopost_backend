@@ -68,7 +68,8 @@ public class CollectionsEndpointsTests(ApiFactory factory)
         var post = await client.AddPostAsync(ws, c.Id, "  ขายของ {ดี|เยี่ยม} {{code}}  ", [media.Id]);
         Assert.Equal("ขายของ {ดี|เยี่ยม} {{code}}", post.Text);
         Assert.Equal([media.Id], post.MediaIds);
-        Assert.Equal((PostApproval.Approved, 0, c.Id), (post.Approval, post.PostedCount, post.CollectionId));
+        Assert.Equal((PostApproval.Approved, 0, true), (post.Approval, post.PostedCount, post.Active));
+        Assert.Equal([c.Id], post.CollectionIds);
 
         var edited = await (await client.PutAsJsonAsync($"{Base(ws)}/{c.Id}/posts/{post.Id}", new { text = "แก้แล้ว", mediaIds = Array.Empty<Guid>() }, Json))
             .ReadAsync<CollectionPostDto>();
@@ -83,10 +84,11 @@ public class CollectionsEndpointsTests(ApiFactory factory)
         Assert.Equal([second.Id], (await client.CollectionsAsync(ws)).Single().Posts.Select(p => p.Id));
         Assert.Equal(HttpStatusCode.NotFound, (await client.DeleteAsync($"{Base(ws)}/{c.Id}/posts/{post.Id}")).StatusCode);
 
-        // Deleting the collection takes its posts with it.
+        // Deleting the collection (or taking a post out of it) leaves the posts in the library.
         Assert.Equal(HttpStatusCode.NoContent, (await client.DeleteAsync($"{Base(ws)}/{c.Id}")).StatusCode);
         Assert.Empty(await client.CollectionsAsync(ws));
-        Assert.Equal(0, await factory.WithDbAsync(db => db.CollectionPosts.CountAsync(p => p.WorkspaceId == ws)));
+        Assert.Equal(2, await factory.WithDbAsync(db => db.CollectionPosts.CountAsync(p => p.WorkspaceId == ws)));
+        Assert.Equal(0, await factory.WithDbAsync(db => db.CollectionMembers.CountAsync(m => m.WorkspaceId == ws)));
     }
 
     [Fact]
@@ -181,14 +183,18 @@ public class CollectionsEndpointsTests(ApiFactory factory)
         var post = await client.AddPostAsync(ws, a.Id, "ย้ายฉัน");
 
         var moved = await (await client.PutAsJsonAsync($"{Base(ws)}/{a.Id}/posts/{post.Id}", new { text = "ย้ายฉัน", collectionId = b.Id }, Json)).ReadAsync<CollectionPostDto>();
-        Assert.Equal((b.Id, PostApproval.Approved), (moved.CollectionId, moved.Approval));
+        Assert.Equal([b.Id], moved.CollectionIds);
+        Assert.Equal(PostApproval.Approved, moved.Approval);
         var all = await client.CollectionsAsync(ws);
         Assert.Empty(all.Single(x => x.Id == a.Id).Posts);
         Assert.Equal([post.Id], all.Single(x => x.Id == b.Id).Posts.Select(p => p.Id));
 
-        // Into a collection that requires approval, it has to be approved there first.
+        // Into a collection that requires approval: a post somebody approved stays approved, and a change of its text sends it back to draft.
         var into = await (await client.PutAsJsonAsync($"{Base(ws)}/{b.Id}/posts/{post.Id}", new { text = "ย้ายฉัน", collectionId = strict.Id }, Json)).ReadAsync<CollectionPostDto>();
-        Assert.Equal((strict.Id, PostApproval.Draft), (into.CollectionId, into.Approval));
+        Assert.Equal([strict.Id], into.CollectionIds);
+        Assert.Equal(PostApproval.Approved, into.Approval);
+        var changed = await (await client.PutAsJsonAsync($"{Base(ws)}/{strict.Id}/posts/{post.Id}", new { text = "ย้ายฉันแล้ว" }, Json)).ReadAsync<CollectionPostDto>();
+        Assert.Equal(PostApproval.Draft, changed.Approval);
 
         Assert.Equal(HttpStatusCode.NotFound,
             (await client.PutAsJsonAsync($"{Base(ws)}/{strict.Id}/posts/{post.Id}", new { text = "x", collectionId = Guid.NewGuid() }, Json)).StatusCode);
@@ -329,7 +335,12 @@ public class CollectionsEndpointsTests(ApiFactory factory)
                 db.Collections.Add(last);
             }
             await db.SaveChangesAsync();
-            for (var i = 0; i < CollectionPost.MaxPerWorkspace; i++) db.CollectionPosts.Add(CollectionPost.Create(last!, $"โพสต์ {i}", [], now));
+            for (var i = 0; i < CollectionPost.MaxPerWorkspace; i++)
+            {
+                var post = CollectionPost.Create(last!, $"โพสต์ {i}", [], now);
+                db.CollectionPosts.Add(post);
+                db.CollectionMembers.Add(CollectionMember.Create(ws, last!.Id, post.Id, now));
+            }
             await db.SaveChangesAsync();
         });
 
@@ -343,7 +354,11 @@ public class CollectionsEndpointsTests(ApiFactory factory)
         // Freeing a slot lets the next one in.
         var posts = (await client.CollectionsAsync(ws)).Single(c => c.Id == last.Id).Posts;
         Assert.Equal(CollectionPost.MaxPerWorkspace, posts.Count);
+        // (Taking it out of the collection frees nothing: it is still in the library. Deleting it does.)
         (await client.DeleteAsync($"{Base(ws)}/{last.Id}/posts/{posts[0].Id}")).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await client.PostAsJsonAsync($"{Base(ws)}/{last.Id}/posts", new { text = "ยังเต็มอยู่" }, Json)).StatusCode);
+        (await client.DeleteAsync($"/api/workspaces/{ws}/master-posts/{posts[0].Id}")).EnsureSuccessStatusCode();
         (await client.PostAsJsonAsync($"{Base(ws)}/{last.Id}/posts", new { text = "ตอนนี้ได้แล้ว" }, Json)).EnsureSuccessStatusCode();
     }
 

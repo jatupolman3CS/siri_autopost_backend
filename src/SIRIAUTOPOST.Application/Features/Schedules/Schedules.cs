@@ -24,9 +24,10 @@ public sealed class ScheduleViews(
     {
         if (list.Count == 0) return [];
         var byCollection = (await collections.ListAsync(workspaceId, ct)).ToDictionary(c => c.Id);
-        var usable = (await collectionPosts.ListAsync(workspaceId, ct))
-            .Where(p => byCollection.TryGetValue(p.CollectionId, out var c) && c.Active && p.IsUsable(c))
-            .GroupBy(p => p.CollectionId)
+        var byPost = (await collectionPosts.ListAsync(workspaceId, ct)).ToDictionary(p => p.Id);
+        var usable = (await collectionPosts.ListMembersAsync(workspaceId, ct))
+            .Where(m => byPost.TryGetValue(m.PostId, out var p) && byCollection.TryGetValue(m.CollectionId, out var c) && c.Active && p.IsUsable(c))
+            .GroupBy(m => m.CollectionId)
             .ToDictionary(g => g.Key, g => g.Count());
         var sets = (await linkSets.ListAsync(workspaceId, ct)).ToDictionary(s => s.Id);
         var links = (await setLinks.ListAsync(workspaceId, ct)).ToLookup(l => l.LinkSetId);
@@ -56,7 +57,7 @@ public sealed class ScheduleViews(
             s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount,
             s.BumpHours, s.AutoDeleteDays,
             s.Overrides.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value),
-            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow);
+            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow, s.Repeat);
 }
 
 public sealed record GetSchedulesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ScheduleDto>>;
@@ -134,7 +135,7 @@ public sealed class CreateScheduleCommandHandler(
         }
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
-            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow);
+            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat);
         var made = MaterializeResult.None;
         // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
         await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
@@ -313,7 +314,7 @@ public sealed class CreateTestPostCommandHandler(
         if (text is null) throw new DomainException("ชุดโพสต์นี้ยังไม่มีโพสต์ที่ใช้ได้ ใส่ข้อความที่ต้องการทดสอบ");
 
         var code = link?.Code;
-        var composed = PostComposer.ComposeFull(text, code, collection.Settings, random.NextDouble);
+        var composed = PostComposer.ComposeFull(text, code, picked?.SettingsIn(collection) ?? collection.Settings, random.NextDouble);
         var now = clock.GetUtcNow();
         var post = Post.Test(
             ws.Id, account, link is null ? account.DefaultTarget : link.Name, composed, picked?.MediaIds ?? [], now, picked?.Id, link?.Id,

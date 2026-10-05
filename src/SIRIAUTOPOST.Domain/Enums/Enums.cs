@@ -176,6 +176,20 @@ public enum PostOrder
     Rotate,
 }
 
+/// <summary>
+/// Whether a group may get a post it already had, when the schedule picks posts at random (<see cref="PostOrder.Shuffle"/>):
+/// not the ones it had lately (default), any post at any time, or no post twice until it has had them all.
+/// </summary>
+public enum PostRepeat
+{
+    /// <summary>Not one of the group's last N posts (N = the advanced anti-ban "recent avoid"; with few posts, only the last one).</summary>
+    Recent,
+    /// <summary>Any post: the same one may come again for the same group, even within a day.</summary>
+    Any,
+    /// <summary>A group never gets a post it has had before until it has had every post of the collection; then it starts over.</summary>
+    Never,
+}
+
 public enum FooterPosition
 {
     End,

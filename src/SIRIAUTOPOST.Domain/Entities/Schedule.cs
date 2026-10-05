@@ -47,6 +47,8 @@ public class Schedule : Entity
     public DateOnly StartDate { get; private set; }
     public string OnceTime { get; private set; } = "14:00";
     public PostOrder Order { get; private set; }
+    /// <summary>Shuffle only: whether a group may get a post again (see <see cref="PostRepeat"/>).</summary>
+    public PostRepeat Repeat { get; private set; }
     /// <summary>Drip: DripCount posts (1-12) spread from DripFrom to DripTo.</summary>
     public string DripFrom { get; private set; } = "09:00";
     public string DripTo { get; private set; } = "21:00";
@@ -86,13 +88,14 @@ public class Schedule : Entity
         Guid workspaceId, string name, Guid collectionId, Guid linkSetId, ScheduleMode mode, IEnumerable<string>? times,
         int everyHours, string? firstTime, DateOnly startDate, string? onceTime, PostOrder order, string? dripFrom, string? dripTo,
         int dripCount, int bumpHours, int autoDeleteDays, IReadOnlyDictionary<string, IReadOnlyList<string>>? overrides,
-        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false)
+        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false, PostRepeat repeat = PostRepeat.Recent)
     {
         var n = (name ?? "").Trim();
         if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อตาราง");
         if (n.Length > MaxNameLength) throw new DomainException($"ชื่อตารางยาวเกิน {MaxNameLength} ตัวอักษร");
         if (!Enum.IsDefined(mode)) throw new DomainException("รูปแบบตารางไม่ถูกต้อง");
         if (!Enum.IsDefined(order)) throw new DomainException("ลำดับโพสต์ไม่ถูกต้อง");
+        if (!Enum.IsDefined(repeat)) throw new DomainException("ตัวเลือกการซ้ำโพสต์ไม่ถูกต้อง");
         if (utcOffsetMinutes is < -840 or > 840) throw new DomainException("เขตเวลาไม่ถูกต้อง");
         // Starting now means starting today, whatever date was sent.
         if (startNow) startDate = LocalDayOf(now, utcOffsetMinutes);
@@ -133,6 +136,7 @@ public class Schedule : Entity
             StartDate = startDate,
             OnceTime = once,
             Order = order,
+            Repeat = repeat,
             DripFrom = from,
             DripTo = to,
             DripCount = dripCount,

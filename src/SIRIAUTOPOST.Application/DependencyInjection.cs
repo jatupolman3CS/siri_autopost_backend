@@ -10,6 +10,7 @@ using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.AutoReply;
 using SIRIAUTOPOST.Application.Features.Collections;
 using SIRIAUTOPOST.Application.Features.LinkSets;
+using SIRIAUTOPOST.Application.Features.MasterPosts;
 using SIRIAUTOPOST.Application.Features.Notifications;
 using SIRIAUTOPOST.Application.Features.Reports;
 using SIRIAUTOPOST.Application.Features.Team;
@@ -113,6 +114,19 @@ public static class DependencyInjection
         services.AddCommand<UpdateCollectionPostCommand, CollectionPostDto, UpdateCollectionPostCommandHandler>();
         services.AddCommand<DeleteCollectionPostCommand, Unit, DeleteCollectionPostCommandHandler>();
         services.AddCommand<CollectionPostApprovalCommand, CollectionPostDto, CollectionPostApprovalCommandHandler>();
+        services.AddCommand<AddPostsToCollectionCommand, CollectionDto, AddPostsToCollectionCommandHandler>();
+
+        // Post library ("คลังโพสต์"): master posts that manage themselves and sit in any number of collections
+        services.AddScoped<CollectionPostViews>();
+        services.AddScoped<CollectionPostSync>();
+        services.AddQuery<GetMasterPostsQuery, IReadOnlyList<CollectionPostDto>, GetMasterPostsQueryHandler>();
+        services.AddQuery<GetMasterPostActivityQuery, IReadOnlyList<CollectionPostActivityDto>, GetMasterPostActivityQueryHandler>();
+        services.AddCommand<CreateMasterPostCommand, CollectionPostDto, CreateMasterPostCommandHandler>();
+        services.AddCommand<UpdateMasterPostCommand, CollectionPostDto, UpdateMasterPostCommandHandler>();
+        services.AddCommand<SetMasterPostActiveCommand, CollectionPostDto, SetMasterPostActiveCommandHandler>();
+        services.AddCommand<DeleteMasterPostCommand, Unit, DeleteMasterPostCommandHandler>();
+        services.AddCommand<MasterPostApprovalCommand, CollectionPostDto, MasterPostApprovalCommandHandler>();
+        services.AddCommand<BulkMasterPostsCommand, BulkMasterPostsResultDto, BulkMasterPostsCommandHandler>();
 
         // Link sets ("ชุดลิงก์กลุ่ม")
         services.AddQuery<GetLinkSetsQuery, IReadOnlyList<LinkSetDto>, GetLinkSetsQueryHandler>();

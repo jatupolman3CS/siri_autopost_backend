@@ -269,6 +269,75 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
         return result;
     }
 
+    public async Task<Dictionary<Guid, IReadOnlyList<Guid>>> ListAllCollectionPostIdsByLinkAsync(
+        IEnumerable<Guid> linkIds, CancellationToken ct = default)
+    {
+        var ids = linkIds.Distinct().ToArray();
+        var result = new Dictionary<Guid, IReadOnlyList<Guid>>();
+        if (ids.Length == 0) return result;
+        var rows = await db.Database.SqlQuery<RecentUse>($"""
+            SELECT DISTINCT p.link_id, p.collection_post_id
+            FROM "POSTS" p
+            WHERE p.link_id = ANY({ids}) AND p.collection_post_id IS NOT NULL
+              AND p.status IN ('Queued', 'Waiting', 'Posting', 'Success', 'Pending')
+            """).ToListAsync(ct);
+        foreach (var g in rows.GroupBy(r => r.LinkId)) result[g.Key] = g.Select(r => r.CollectionPostId).ToList();
+        return result;
+    }
+
+    // ---- master posts ----
+
+    public async Task<IReadOnlyList<Post>> ListFutureQueuedByCollectionPostAsync(
+        IEnumerable<Guid> collectionPostIds, DateTimeOffset now, CancellationToken ct = default)
+    {
+        var ids = collectionPostIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+        return await db.Posts
+            .Where(x => x.CollectionPostId != null && ids.Contains(x.CollectionPostId.Value) && x.ScheduleId != null &&
+                        x.Status == PostStatus.Queued && x.ScheduledAt > now)
+            .ToListAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<(Guid CollectionPostId, DateTimeOffset ScheduledAt)>> ListScheduledAtByCollectionPostAsync(
+        IEnumerable<Guid> collectionPostIds, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default)
+    {
+        var ids = collectionPostIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+        var rows = await db.Posts.AsNoTracking()
+            .Where(x => x.CollectionPostId != null && ids.Contains(x.CollectionPostId.Value) && !x.IsTest &&
+                        x.ScheduledAt >= from && x.ScheduledAt < to && x.Status != PostStatus.Failed && x.Status != PostStatus.Skipped)
+            .Select(x => new { Id = x.CollectionPostId!.Value, x.ScheduledAt })
+            .ToListAsync(ct);
+        return rows.Select(r => (r.Id, r.ScheduledAt)).ToList();
+    }
+
+    public async Task<Dictionary<Guid, CollectionPostUsage>> UsageByCollectionPostAsync(
+        Guid workspaceId, DateTimeOffset now, CancellationToken ct = default)
+    {
+        var rows = await db.Posts.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && x.CollectionPostId != null && !x.IsTest)
+            .GroupBy(x => x.CollectionPostId!.Value)
+            .Select(g => new
+            {
+                g.Key,
+                Queued = g.Count(p => p.Status == PostStatus.Queued || p.Status == PostStatus.Waiting || p.Status == PostStatus.Posting),
+                Posted = g.Count(p => p.Status == PostStatus.Success || p.Status == PostStatus.Pending),
+                Failed = g.Count(p => p.Status == PostStatus.Failed && !p.ErrorDismissed),
+                Last = g.Max(p => p.PublishedAt),
+                Next = g.Where(p => p.Status == PostStatus.Queued && p.ScheduledAt > now).Min(p => (DateTimeOffset?)p.ScheduledAt),
+            })
+            .ToListAsync(ct);
+        return rows.ToDictionary(r => r.Key, r => new CollectionPostUsage(r.Queued, r.Posted, r.Failed, r.Last, r.Next));
+    }
+
+    public async Task<IReadOnlyList<Post>> ListRecentByCollectionPostAsync(
+        Guid workspaceId, Guid collectionPostId, int take, CancellationToken ct = default) =>
+        await db.Posts.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && x.CollectionPostId == collectionPostId && !x.IsTest)
+            .OrderByDescending(x => x.ScheduledAt).ThenBy(x => x.Id)
+            .Take(take)
+            .ToListAsync(ct);
+
     // ---- limits and health ----
 
     public Task<int> CountPublishedInWorkspaceSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default) =>
@@ -655,8 +724,28 @@ public sealed class CollectionPostRepository(AppDbContext db) : ICollectionPostR
         await db.CollectionPosts.AsNoTracking().Where(x => x.WorkspaceId == workspaceId).OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).ToListAsync(ct);
 
     public async Task<IReadOnlyList<CollectionPost>> ListByCollectionAsync(Guid workspaceId, Guid collectionId, CancellationToken ct = default) =>
-        await db.CollectionPosts.Where(x => x.WorkspaceId == workspaceId && x.CollectionId == collectionId)
+        await db.CollectionPosts
+            .Where(x => x.WorkspaceId == workspaceId && db.CollectionMembers.Any(m => m.CollectionId == collectionId && m.PostId == x.Id))
             .OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<CollectionMember>> ListMembersAsync(Guid workspaceId, CancellationToken ct = default) =>
+        await db.CollectionMembers.AsNoTracking().Where(x => x.WorkspaceId == workspaceId).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<CollectionMember>> ListMembersOfPostAsync(Guid workspaceId, Guid postId, CancellationToken ct = default) =>
+        await db.CollectionMembers.Where(x => x.WorkspaceId == workspaceId && x.PostId == postId).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<CollectionMember>> ListMembersOfCollectionsAsync(
+        Guid workspaceId, IEnumerable<Guid> collectionIds, CancellationToken ct = default)
+    {
+        var ids = collectionIds.Distinct().ToList();
+        return await db.CollectionMembers.Where(x => x.WorkspaceId == workspaceId && ids.Contains(x.CollectionId)).ToListAsync(ct);
+    }
+
+    public void AddMember(CollectionMember member) => db.CollectionMembers.Add(member);
+
+    public void AddMembers(IEnumerable<CollectionMember> members) => db.CollectionMembers.AddRange(members);
+
+    public void RemoveMembers(IEnumerable<CollectionMember> members) => db.CollectionMembers.RemoveRange(members);
 
     public Task<CollectionPost?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
         db.CollectionPosts.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);

@@ -6,7 +6,10 @@ namespace SIRIAUTOPOST.Application.DTOs;
 // replaced by names. No secrets: the Telegram and LINE tokens and chat ids stay out, and a restore leaves the ones the
 // workspace has. The file is what GET backup answers and what POST restore takes.
 
-public sealed record BackupPostDto(string Text, IReadOnlyList<Guid> MediaIds, PostApproval Approval);
+/// <param name="Key">Ties the copies of one post that sits in several collections together; a post without one is its own.</param>
+public sealed record BackupPostDto(
+    string Text, IReadOnlyList<Guid> MediaIds, PostApproval Approval, bool Active = true, CollectionPostSettingsDto? Settings = null, string? Key = null);
+
 
 public sealed record BackupCollectionDto(
     string Name, string Description, string Icon, CollectionSettingsDto Settings, IReadOnlyList<BackupPostDto> Posts);
@@ -22,7 +25,7 @@ public sealed record BackupLinkSetDto(string Name, Guid? PostAsAccountId, IReadO
 public sealed record BackupScheduleDto(
     string Name, string Collection, string LinkSet, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
-    IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes);
+    IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, PostRepeat Repeat = PostRepeat.Recent);
 
 /// <param name="Url">The group's address inside its set.</param>
 public sealed record BackupGroupNotifyRuleDto(string Url, NotifyChannel Channel, NotifyEventsDto? Events);
@@ -42,7 +45,8 @@ public sealed record BackupAutoReplyDto(bool On, IReadOnlyList<BackupAutoReplyRu
 /// <param name="AntiBanAdvanced">The advanced anti-ban numbers; null leaves them as they are on restore.</param>
 /// <param name="NotificationRules">null leaves the workspace's rules as they are on restore.</param>
 /// <param name="AutoReply">null leaves the workspace's rules as they are on restore.</param>
+/// <param name="Posts">Posts of the library that sit in no collection (the ones in a collection are inside it, a post in several carries the same key in each).</param>
 public sealed record BackupDto(
     int Version, DateTimeOffset CreatedAt, IReadOnlyList<BackupCollectionDto> Collections, IReadOnlyList<BackupLinkSetDto> LinkSets,
     IReadOnlyList<BackupScheduleDto> Schedules, AdvancedAntiBanDto? AntiBanAdvanced, BackupNotificationsDto? NotificationRules,
-    BackupAutoReplyDto? AutoReply);
+    BackupAutoReplyDto? AutoReply, IReadOnlyList<BackupPostDto>? Posts = null);

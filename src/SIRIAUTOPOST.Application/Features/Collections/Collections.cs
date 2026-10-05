@@ -9,8 +9,8 @@ using SIRIAUTOPOST.Domain.Interfaces;
 
 namespace SIRIAUTOPOST.Application.Features.Collections;
 
-// Collections ("ชุดโพสต์"): named sets of library posts with composing settings and an optional approval flow.
-// Viewers read, editors write, admins approve.
+// Collections ("ชุดโพสต์"): named sets of master posts with composing settings and an optional approval flow. A master
+// post (the library, Features/MasterPosts) may sit in several collections. Viewers read, editors write, admins approve.
 
 /// <summary>Shared lookups of the collection handlers.</summary>
 internal static class CollectionLookups
@@ -28,48 +28,58 @@ internal static class CollectionLookups
     public static async Task EnsureRoomForPostsAsync(ICollectionPostRepository posts, Guid workspaceId, int adding, CancellationToken ct)
     {
         if (await posts.CountAsync(workspaceId, ct) + adding > CollectionPost.MaxPerWorkspace)
-            throw new DomainException($"เก็บโพสต์ในชุดโพสต์ได้ไม่เกิน {CollectionPost.MaxPerWorkspace:N0} โพสต์ต่อเวิร์กสเปซ");
+            throw new DomainException($"เก็บโพสต์ในคลังโพสต์ได้ไม่เกิน {CollectionPost.MaxPerWorkspace:N0} โพสต์ต่อเวิร์กสเปซ");
     }
 
     public static async Task<CollectionDto> ViewAsync(
-        PostCollection c, ICollectionPostRepository posts, IPostRepository postRepo, IScheduleRepository schedules, CancellationToken ct)
+        PostCollection c, CollectionPostViews views, IScheduleRepository schedules, CancellationToken ct)
     {
-        var list = await posts.ListByCollectionAsync(c.WorkspaceId, c.Id, ct);
-        var posted = await postRepo.CountPostedByCollectionPostAsync(c.WorkspaceId, ct);
+        var list = await views.ForCollectionAsync(c.WorkspaceId, c.Id, ct);
         var scheduleCount = (await schedules.ListByCollectionAsync(c.WorkspaceId, c.Id, ct)).Count;
-        return CollectionDto.From(c, list.Select(p => CollectionPostDto.From(p, posted.GetValueOrDefault(p.Id))).ToList(), scheduleCount);
+        return CollectionDto.From(c, list, scheduleCount);
     }
 
-    public static async Task<CollectionPostDto> ViewAsync(CollectionPost p, IPostRepository postRepo, CancellationToken ct) =>
-        CollectionPostDto.From(p, (await postRepo.CountPostedByCollectionPostAsync(p.WorkspaceId, ct)).GetValueOrDefault(p.Id));
+    /// <summary>The post as a member of this collection, or a 404 (a post of the library that is not in it is not "in the collection").</summary>
+    public static async Task<(CollectionPost Post, CollectionMember Member)> RequireMemberAsync(
+        ICollectionPostRepository posts, Guid workspaceId, Guid collectionId, Guid postId, CancellationToken ct)
+    {
+        var post = await posts.GetAsync(workspaceId, postId, ct);
+        var member = post is null ? null : (await posts.ListMembersOfPostAsync(workspaceId, postId, ct)).FirstOrDefault(m => m.CollectionId == collectionId);
+        if (post is null || member is null) throw new NotFoundException("โพสต์ในชุดโพสต์", postId);
+        return (post, member);
+    }
+
+    /// <summary>Does any collection the post sits in require approval? Then a change of its content sends it back to draft.</summary>
+    public static async Task<bool> AnyRequiresApprovalAsync(
+        ICollectionRepository collections, ICollectionPostRepository posts, Guid workspaceId, Guid postId, CancellationToken ct)
+    {
+        var ids = (await posts.ListMembersOfPostAsync(workspaceId, postId, ct)).Select(m => m.CollectionId).ToHashSet();
+        return ids.Count > 0 && (await collections.ListAsync(workspaceId, ct)).Any(c => ids.Contains(c.Id) && c.Settings.RequireApproval);
+    }
 }
 
 public sealed record GetCollectionsQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<CollectionDto>>;
 
 /// <summary>Every collection with its posts (oldest first), how often each was posted and how many schedules use it.</summary>
 public sealed class GetCollectionsQueryHandler(
-    IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IPostRepository postRepo,
-    IScheduleRepository schedules, ICurrentUser current)
+    IWorkspaceRepository workspaces, ICollectionRepository collections, CollectionPostViews views, IScheduleRepository schedules, ICurrentUser current)
     : IQueryHandler<GetCollectionsQuery, IReadOnlyList<CollectionDto>>
 {
     public async Task<IReadOnlyList<CollectionDto>> HandleAsync(GetCollectionsQuery q, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
         var all = await collections.ListAsync(q.WorkspaceId, ct);
-        var byCollection = (await posts.ListAsync(q.WorkspaceId, ct)).ToLookup(p => p.CollectionId);
-        var posted = await postRepo.CountPostedByCollectionPostAsync(q.WorkspaceId, ct);
+        var posts = await views.ListAsync(q.WorkspaceId, ct);
         var used = (await schedules.ListAsync(q.WorkspaceId, ct)).ToLookup(s => s.CollectionId);
-        return all.Select(c => CollectionDto.From(
-                c, byCollection[c.Id].Select(p => CollectionPostDto.From(p, posted.GetValueOrDefault(p.Id))).ToList(), used[c.Id].Count()))
-            .ToList();
+        return all.Select(c => CollectionDto.From(c, posts.Where(p => p.CollectionIds.Contains(c.Id)).ToList(), used[c.Id].Count())).ToList();
     }
 }
 
 public sealed record CreateCollectionCommand(Guid WorkspaceId, string Name, string? Description) : ICommand<CollectionDto>;
 
 public sealed class CreateCollectionCommandHandler(
-    IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IPostRepository postRepo,
-    IScheduleRepository schedules, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, ICollectionRepository collections, CollectionPostViews views, IScheduleRepository schedules,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreateCollectionCommand, CollectionDto>
 {
     public async Task<CollectionDto> HandleAsync(CreateCollectionCommand c, CancellationToken ct = default)
@@ -80,7 +90,7 @@ public sealed class CreateCollectionCommandHandler(
         var collection = PostCollection.Create(c.WorkspaceId, c.Name, c.Description, clock.GetUtcNow(), await collections.MaxSortOrderAsync(c.WorkspaceId, ct) + 1);
         collections.Add(collection);
         await uow.SaveChangesAsync(ct);
-        return await CollectionLookups.ViewAsync(collection, posts, postRepo, schedules, ct);
+        return await CollectionLookups.ViewAsync(collection, views, schedules, ct);
     }
 }
 
@@ -93,8 +103,8 @@ public sealed record UpdateCollectionCommand(
     Guid WorkspaceId, Guid CollectionId, string Name, string? Description, string? Icon, CollectionSettingsDto Settings) : ICommand<CollectionDto>;
 
 public sealed class UpdateCollectionCommandHandler(
-    IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IPostRepository postRepo,
-    IScheduleRepository schedules, ICurrentUser current, IUnitOfWork uow)
+    IWorkspaceRepository workspaces, ICollectionRepository collections, CollectionPostViews views, IScheduleRepository schedules,
+    ICurrentUser current, IUnitOfWork uow)
     : ICommandHandler<UpdateCollectionCommand, CollectionDto>
 {
     public async Task<CollectionDto> HandleAsync(UpdateCollectionCommand c, CancellationToken ct = default)
@@ -106,7 +116,7 @@ public sealed class UpdateCollectionCommandHandler(
             throw new ForbiddenException("การเปิดหรือปิดการอนุมัติโพสต์ต้องเป็นผู้ดูแล (admin) ขึ้นไป");
         collection.Update(c.Name, c.Description, c.Icon, c.Settings.ToSettings());
         await uow.SaveChangesAsync(ct);
-        return await CollectionLookups.ViewAsync(collection, posts, postRepo, schedules, ct);
+        return await CollectionLookups.ViewAsync(collection, views, schedules, ct);
     }
 }
 
@@ -117,8 +127,8 @@ public sealed class UpdateCollectionCommandHandler(
 public sealed record SetCollectionActiveCommand(Guid WorkspaceId, Guid CollectionId, bool Active) : ICommand<CollectionDto>;
 
 public sealed class SetCollectionActiveCommandHandler(
-    IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IPostRepository postRepo,
-    IScheduleRepository schedules, ScheduleSync sync, ScheduleTopUp topUp, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, ICollectionRepository collections, CollectionPostViews views, IScheduleRepository schedules,
+    ScheduleSync sync, ScheduleTopUp topUp, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SetCollectionActiveCommand, CollectionDto>
 {
     public async Task<CollectionDto> HandleAsync(SetCollectionActiveCommand c, CancellationToken ct = default)
@@ -133,11 +143,11 @@ public sealed class SetCollectionActiveCommandHandler(
             await uow.SaveChangesAsync(ct);
             if (c.Active) await SourceTopUp.RunAsync(topUp, c.WorkspaceId, used, ct);
         }
-        return await CollectionLookups.ViewAsync(collection, posts, postRepo, schedules, ct);
+        return await CollectionLookups.ViewAsync(collection, views, schedules, ct);
     }
 }
 
-/// <summary>Deletes a collection and its posts. Refused while a schedule uses it.</summary>
+/// <summary>Deletes a collection (its posts stay in the library). Refused while a schedule uses it.</summary>
 public sealed record DeleteCollectionCommand(Guid WorkspaceId, Guid CollectionId) : ICommand<Unit>;
 
 public sealed class DeleteCollectionCommandHandler(
@@ -157,24 +167,27 @@ public sealed class DeleteCollectionCommandHandler(
     }
 }
 
+/// <summary>Writes a new post straight into a collection: it joins the library and sits in this collection.</summary>
 public sealed record AddCollectionPostCommand(Guid WorkspaceId, Guid CollectionId, string Text, IReadOnlyList<Guid>? MediaIds)
     : ICommand<CollectionPostDto>;
 
 public sealed class AddCollectionPostCommandHandler(
     IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IMediaRepository media,
-    IPostRepository postRepo, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    CollectionPostViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AddCollectionPostCommand, CollectionPostDto>
 {
     public async Task<CollectionPostDto> HandleAsync(AddCollectionPostCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var collection = await CollectionLookups.RequireAsync(collections, c.WorkspaceId, c.CollectionId, ct);
-        var post = CollectionPost.Create(collection, c.Text, c.MediaIds, clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        var post = CollectionPost.Create(collection, c.Text, c.MediaIds, now);
         await CollectionLookups.EnsureMediaExistAsync(media, c.WorkspaceId, post.MediaIds, ct);
         await CollectionLookups.EnsureRoomForPostsAsync(posts, c.WorkspaceId, 1, ct);
         posts.Add(post);
+        posts.AddMember(CollectionMember.Create(c.WorkspaceId, collection.Id, post.Id, now));
         await uow.SaveChangesAsync(ct);
-        return await CollectionLookups.ViewAsync(post, postRepo, ct);
+        return await views.OneAsync(post, ct);
     }
 }
 
@@ -184,7 +197,7 @@ public sealed record AddCollectionPostsBatchCommand(Guid WorkspaceId, Guid Colle
 
 public sealed class AddCollectionPostsBatchCommandHandler(
     IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IMediaRepository media,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    CollectionPostViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AddCollectionPostsBatchCommand, IReadOnlyList<CollectionPostDto>>
 {
     public const int MaxItems = 20;
@@ -198,50 +211,100 @@ public sealed class AddCollectionPostsBatchCommandHandler(
         await CollectionLookups.EnsureMediaExistAsync(media, c.WorkspaceId, created.SelectMany(p => p.MediaIds), ct);
         await CollectionLookups.EnsureRoomForPostsAsync(posts, c.WorkspaceId, created.Count, ct);
         posts.AddRange(created);
+        posts.AddMembers(created.Select(p => CollectionMember.Create(c.WorkspaceId, collection.Id, p.Id, now)));
         await uow.SaveChangesAsync(ct);
-        return created.Select(p => CollectionPostDto.From(p, 0)).ToList();
+        return await views.BuildAsync(c.WorkspaceId, created, ct);
     }
 }
 
-/// <summary>Changes a post's text and media, and moves it to another collection when <paramref name="TargetCollectionId"/> says so.</summary>
+/// <summary>Puts posts of the library into a collection (the ones already in it stay as they are).</summary>
+public sealed record AddPostsToCollectionCommand(Guid WorkspaceId, Guid CollectionId, IReadOnlyList<Guid> PostIds)
+    : ICommand<CollectionDto>;
+
+public sealed class AddPostsToCollectionCommandHandler(
+    IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, CollectionPostViews views,
+    IScheduleRepository schedules, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<AddPostsToCollectionCommand, CollectionDto>
+{
+    public const int MaxItems = 500;
+
+    public async Task<CollectionDto> HandleAsync(AddPostsToCollectionCommand c, CancellationToken ct = default)
+    {
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var collection = await CollectionLookups.RequireAsync(collections, c.WorkspaceId, c.CollectionId, ct);
+        var wanted = c.PostIds.Distinct().ToList();
+        var found = await posts.ListByIdsAsync(c.WorkspaceId, wanted, ct);
+        if (found.Count != wanted.Count) throw new DomainException("ไม่พบโพสต์บางรายการในคลังโพสต์");
+        var already = (await posts.ListMembersOfCollectionsAsync(c.WorkspaceId, [collection.Id], ct)).Select(m => m.PostId).ToHashSet();
+        var now = clock.GetUtcNow();
+        // A post may sit in at most MaxCollections collections.
+        var counts = (await posts.ListMembersAsync(c.WorkspaceId, ct)).GroupBy(m => m.PostId).ToDictionary(g => g.Key, g => g.Count());
+        var adding = found.Where(p => !already.Contains(p.Id)).ToList();
+        if (adding.Any(p => counts.GetValueOrDefault(p.Id) >= CollectionPost.MaxCollections))
+            throw new DomainException($"โพสต์หนึ่งอยู่ได้ไม่เกิน {CollectionPost.MaxCollections} ชุดโพสต์");
+        posts.AddMembers(adding.Select(p => CollectionMember.Create(c.WorkspaceId, collection.Id, p.Id, now)));
+        await uow.SaveChangesAsync(ct);
+        return await CollectionLookups.ViewAsync(collection, views, schedules, ct);
+    }
+}
+
+/// <summary>
+/// Changes a post's text and media from the collection's screen, and moves it to another collection when
+/// <paramref name="TargetCollectionId"/> says so (it leaves this one and joins the other).
+/// </summary>
 public sealed record UpdateCollectionPostCommand(
     Guid WorkspaceId, Guid CollectionId, Guid PostId, string Text, IReadOnlyList<Guid>? MediaIds, Guid? TargetCollectionId)
     : ICommand<CollectionPostDto>;
 
 public sealed class UpdateCollectionPostCommandHandler(
     IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IMediaRepository media,
-    IPostRepository postRepo, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    CollectionPostViews views, CollectionPostSync sync, ScheduleTopUp topUp, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateCollectionPostCommand, CollectionPostDto>
 {
     public async Task<CollectionPostDto> HandleAsync(UpdateCollectionPostCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var collection = await CollectionLookups.RequireAsync(collections, c.WorkspaceId, c.CollectionId, ct);
-        var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct);
-        if (post is null || post.CollectionId != collection.Id) throw new NotFoundException("โพสต์ในชุดโพสต์", c.PostId);
+        var (post, member) = await CollectionLookups.RequireMemberAsync(posts, c.WorkspaceId, collection.Id, c.PostId, ct);
         await CollectionLookups.EnsureMediaExistAsync(media, c.WorkspaceId, c.MediaIds, ct);
         var now = clock.GetUtcNow();
-        post.Edit(c.Text, c.MediaIds, collection, now);
+        var memberIds = (await posts.ListMembersOfPostAsync(c.WorkspaceId, post.Id, ct)).Select(m => m.CollectionId).ToList();
+        var requireApproval = await CollectionLookups.AnyRequiresApprovalAsync(collections, posts, c.WorkspaceId, post.Id, ct);
+        var before = (post.Text, post.MediaIds.ToList());
+        post.Edit(c.Text, c.MediaIds, requireApproval, now);
+        var changed = before.Text != post.Text || !before.Item2.SequenceEqual(post.MediaIds);
+
+        var affected = changed ? memberIds : [];
         if (c.TargetCollectionId is { } target && target != collection.Id)
-            post.Move(await CollectionLookups.RequireAsync(collections, c.WorkspaceId, target, ct), now);
+        {
+            var targetCollection = await CollectionLookups.RequireAsync(collections, c.WorkspaceId, target, ct);
+            posts.RemoveMembers([member]);
+            if (!memberIds.Contains(targetCollection.Id)) posts.AddMember(CollectionMember.Create(c.WorkspaceId, targetCollection.Id, post.Id, now));
+            affected = [.. affected, collection.Id];
+        }
+        var schedules = await sync.ChangedAsync(c.WorkspaceId, [post.Id], affected, dropQueued: true, now, ct);
         await uow.SaveChangesAsync(ct);
-        return await CollectionLookups.ViewAsync(post, postRepo, ct);
+        await SourceTopUp.RunAsync(topUp, c.WorkspaceId, schedules, ct);
+        return await views.OneAsync(post, ct);
     }
 }
 
+/// <summary>Takes a post out of a collection. The post itself stays in the library.</summary>
 public sealed record DeleteCollectionPostCommand(Guid WorkspaceId, Guid CollectionId, Guid PostId) : ICommand<Unit>;
 
 public sealed class DeleteCollectionPostCommandHandler(
-    IWorkspaceRepository workspaces, ICollectionPostRepository posts, ICurrentUser current, IUnitOfWork uow)
+    IWorkspaceRepository workspaces, ICollectionPostRepository posts, CollectionPostSync sync, ScheduleTopUp topUp, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<DeleteCollectionPostCommand, Unit>
 {
     public async Task<Unit> HandleAsync(DeleteCollectionPostCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
-        var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct);
-        if (post is null || post.CollectionId != c.CollectionId) throw new NotFoundException("โพสต์ในชุดโพสต์", c.PostId);
-        posts.Remove(post);
+        var (post, member) = await CollectionLookups.RequireMemberAsync(posts, c.WorkspaceId, c.CollectionId, c.PostId, ct);
+        posts.RemoveMembers([member]);
+        var schedules = await sync.ChangedAsync(c.WorkspaceId, [post.Id], [c.CollectionId], dropQueued: true, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
+        await SourceTopUp.RunAsync(topUp, c.WorkspaceId, schedules, ct);
         return Unit.Value;
     }
 }
@@ -251,15 +314,14 @@ public sealed record CollectionPostApprovalCommand(Guid WorkspaceId, Guid Collec
     : ICommand<CollectionPostDto>;
 
 public sealed class CollectionPostApprovalCommandHandler(
-    IWorkspaceRepository workspaces, ICollectionPostRepository posts, IPostRepository postRepo, ICurrentUser current,
+    IWorkspaceRepository workspaces, ICollectionPostRepository posts, CollectionPostViews views, ICurrentUser current,
     IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CollectionPostApprovalCommand, CollectionPostDto>
 {
     public async Task<CollectionPostDto> HandleAsync(CollectionPostApprovalCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, c.Action == ApprovalAction.Request ? WorkspaceRole.Editor : WorkspaceRole.Admin, ct);
-        var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct);
-        if (post is null || post.CollectionId != c.CollectionId) throw new NotFoundException("โพสต์ในชุดโพสต์", c.PostId);
+        var (post, _) = await CollectionLookups.RequireMemberAsync(posts, c.WorkspaceId, c.CollectionId, c.PostId, ct);
         var now = clock.GetUtcNow();
         switch (c.Action)
         {
@@ -268,6 +330,6 @@ public sealed class CollectionPostApprovalCommandHandler(
             default: post.Reject(now); break;
         }
         await uow.SaveChangesAsync(ct);
-        return await CollectionLookups.ViewAsync(post, postRepo, ct);
+        return await views.OneAsync(post, ct);
     }
 }

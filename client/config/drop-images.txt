@@ -1,59 +1,59 @@
-# รูปที่มีไลน์ Teach_pp (ข้อความหรือ QR ไปบัญชีนั้น) เอาออกจากทุกโพสต์
+# รูปที่มีไลน์บัญชีเก่า (ข้อความหรือ QR ไปบัญชีนั้น) เอาออกจากทุกโพสต์
 # ใช้กับ: node tools/siri-to-config.mjs ... --drop-images config/drop-images.txt
 # หนึ่งบรรทัดต่อหนึ่งรูป (id ของรูปใน SIRI export) หลัง # คือหมายเหตุ
 
-siri-05473e5e321d0eedb771 # P076_3.jpg (มี @970wfiou ด้วย)
-siri-0682ffbd4b4c8df8cf38 # P078_3.jpg (มี @970wfiou ด้วย)
-siri-0731fb9d427e68399637 # P027_2.jpg (QR ไป Teach_pp)
-siri-0a5aba6941b054482a67 # P001_2.jpg (มี @970wfiou ด้วย)
+siri-05473e5e321d0eedb771 # P076_3.jpg (มี ID ไลน์เก่าด้วย)
+siri-0682ffbd4b4c8df8cf38 # P078_3.jpg (มี ID ไลน์เก่าด้วย)
+siri-0731fb9d427e68399637 # P027_2.jpg (QR ไปบัญชีไลน์เก่า)
+siri-0a5aba6941b054482a67 # P001_2.jpg (มี ID ไลน์เก่าด้วย)
 siri-1e4adffcf0e35d643c90 # P077_4.jpg
 siri-1e8fa4c3338f43d7e15b # P043_3.jpg
-siri-1fc8f122061987fff914 # P003_3.jpg (QR ไป Teach_pp)
+siri-1fc8f122061987fff914 # P003_3.jpg (QR ไปบัญชีไลน์เก่า)
 siri-22c2349b95d6a53a2ab7 # P033_1.jpg
-siri-2d67647d5cf00793ac86 # P030_2.jpg (มี @970wfiou ด้วย)
+siri-2d67647d5cf00793ac86 # P030_2.jpg (มี ID ไลน์เก่าด้วย)
 siri-2e501c1c19a0768e95fe # P014_2.jpg
-siri-3824793fab06d5988d7a # P046_4.jpg (QR ไป Teach_pp)
+siri-3824793fab06d5988d7a # P046_4.jpg (QR ไปบัญชีไลน์เก่า)
 siri-3ac882404950d7ca3083 # P077_1.jpg
-siri-4bb2b72d9ff42dddfc98 # P020_3.jpg (มี @970wfiou ด้วย)
-siri-519cd2ceb5d5e4abaee0 # P005_1.jpg (มี @970wfiou ด้วย)
+siri-4bb2b72d9ff42dddfc98 # P020_3.jpg (มี ID ไลน์เก่าด้วย)
+siri-519cd2ceb5d5e4abaee0 # P005_1.jpg (มี ID ไลน์เก่าด้วย)
 siri-5f2f72971f98981ad670 # P028_5.jpg
-siri-6c2c7664e6c21d4ac867 # P003_1.jpg (QR ไป Teach_pp)
-siri-6ddc14a94711a33859c7 # P001_4.jpg (มี @970wfiou ด้วย)
-siri-6f0114e5dbebf7aa85be # P030_5.jpg (มี @970wfiou ด้วย)
+siri-6c2c7664e6c21d4ac867 # P003_1.jpg (QR ไปบัญชีไลน์เก่า)
+siri-6ddc14a94711a33859c7 # P001_4.jpg (มี ID ไลน์เก่าด้วย)
+siri-6f0114e5dbebf7aa85be # P030_5.jpg (มี ID ไลน์เก่าด้วย)
 siri-730ed52dc482cdcd9d44 # P027_1.jpg
-siri-744ccbc33ce5002da56c # P014_3.jpg (QR ไป Teach_pp)
-siri-75dc520c31be64de837e # P071_1.jpg (มี @970wfiou ด้วย)
+siri-744ccbc33ce5002da56c # P014_3.jpg (QR ไปบัญชีไลน์เก่า)
+siri-75dc520c31be64de837e # P071_1.jpg (มี ID ไลน์เก่าด้วย)
 siri-7a78ebd5e26960e5a0a4 # P040_2.jpg
 siri-7d44a8e79084437f0e74 # P032_2.jpg
-siri-8cd674286d3b4c64c886 # P007_2.jpg (มี @970wfiou ด้วย)
-siri-8d065f2e2f514e17b5e5 # P032_4.jpg (มี @970wfiou ด้วย)
-siri-94d3840831f7fe13e5b6 # P040_3.jpg (QR ไป Teach_pp)
+siri-8cd674286d3b4c64c886 # P007_2.jpg (มี ID ไลน์เก่าด้วย)
+siri-8d065f2e2f514e17b5e5 # P032_4.jpg (มี ID ไลน์เก่าด้วย)
+siri-94d3840831f7fe13e5b6 # P040_3.jpg (QR ไปบัญชีไลน์เก่า)
 siri-9518d3409a845c4cd551 # P077_5.jpg
 siri-9b7f4ad84a0c9e2825f3 # P077_3.jpg
-siri-9bf132857e622535b4fe # P043_2.jpg (QR ไป Teach_pp)
-siri-a4e4dd29c2e854baf2c9 # P028_3.jpg (QR ไป Teach_pp)
-siri-a6760fc3e5f862586d3e # P025_4.jpg (มี @970wfiou ด้วย)
+siri-9bf132857e622535b4fe # P043_2.jpg (QR ไปบัญชีไลน์เก่า)
+siri-a4e4dd29c2e854baf2c9 # P028_3.jpg (QR ไปบัญชีไลน์เก่า)
+siri-a6760fc3e5f862586d3e # P025_4.jpg (มี ID ไลน์เก่าด้วย)
 siri-b328846738dd5e4132e4 # P045_2.jpg
 siri-b48066e1c8e7c80737ed # P019_1.jpg
 siri-b90312a97174e960697f # P034_4.jpg
-siri-bd4e266f19f962ac1b13 # P033_3.jpg (มี @970wfiou ด้วย)
-siri-c08c2ec676bcaadd0747 # P028_4.jpg (QR ไป Teach_pp)
+siri-bd4e266f19f962ac1b13 # P033_3.jpg (มี ID ไลน์เก่าด้วย)
+siri-c08c2ec676bcaadd0747 # P028_4.jpg (QR ไปบัญชีไลน์เก่า)
 siri-c0acec8e448e580c14d1 # P004_1.jpg
-siri-c84039ddbc284e1003ad # P046_1.jpg (QR ไป Teach_pp)
-siri-cb6bb5c7cca2a10f8bdf # P010_4.jpg (QR ไป Teach_pp)
-siri-cd9141bda376e685466c # P003_2.jpg (QR ไป Teach_pp)
+siri-c84039ddbc284e1003ad # P046_1.jpg (QR ไปบัญชีไลน์เก่า)
+siri-cb6bb5c7cca2a10f8bdf # P010_4.jpg (QR ไปบัญชีไลน์เก่า)
+siri-cd9141bda376e685466c # P003_2.jpg (QR ไปบัญชีไลน์เก่า)
 siri-cf074bbba7947755dbe4 # P045_1.jpg
-siri-cf30918ff395e5419358 # P025_5.jpg (QR ไป Teach_pp)
-siri-d141b9b31bc240023fcb # P040_1.jpg (QR ไป Teach_pp)
-siri-d2d3cfb8811e92725ed5 # P043_4.jpg (QR ไป Teach_pp)
-siri-d82782a934801a6afd36 # P076_4.jpg (มี @970wfiou ด้วย)
-siri-dc3203976fc7dd0edf53 # P027_3.jpg (QR ไป Teach_pp)
+siri-cf30918ff395e5419358 # P025_5.jpg (QR ไปบัญชีไลน์เก่า)
+siri-d141b9b31bc240023fcb # P040_1.jpg (QR ไปบัญชีไลน์เก่า)
+siri-d2d3cfb8811e92725ed5 # P043_4.jpg (QR ไปบัญชีไลน์เก่า)
+siri-d82782a934801a6afd36 # P076_4.jpg (มี ID ไลน์เก่าด้วย)
+siri-dc3203976fc7dd0edf53 # P027_3.jpg (QR ไปบัญชีไลน์เก่า)
 siri-dcbfccc22b4ed91c0c25 # P064_4.jpg
 siri-e0dfa52bf4f4854c5a36 # P020_5.jpg
-siri-e42ec6750301e99efd9d # P064_2.jpg (มี @970wfiou ด้วย)
-siri-e57407cb85cb34d8b359 # P045_3.jpg (QR ไป Teach_pp)
-siri-e74d4f22bcd210c63370 # P029_4.jpg (มี @970wfiou ด้วย)
-siri-e96554c3317e76d3c909 # P027_5.jpg (QR ไป Teach_pp)
+siri-e42ec6750301e99efd9d # P064_2.jpg (มี ID ไลน์เก่าด้วย)
+siri-e57407cb85cb34d8b359 # P045_3.jpg (QR ไปบัญชีไลน์เก่า)
+siri-e74d4f22bcd210c63370 # P029_4.jpg (มี ID ไลน์เก่าด้วย)
+siri-e96554c3317e76d3c909 # P027_5.jpg (QR ไปบัญชีไลน์เก่า)
 siri-f01cf98a4f6c2f3ca419 # P077_2.jpg
-siri-f89c6b6d251a21db239e # P018_3.jpg (มี @970wfiou ด้วย)
-siri-f91e9701652cdb32bcf9 # P032_1.jpg (QR ไป Teach_pp)
+siri-f89c6b6d251a21db239e # P018_3.jpg (มี ID ไลน์เก่าด้วย)
+siri-f91e9701652cdb32bcf9 # P032_1.jpg (QR ไปบัญชีไลน์เก่า)

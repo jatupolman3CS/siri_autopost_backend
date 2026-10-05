@@ -6,7 +6,7 @@
 
 ไฟล์ที่ใช้สร้าง config จาก SIRI export (tools/siri-to-config.mjs ดู README.md หลัก):
   extra-groups.txt   กลุ่มที่เพิ่มจากรายการ
-  drop-images.txt    รูปที่เอาออกจากทุกโพสต์ (รูปที่มีไลน์ Teach_pp)
+  drop-images.txt    รูปที่เอาออกจากทุกโพสต์ (รูปที่มีไลน์บัญชีเก่า)
   image-fixes/       รูปที่เปลี่ยน QR เป็น @siristudiophoto แล้ว ชื่อไฟล์ = id รูปเดิม
   ส่วนขยายไม่ได้อ่านไฟล์กลุ่มนี้ตอนทำงาน ใช้เฉพาะตอนสร้าง autopost-config.json
 

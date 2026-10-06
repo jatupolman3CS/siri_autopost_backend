@@ -958,11 +958,27 @@ const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 const THAI_TYPO = 'กขคงจชซดตถทนบปผพฟมยรลวสหอเแาิีุู่้';
 const LATIN_TYPO = 'abcdefghijklmnopqrstuvwxyz';
 
+// The most a person may spend typing one post at each speed. A longer post is typed at a quicker pace, never pasted:
+// the whole post appearing at once is what makes a robot obvious (jobs from the web have no paste threshold).
+const TYPING_BUDGET_MS = { slow: 360000, normal: 240000, fast: 150000 };
+const MIN_PACE = 0.5; // never faster than twice the preset's own pace
+
+// About how long typeHuman needs for a text of `len` graphemes (bursts, pauses and line breaks included).
+function typingEstimateMs(len, speed) {
+  return Math.round(len * ((speed.min + speed.max) / 2) * 1.2);
+}
+
+// 1 = the preset's own pace; lower when the text would take longer than the budget.
+function typingPace(len, speed, budgetMs) {
+  const est = typingEstimateMs(len, speed);
+  return budgetMs > 0 && est > budgetMs ? Math.max(MIN_PACE, budgetMs / est) : 1;
+}
+
 // Types text grapheme by grapheme with bursts, pauses and corrected typos.
-// Line breaks never use the Enter key (see content.js newline).
-async function typeHuman(tabId, text, speed, typos, check) {
+// Line breaks never use the Enter key (see content.js newline). `pace` < 1 types faster (see typingPace).
+async function typeHuman(tabId, text, speed, typos, check, pace = 1) {
   const g = Array.from(segmenter.segment(text), (s) => s.segment);
-  const tempo = rand(0.8, 1.25); // each session types a bit differently
+  const tempo = rand(0.8, 1.25) * pace; // each session types a bit differently
   let i = 0;
   while (i < g.length) {
     check();
@@ -972,14 +988,15 @@ async function typeHuman(tabId, text, speed, typos, check) {
       await sleep(rand(speed.min * 2, speed.max * 5) * tempo);
       continue;
     }
-    const burst = randInt(1, 4);
+    // One character per keystroke most of the time; now and then a quick run of 2-3 (a practised hand), never more.
+    const burst = chance(65) ? 1 : randInt(2, 3);
     let chunk = '';
     let n = 0;
     while (i < g.length && n < burst && g[i] !== '\n') {
       chunk += g[i++];
       n++;
     }
-    if (typos && Math.random() < 0.035) {
+    if (typos && Math.random() < 0.012 * n) { // about one slip in 80 characters
       const first = chunk[0];
       const pool = /[฀-๿]/.test(first) ? THAI_TYPO : /[a-z]/i.test(first) ? LATIN_TYPO : null;
       if (pool) {
@@ -991,8 +1008,8 @@ async function typeHuman(tabId, text, speed, typos, check) {
     }
     await tabCmdOk(tabId, 'insert', { text: chunk });
     let d = rand(speed.min, speed.max) * n * tempo;
-    if (/[\s.,!?ๆฯ]$/.test(chunk) && Math.random() < 0.18) d += rand(300, 1400); // short think
-    if (Math.random() < 0.015) d += rand(1500, 4500); // longer pause
+    if (/[\s.,!?ๆฯ]$/.test(chunk) && Math.random() < 0.18) d += rand(300, 1400) * pace; // short think
+    if (Math.random() < 0.015) d += rand(1500, 4500) * pace; // longer pause
     await sleep(d);
   }
 }
@@ -1130,11 +1147,19 @@ async function postToGroup(url, post, cfg, global) {
     if (post.text) {
       const len = Array.from(segmenter.segment(post.text)).length;
       const paste = cfg.maxTypeChars > 0 && len > cfg.maxTypeChars;
+      const pace = paste ? 1 : typingPace(len, speed, cfg.typingBudgetMs);
+      // Which way the text goes in, and why: the device log in the web app shows it.
+      await log(
+        'info',
+        paste
+          ? `วางข้อความ ${len} ตัวอักษรทีเดียว (${cfg.maxTypeChars === 1 ? 'ปิด "จำลองการพิมพ์" ในหน้าป้องกันการโดนแบน' : `ยาวเกิน ${cfg.maxTypeChars} ตัวอักษร`})`
+          : `พิมพ์ข้อความ ${len} ตัวอักษรทีละตัว ใช้เวลาประมาณ ${Math.round((typingEstimateMs(len, speed) * pace) / 1000)} วินาที`,
+      );
       const parts = splitPageTags(post.text, cfg.pageTags);
       if (paste) await sleep(rand(800, 2000));
       if (!parts.some((p) => p.tag)) {
         if (paste) await tabCmdOk(tabId, 'setText', { text: post.text });
-        else await typeHuman(tabId, post.text, speed, cfg.typos, check);
+        else await typeHuman(tabId, post.text, speed, cfg.typos, check, pace);
       } else {
         for (const part of parts) {
           check();
@@ -1145,7 +1170,7 @@ async function postToGroup(url, post, cfg, global) {
             await tabCmdOk(tabId, 'paste', { text: part.text });
             await sleep(rand(300, 900));
           } else {
-            await typeHuman(tabId, part.text, speed, cfg.typos, check);
+            await typeHuman(tabId, part.text, speed, cfg.typos, check, pace);
           }
         }
       }
@@ -1998,7 +2023,9 @@ async function runCloudJob(c, job) {
     pageTags: typeof job.pageTags === 'string' ? job.pageTags : DEFAULT_CONFIG.pageTags,
     typingSpeed: ['slow', 'normal', 'fast'].includes(ab.typingSpeed) ? ab.typingSpeed : 'normal',
     typos: ab.typing !== false,
-    maxTypeChars: ab.typing === false ? 1 : DEFAULT_CONFIG.maxTypeChars, // typing off = paste
+    // Typing on = every post is typed, however long (a long one at a quicker pace); only the web's switch makes it a paste.
+    maxTypeChars: ab.typing === false ? 1 : 0,
+    typingBudgetMs: TYPING_BUDGET_MS[['slow', 'normal', 'fast'].includes(ab.typingSpeed) ? ab.typingSpeed : 'normal'],
     browseBeforePost: ab.scroll !== false,
   };
   const keys = [];
@@ -2084,7 +2111,7 @@ async function runCloudBump(c, job) {
     ...DEFAULT_CONFIG,
     typingSpeed: ['slow', 'normal', 'fast'].includes(ab.typingSpeed) ? ab.typingSpeed : 'normal',
     typos: ab.typing !== false,
-    maxTypeChars: ab.typing === false ? 1 : DEFAULT_CONFIG.maxTypeChars,
+    maxTypeChars: ab.typing === false ? 1 : 0, // typing on = typed, however long
     browseBeforePost: ab.scroll !== false,
   };
   const keys = [];

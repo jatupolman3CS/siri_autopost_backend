@@ -105,6 +105,8 @@ jobs:
           node-version: 24
       - name: Check the extension's scripts parse
         run: for f in client/*.js client/lib/*.js client/tools/*.mjs; do node --check "$f"; done
+      - name: Typing like a person (faked Chrome and web API: no server needed)
+        run: node client/tools/test-typing.mjs
       - name: Start the API (Development settings, fresh database)
         working-directory: src/SIRIAUTOPOST.Api
         env:

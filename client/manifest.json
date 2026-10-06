@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "FB Group Auto Poster (Human-like)",
   "short_name": "FB AutoPost",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "ตัวโพสต์ของ AutoPost: โพสต์ลงกลุ่มและเพจ Facebook (และดันโพสต์) ตามที่ตั้งค่าไว้บนเว็บ AutoPost แบบเลียนพฤติกรรมมนุษย์ และรายงานสถานะกลับไปที่เว็บ",
   "permissions": [
     "storage",

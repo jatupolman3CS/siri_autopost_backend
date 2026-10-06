@@ -169,7 +169,7 @@ public sealed record SetScheduleActiveCommand(Guid WorkspaceId, Guid ScheduleId,
 
 public sealed class SetScheduleActiveCommandHandler(
     IWorkspaceRepository workspaces, IScheduleRepository schedules, IPostRepository posts, ScheduleTopUp topUp, ScheduleViews views,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SetScheduleActiveCommand, ScheduleDto>
 {
     public async Task<ScheduleDto> HandleAsync(SetScheduleActiveCommand c, CancellationToken ct = default)
@@ -181,9 +181,11 @@ public sealed class SetScheduleActiveCommandHandler(
         {
             if (!c.Active)
             {
-                posts.RemoveRange(await posts.ListOpenByScheduleAsync(schedule.Id, ct));
+                var open = await posts.ListOpenByScheduleAsync(schedule.Id, ct);
+                posts.RemoveRange(open);
                 schedule.SetActive(false);
                 await uow.SaveChangesAsync(ct);
+                await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.SchedulePaused(schedule, open.Count)], ct);
             }
             else
             {
@@ -193,6 +195,7 @@ public sealed class SetScheduleActiveCommandHandler(
                     await uow.SaveChangesAsync(ct);
                     await topUp.GenerateAsync(ws.Id, schedule.Id, ct);
                 }, ct);
+                await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.ScheduleResumed(schedule)], ct);
             }
         }
         var saved = await schedules.GetAsync(ws.Id, schedule.Id, ct) ?? schedule;
@@ -224,16 +227,18 @@ public sealed class RenameScheduleCommandHandler(
 public sealed record DeleteScheduleCommand(Guid WorkspaceId, Guid ScheduleId) : ICommand<Unit>;
 
 public sealed class DeleteScheduleCommandHandler(
-    IWorkspaceRepository workspaces, IScheduleRepository schedules, IPostRepository posts, ICurrentUser current, IUnitOfWork uow)
+    IWorkspaceRepository workspaces, IScheduleRepository schedules, IPostRepository posts, INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow)
     : ICommandHandler<DeleteScheduleCommand, Unit>
 {
     public async Task<Unit> HandleAsync(DeleteScheduleCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var schedule = await schedules.GetAsync(ws.Id, c.ScheduleId, ct) ?? throw new NotFoundException("ตารางโพสต์", c.ScheduleId);
-        posts.RemoveRange(await posts.ListOpenByScheduleAsync(schedule.Id, ct));
+        var open = await posts.ListOpenByScheduleAsync(schedule.Id, ct);
+        posts.RemoveRange(open);
         schedules.Remove(schedule);
         await uow.SaveChangesAsync(ct);
+        await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.ScheduleDeleted(schedule, open.Count)], ct);
         return Unit.Value;
     }
 }

@@ -125,7 +125,9 @@ public sealed class SendDeviceCommandCommandHandler(
         if (c.Cmd is "start" or "stop")
             await notifier.NotifyAsync(
                 NotifyEvent.StartStop, ws.Id, null, null,
-                c.Cmd == "start" ? $"สั่งเริ่มโพสต์อัตโนมัติจากเว็บ: เครื่อง {device.Name}" : $"สั่งหยุดโพสต์อัตโนมัติจากเว็บ: เครื่อง {device.Name}", ct);
+                c.Cmd == "start"
+                    ? $"▶️ {NotificationText.Bold("สั่งเริ่มโพสต์อัตโนมัติจากเว็บ")}\nเครื่อง {NotificationText.Esc(device.Name)}"
+                    : $"⏹ {NotificationText.Bold("สั่งหยุดโพสต์อัตโนมัติจากเว็บ")}\nเครื่อง {NotificationText.Esc(device.Name)}", ct);
         return DeviceCommandDto.From(cmd);
     }
 }

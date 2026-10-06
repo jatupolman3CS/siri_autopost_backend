@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Cors;
 using Microsoft.AspNetCore.Mvc;
 using SIRIAUTOPOST.Api.Auth;
 using SIRIAUTOPOST.Api.Extensions;
+using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Devices;
 using SIRIAUTOPOST.Application.Features.Extension;
@@ -26,7 +27,8 @@ public sealed class DeviceApiController : ControllerBase
     public sealed record HeartbeatRequest(string? Version);
     public sealed record GroupsRequest(IReadOnlyList<GroupLinkDto> Groups);
     /// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it (a bump opens it).</param>
-    public sealed record ResultRequest(bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null);
+    /// <param name="Shot">A picture of the posting window (a JPEG/PNG data URL, 2 MB at most) for the notification, sent when the job asked for one.</param>
+    public sealed record ResultRequest(bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null, string? Shot = null);
     public sealed record BumpResultRequest(bool Ok, bool NeedsLogin, bool Blocked, string? Error);
     /// <param name="Wait">With takeCommands: hold the call (up to 25 s) until the web app sends a command.</param>
     public sealed record SyncRequest(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands, bool Wait = false);
@@ -66,7 +68,7 @@ public sealed class DeviceApiController : ControllerBase
     [HttpPost("jobs/{postId:guid}/result")]
     public Task<PostDto> Result(
         Guid postId, ResultRequest r, [FromServices] ICommandHandler<ReportJobResultCommand, PostDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new ReportJobResultCommand(postId, r.Ok, r.AwaitingApproval, r.NeedsLogin, r.Blocked, r.Error, r.PostUrl), ct);
+        handler.HandleAsync(new ReportJobResultCommand(postId, r.Ok, r.AwaitingApproval, r.NeedsLogin, r.Blocked, r.Error, r.PostUrl, ShotImage.Parse(r.Shot)), ct);
 
     /// <summary>The result of a bump job (<c>kind: "bump"</c> from jobs/claim): the comment was made, or why not.</summary>
     [HttpPost("bumps/{bumpId:guid}/result")]

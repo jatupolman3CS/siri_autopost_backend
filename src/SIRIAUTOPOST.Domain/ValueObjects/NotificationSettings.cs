@@ -8,14 +8,16 @@ public class NotifyEventSet
 {
     public bool Success { get; set; }
     public bool Fail { get; set; } = true;
-    /// <summary>Not sent by anything yet (the extension reports no screenshots).</summary>
+    /// <summary>A screenshot of the posting window goes with the success, failure and block messages (Telegram only).</summary>
     public bool Shot { get; set; } = true;
     public bool Round { get; set; } = true;
     public bool StartStop { get; set; } = true;
     public bool Block { get; set; } = true;
-    /// <summary>Not sent by anything yet.</summary>
+    /// <summary>A device that is offline while posts are due for it, and when it is back.</summary>
     public bool Offline { get; set; } = true;
     public bool Quota { get; set; }
+    /// <summary>Every job a device takes (one message per post: busy, so off unless asked for).</summary>
+    public bool Job { get; set; }
 
     public bool Has(NotifyEvent ev) => ev switch
     {
@@ -27,6 +29,7 @@ public class NotifyEventSet
         NotifyEvent.Block => Block,
         NotifyEvent.Offline => Offline,
         NotifyEvent.Quota => Quota,
+        NotifyEvent.Job => Job,
         _ => false,
     };
 

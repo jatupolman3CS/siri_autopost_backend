@@ -4,11 +4,12 @@ using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Interfaces;
+using SIRIAUTOPOST.Domain.ValueObjects;
 
 namespace SIRIAUTOPOST.Infrastructure.Notifications;
 
-/// <summary>One message waiting to be sent: what happened, where (set and group, when it is about one) and the Thai text.</summary>
-public sealed record NotificationJob(NotifyEvent Event, Guid WorkspaceId, Guid? LinkSetId, Guid? LinkId, string Text);
+/// <summary>One message waiting to be sent: what happened, where (set and group, when it is about one), the Thai text and, maybe, a picture of the posting window.</summary>
+public sealed record NotificationJob(NotifyEvent Event, Guid WorkspaceId, Guid? LinkSetId, Guid? LinkId, string Text, byte[]? Photo = null);
 
 /// <summary>
 /// Sends one <see cref="NotificationJob"/>: reads the workspace's settings, applies the rules (group, then set, then
@@ -35,9 +36,14 @@ public sealed class NotificationDelivery(IServiceScopeFactory scopes, INotificat
 
             var sends = new List<Task<(string Service, GatewayResult Result)>>();
             if (route.Telegram)
-                sends.Add(Send("Telegram", gateway.SendTelegramAsync(settings.Telegram.Token, settings.Telegram.ChatId, job.Text, ct)));
+            {
+                // The picture goes along when the "screenshot" event is switched on for this group as well. LINE cannot
+                // take one (it only shows a picture by its public address).
+                var photo = job.Photo is { Length: > 0 } && settings.Resolve(NotifyEvent.Shot, job.LinkSetId, job.LinkId).Telegram ? job.Photo : null;
+                sends.Add(Send("Telegram", SendTelegramAsync(settings.Telegram, job.Text, photo, ct)));
+            }
             if (route.Line)
-                sends.Add(Send("LINE", gateway.SendLineAsync(settings.Line.Token, settings.Line.To, job.Text, ct)));
+                sends.Add(Send("LINE", gateway.SendLineAsync(settings.Line.Token, settings.Line.To, NotificationText.ToPlain(job.Text), ct)));
             foreach (var (service, result) in await Task.WhenAll(sends))
                 if (!result.Ok) log.LogWarning("แจ้งเตือน {Event} ผ่าน {Service} ไม่สำเร็จ: {Error}", job.Event, service, result.Error);
         }
@@ -50,6 +56,29 @@ public sealed class NotificationDelivery(IServiceScopeFactory scopes, INotificat
             // Only the type: a message may carry an address, and so a token.
             log.LogError("ส่งการแจ้งเตือนไม่สำเร็จ ({Type})", ex.GetType().Name);
         }
+    }
+
+    /// <summary>
+    /// The text, with the picture as its caption when it fits (Telegram allows 1,024 characters there; a picture that
+    /// is refused still leaves the text), else the text first and the picture after it.
+    /// </summary>
+    private async Task<GatewayResult> SendTelegramAsync(TelegramChannel telegram, string text, byte[]? photo, CancellationToken ct)
+    {
+        if (photo is null) return await gateway.SendTelegramAsync(telegram.Token, telegram.ChatId, text, ct, html: true);
+        if (NotificationText.ToPlain(text).Length <= NotificationText.TelegramCaptionMax)
+        {
+            var withPhoto = await gateway.SendTelegramPhotoAsync(telegram.Token, telegram.ChatId, photo, text, ct, html: true);
+            if (withPhoto.Ok) return withPhoto;
+            log.LogWarning("ส่งรูปไป Telegram ไม่สำเร็จ ส่งเฉพาะข้อความแทน: {Error}", withPhoto.Error);
+            return await gateway.SendTelegramAsync(telegram.Token, telegram.ChatId, text, ct, html: true);
+        }
+        var sent = await gateway.SendTelegramAsync(telegram.Token, telegram.ChatId, text, ct, html: true);
+        if (sent.Ok)
+        {
+            var picture = await gateway.SendTelegramPhotoAsync(telegram.Token, telegram.ChatId, photo, null, ct);
+            if (!picture.Ok) log.LogWarning("ส่งรูปไป Telegram ไม่สำเร็จ: {Error}", picture.Error);
+        }
+        return sent;
     }
 
     private static async Task<(string, GatewayResult)> Send(string service, Task<GatewayResult> send) => (service, await send);

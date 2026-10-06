@@ -353,7 +353,7 @@ public sealed class TopUpThrottle
 /// </summary>
 public sealed class ScheduleTopUp(
     IWorkspaceRepository workspaces, IScheduleRepository schedules, ScheduleMaterializer materializer, IMediaRepository media,
-    IUnitOfWork uow, TimeProvider clock, TopUpThrottle throttle, ILogger<ScheduleTopUp> log)
+    IUnitOfWork uow, TimeProvider clock, TopUpThrottle throttle, ILogger<ScheduleTopUp> log, INotificationDispatcher? notifier = null)
 {
     /// <summary>A run that loses a race (a duplicate slot, a deadlock) starts again from a fresh read this many times.</summary>
     public const int Attempts = 3;
@@ -384,7 +384,7 @@ public sealed class ScheduleTopUp(
         {
             var now = clock.GetUtcNow();
             var due = new List<Guid>();
-            var expired = false;
+            var expired = new List<Schedule>();
             foreach (var s in await schedules.ListActiveAsync(workspaceId, ct))
             {
                 try
@@ -392,7 +392,7 @@ public sealed class ScheduleTopUp(
                     if (s.Mode == ScheduleMode.Once && s.StartDate < s.LocalDay(now))
                     {
                         s.SetActive(false);
-                        expired = true;
+                        expired.Add(s);
                     }
                     else if (Window(s, now) is not null && !throttle.IsDelayed(s.Id, now)) due.Add(s.Id);
                 }
@@ -401,7 +401,13 @@ public sealed class ScheduleTopUp(
                     Hold(s.Id, now, ex);
                 }
             }
-            if (expired) await uow.SaveChangesAsync(ct);
+            if (expired.Count > 0)
+            {
+                await uow.SaveChangesAsync(ct);
+                // A once-only schedule has run its day: say so (a courtesy, never a reason to fail the claim).
+                if (notifier is not null)
+                    await EngineNotices.SendAsync(notifier, workspaceId, expired.Select(EngineNotices.ScheduleFinished), ct);
+            }
             foreach (var id in due) created += await EnsureOneAsync(workspaceId, id, now, ct);
         }
         catch (Exception ex) when (ex is not OperationCanceledException)

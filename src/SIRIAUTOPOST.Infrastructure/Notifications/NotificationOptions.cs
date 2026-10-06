@@ -20,6 +20,12 @@ public sealed class NotificationOptions
     /// <summary>How long a stopping host may spend sending what is still queued before the rest is dropped.</summary>
     public TimeSpan ShutdownGrace { get; set; } = TimeSpan.FromSeconds(5);
 
+    /// <summary>Whether a background worker watches for machines that go silent while posts are due for them (the offline message).</summary>
+    public bool DeviceWatch { get; set; } = true;
+
+    /// <summary>How often that worker looks.</summary>
+    public TimeSpan DeviceWatchEvery { get; set; } = TimeSpan.FromMinutes(1);
+
     /// <summary>
     /// Delivers each message inside the call that raised it instead of in the background (integration tests, so what
     /// would be sent is known the moment the request returns). Never on in production: a slow Telegram would slow the request.

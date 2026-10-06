@@ -26,7 +26,7 @@ public sealed class NotificationWorker(
                 log.LogWarning("ระบบกำลังปิด: ทิ้งการแจ้งเตือนที่ยังค้างในคิวเพราะหมดเวลาส่ง");
                 return;
             }
-            if (queue.Reader.TryRead(out var job))
+            if (queue.TryRead(out var job))
             {
                 await delivery.DeliverAsync(job, grace.Token);
                 continue;

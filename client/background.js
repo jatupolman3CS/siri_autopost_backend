@@ -344,11 +344,14 @@ async function notify(kind, html, shot = null) {
   }
 }
 
+// A job from the web asks for a picture of the window (its Telegram message carries one); see runCloudJob.
+let forceShot = false;
+
 // Screenshot of the posting window, or null when disabled / not possible.
 async function captureWorker() {
   const { global } = await getSettings();
   const t = global.telegram;
-  if (!t.enabled || !t.screenshot) return null;
+  if (!forceShot && !(t.enabled && t.screenshot)) return null;
   if (!(await chrome.permissions.contains({ origins: ['<all_urls>'] }))) {
     if (!warnedNoCapture) {
       warnedNoCapture = true;
@@ -2001,6 +2004,7 @@ async function runCloudJob(c, job) {
   const keys = [];
   posting = true;
   abortFlag = false;
+  forceShot = !!job.shot;
   keepAlive(true);
   await setState({ current: { campaignId: null, url: job.groupUrl, cloud: true } });
   let result;
@@ -2026,6 +2030,7 @@ async function runCloudJob(c, job) {
     };
   } finally {
     posting = false;
+    forceShot = false;
     keepAlive(false);
     if (keys.length) await chrome.storage.local.remove(keys);
     await setState({ current: null });
@@ -2047,6 +2052,8 @@ async function runCloudJob(c, job) {
       blocked: !!(result.blocked || result.blockedAfter),
       error: result.ok ? (result.blockedAfter || null) : result.error,
       postUrl: result.ok ? result.postUrl || null : null,
+      // The picture of the window (a JPEG data URL) goes to the web's Telegram message, only when the job asked for it.
+      shot: job.shot ? result.shot || null : null,
     });
   } catch (e) {
     await log('warn', `[เว็บ AutoPost] ส่งผลการโพสต์ไม่สำเร็จ: ${e.message}`);

@@ -46,8 +46,8 @@ public class NotificationDispatcherTests(ApiFactory factory)
 
     private static object GroupRule(string channel = "default", object? events = null) => new { channel, events };
 
-    private Task NotifyAsync(NotifyEvent ev, Shop s, bool set = true, SetLinkDto? link = null, string text = "ข้อความทดสอบ") =>
-        factory.Services.GetRequiredService<INotificationDispatcher>().NotifyAsync(ev, s.Ws, set ? s.Set.Id : null, link?.Id, text);
+    private Task NotifyAsync(NotifyEvent ev, Shop s, bool set = true, SetLinkDto? link = null, string text = "ข้อความทดสอบ", byte[]? photo = null) =>
+        factory.Services.GetRequiredService<INotificationDispatcher>().NotifyAsync(ev, s.Ws, set ? s.Set.Id : null, link?.Id, text, photo: photo);
 
     /// <summary>Which channels got messages for the shop: "tg", "line", "tg+line" or "".</summary>
     private string Where(Shop s) =>
@@ -162,6 +162,65 @@ public class NotificationDispatcherTests(ApiFactory factory)
         Assert.Equal("tg+line", await TryAsync(NotificationsEndpointsTests.Settings("1:a", chat, tgOn: true, channel: "both", lineToken: "t", lineTo: to, lineOn: true)));
     }
 
+    // ---- pictures ----
+
+    private static readonly byte[] Picture = [0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02, 0x03];
+
+    [Fact]
+    public async Task A_picture_goes_to_telegram_as_the_message_and_line_gets_the_text_without_markup()
+    {
+        var s = await ShopAsync("both");
+
+        await NotifyAsync(NotifyEvent.Fail, s, link: s.A, text: "❌ <b>ไม่สำเร็จ</b> &amp; ต่อ", photo: Picture);
+
+        var tg = Assert.Single(factory.Notifications.To(s.Chat));
+        Assert.Equal(("tg-photo", "❌ <b>ไม่สำเร็จ</b> &amp; ต่อ", true), (tg.Channel, tg.Text, tg.Html)); // the text is the caption
+        Assert.Equal(Picture, tg.Photo);
+        var line = Assert.Single(factory.Notifications.To(s.To));
+        Assert.Equal(("line", "❌ ไม่สำเร็จ & ต่อ"), (line.Channel, line.Text)); // LINE has no bold and no picture
+    }
+
+    [Fact]
+    public async Task Without_the_screenshot_event_the_text_goes_alone()
+    {
+        var s = await ShopAsync("tg", events: NotificationsEndpointsTests.Events(shot: false));
+
+        await NotifyAsync(NotifyEvent.Fail, s, link: s.A, text: "ไม่สำเร็จ", photo: Picture);
+
+        var tg = Assert.Single(factory.Notifications.To(s.Chat));
+        Assert.Equal(("tg", true), (tg.Channel, tg.Html));
+        Assert.Null(tg.Photo);
+    }
+
+    [Fact]
+    public async Task A_text_too_long_for_a_caption_goes_first_and_the_picture_after_it()
+    {
+        var s = await ShopAsync("tg");
+
+        await NotifyAsync(NotifyEvent.Fail, s, link: s.A, text: new string('ก', 1100), photo: Picture);
+
+        var sent = factory.Notifications.To(s.Chat);
+        Assert.Equal(["tg", "tg-photo"], sent.Select(m => m.Channel));
+        Assert.Equal("", sent[1].Text);
+    }
+
+    [Fact]
+    public async Task A_picture_that_telegram_refuses_still_leaves_the_text()
+    {
+        var s = await ShopAsync("tg");
+        factory.Notifications.PhotoResult = GatewayResult.Failure("ไม่รับรูป");
+        try
+        {
+            await NotifyAsync(NotifyEvent.Fail, s, link: s.A, text: "ไม่สำเร็จ", photo: Picture);
+        }
+        finally
+        {
+            factory.Notifications.PhotoResult = GatewayResult.Success;
+        }
+
+        Assert.Equal(["tg-photo", "tg"], factory.Notifications.To(s.Chat).Select(m => m.Channel));
+    }
+
     // ---- never fails the caller ----
 
     [Fact]
@@ -265,7 +324,7 @@ public class NotificationDispatcherTests(ApiFactory factory)
 
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public async Task<GatewayResult> SendTelegramAsync(string token, string chatId, string text, CancellationToken ct = default)
+        public async Task<GatewayResult> SendTelegramAsync(string token, string chatId, string text, CancellationToken ct = default, bool html = false)
         {
             if (Interlocked.Increment(ref calls) == 1)
             {
@@ -275,6 +334,9 @@ public class NotificationDispatcherTests(ApiFactory factory)
             lock (Delivered) Delivered.Add(text);
             return GatewayResult.Success;
         }
+
+        public Task<GatewayResult> SendTelegramPhotoAsync(string token, string chatId, byte[] photo, string? caption, CancellationToken ct = default, bool html = false) =>
+            Task.FromResult(GatewayResult.Success);
 
         public Task<GatewayResult> SendLineAsync(string token, string to, string text, CancellationToken ct = default) => Task.FromResult(GatewayResult.Success);
 
@@ -339,6 +401,6 @@ public class NotificationDispatcherTests(ApiFactory factory)
 
     private sealed class NullNotificationDispatcherForTest : INotificationDispatcher
     {
-        public Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default) => Task.CompletedTask;
+        public Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default, byte[]? photo = null) => Task.CompletedTask;
     }
 }

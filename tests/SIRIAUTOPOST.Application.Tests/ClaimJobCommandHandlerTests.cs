@@ -32,7 +32,7 @@ public class ClaimJobCommandHandlerTests
             new TopUpThrottle(), NullLogger<ScheduleTopUp>.Instance);
         return new ClaimJobCommandHandler(
             _current, Substitute.For<IDeviceRepository>(), workspaces, Substitute.For<IAccountRepository>(), Substitute.For<IPostRepository>(),
-            Substitute.For<IMediaRepository>(), Substitute.For<IUserRepository>(), Substitute.For<IPlanRepository>(), Substitute.For<ISetLinkRepository>(),
+            Substitute.For<IMediaRepository>(), Substitute.For<IUserRepository>(), Substitute.For<IPlanRepository>(), Substitute.For<ISetLinkRepository>(), Substitute.For<ILinkSetRepository>(),
             _schedules, Substitute.For<ICollectionRepository>(), Substitute.For<IPostBumpRepository>(), Substitute.For<IDeviceEventRepository>(),
             topUp, _notifier, _uow, new FixedClock(Now));
     }

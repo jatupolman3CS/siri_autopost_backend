@@ -114,8 +114,8 @@ internal sealed class Shop : IDisposable
 
     public async Task<PostDto> ReportAsync(
         Guid post, bool ok = true, bool awaitingApproval = false, bool needsLogin = false, bool blocked = false, string? error = null,
-        string? postUrl = null) =>
-        await (await Device.PostAsJsonAsync($"/api/device/jobs/{post}/result", new { ok, awaitingApproval, needsLogin, blocked, error, postUrl }, Json))
+        string? postUrl = null, string? shot = null) =>
+        await (await Device.PostAsJsonAsync($"/api/device/jobs/{post}/result", new { ok, awaitingApproval, needsLogin, blocked, error, postUrl, shot }, Json))
             .ReadAsync<PostDto>();
 
     /// <summary>The result of a bump job.</summary>

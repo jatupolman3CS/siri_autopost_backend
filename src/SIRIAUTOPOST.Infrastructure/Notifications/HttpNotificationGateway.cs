@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.Interfaces;
 
 namespace SIRIAUTOPOST.Infrastructure.Notifications;
@@ -36,15 +37,55 @@ public sealed partial class HttpNotificationGateway(HttpClient http, IOptions<No
     [GeneratedRegex(@"bot\d+:[A-Za-z0-9_\-]+")]
     private static partial Regex TelegramTokenInText();
 
-    public async Task<GatewayResult> SendTelegramAsync(string token, string chatId, string text, CancellationToken ct = default)
+    public async Task<GatewayResult> SendTelegramAsync(string token, string chatId, string text, CancellationToken ct = default, bool html = false)
     {
         if (token is null || !TelegramTokenShape().IsMatch(token)) return GatewayResult.Failure("โทเคนของบอท Telegram ไม่ถูกต้อง");
         if (string.IsNullOrWhiteSpace(chatId)) return GatewayResult.Failure("ยังไม่ได้ใส่รหัสแชท Telegram");
+        // Cutting HTML could leave a tag open, which Telegram refuses: a text too long for one message goes as plain text.
+        if (html && (text ?? "").Length > TelegramMaxText)
+        {
+            text = NotificationText.ToPlain(text);
+            html = false;
+        }
         var (response, error) = await CallAsync("Telegram", token, ct, () =>
             new HttpRequestMessage(HttpMethod.Post, TelegramUri(token, "sendMessage"))
             {
-                Content = Body(new { chat_id = chatId.Trim(), text = Cut(text, TelegramMaxText) }),
+                // A link in a notice is for the person to open, not for Telegram to unfold under the message.
+                Content = html
+                    ? Body(new { chat_id = chatId.Trim(), text, parse_mode = "HTML", disable_web_page_preview = true })
+                    : Body(new { chat_id = chatId.Trim(), text = Cut(text, TelegramMaxText) }),
             });
+        if (response is null) return GatewayResult.Failure(error!);
+        var failure = await TelegramFailureAsync(response, token, ct);
+        return failure is null ? GatewayResult.Success : GatewayResult.Failure(failure);
+    }
+
+    public async Task<GatewayResult> SendTelegramPhotoAsync(
+        string token, string chatId, byte[] photo, string? caption, CancellationToken ct = default, bool html = false)
+    {
+        if (token is null || !TelegramTokenShape().IsMatch(token)) return GatewayResult.Failure("โทเคนของบอท Telegram ไม่ถูกต้อง");
+        if (string.IsNullOrWhiteSpace(chatId)) return GatewayResult.Failure("ยังไม่ได้ใส่รหัสแชท Telegram");
+        if (photo is not { Length: > 0 }) return GatewayResult.Failure("ไม่มีรูปที่จะส่ง");
+        // The limit counts the text without its tags; HTML cut in the middle of a tag is refused, so a caption that is
+        // too long as HTML goes as plain text.
+        if (html && (caption ?? "").Length > NotificationText.TelegramCaptionMax)
+        {
+            caption = NotificationText.ToPlain(caption);
+            html = false;
+        }
+        var (response, error) = await CallAsync("Telegram", token, ct, () =>
+        {
+            var png = ShotImage.IsPng(photo);
+            var file = new ByteArrayContent(photo);
+            file.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(png ? "image/png" : "image/jpeg");
+            var form = new MultipartFormDataContent { { new StringContent(chatId.Trim()), "chat_id" }, { file, "photo", png ? "shot.png" : "shot.jpg" } };
+            if (!string.IsNullOrEmpty(caption))
+            {
+                form.Add(new StringContent(Cut(caption, NotificationText.TelegramCaptionMax), Encoding.UTF8), "caption");
+                if (html) form.Add(new StringContent("HTML"), "parse_mode");
+            }
+            return new HttpRequestMessage(HttpMethod.Post, TelegramUri(token, "sendPhoto")) { Content = form };
+        });
         if (response is null) return GatewayResult.Failure(error!);
         var failure = await TelegramFailureAsync(response, token, ct);
         return failure is null ? GatewayResult.Success : GatewayResult.Failure(failure);

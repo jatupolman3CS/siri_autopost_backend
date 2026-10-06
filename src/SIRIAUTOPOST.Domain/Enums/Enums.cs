@@ -241,4 +241,6 @@ public enum NotifyEvent
     Block,
     Offline,
     Quota,
+    /// <summary>A device takes a job (which machine is posting to which group now), and a bump it makes.</summary>
+    Job,
 }

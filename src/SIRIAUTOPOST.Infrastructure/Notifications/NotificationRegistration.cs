@@ -28,6 +28,8 @@ public static class NotificationRegistration
             return new HttpNotificationGateway(http, options, sp.GetRequiredService<ILogger<HttpNotificationGateway>>());
         });
         services.AddSingleton<NotificationDelivery>();
+        if (config.GetValue($"{NotificationOptions.Section}:{nameof(NotificationOptions.DeviceWatch)}", true))
+            services.AddHostedService<DeviceWatchWorker>();
 
         services.RemoveAll<INotificationDispatcher>(); // the application registers a no-op one by default
         if (config.GetValue<bool>($"{NotificationOptions.Section}:{nameof(NotificationOptions.Inline)}"))

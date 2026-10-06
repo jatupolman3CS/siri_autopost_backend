@@ -157,6 +157,13 @@ public interface IPostRepository
     Task<IReadOnlyList<Post>> ListBySlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default);
     /// <summary>Posts of a round that are not finished: queued, waiting or being posted. 0 = the round is over.</summary>
     Task<int> CountOpenInSlotAsync(Guid scheduleId, string slotKey, CancellationToken ct = default);
+    /// <summary>
+    /// Devices that have posts waiting for them (queued and due before <paramref name="dueBefore"/>, or held) while they have
+    /// not called in since <paramref name="seenBefore"/>. Devices the web paused are left out: they wait on purpose.
+    /// </summary>
+    Task<IReadOnlyList<StalledDevice>> ListStalledDevicesAsync(DateTimeOffset dueBefore, DateTimeOffset seenBefore, CancellationToken ct = default);
+    /// <summary>The distinct rounds (SlotKeys) of a schedule that start with <paramref name="dayPrefix"/> ("yyyy-MM-dd"), any order.</summary>
+    Task<IReadOnlyList<string>> ListSlotKeysOfDayAsync(Guid scheduleId, string dayPrefix, CancellationToken ct = default);
 
     // ---- links: per-link caps, cooldown and "do not repeat" ----
 
@@ -439,6 +446,9 @@ public interface IScheduleRepository
     void Remove(Schedule schedule);
     void RemoveRange(IEnumerable<Schedule> schedules);
 }
+
+/// <summary>A device that is silent while <paramref name="Due"/> posts wait for it; the oldest of them was due at <paramref name="Oldest"/>.</summary>
+public sealed record StalledDevice(Guid WorkspaceId, Guid DeviceId, int Due, DateTimeOffset Oldest);
 
 /// <summary>A client report link without its snapshot (the list does not need the report).</summary>
 public sealed record ReportShareInfo(

@@ -237,6 +237,28 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
         db.Posts.CountAsync(x => x.ScheduleId == scheduleId && x.SlotKey == slotKey &&
                                  (x.Status == PostStatus.Queued || x.Status == PostStatus.Waiting || x.Status == PostStatus.Posting), ct);
 
+    public async Task<IReadOnlyList<StalledDevice>> ListStalledDevicesAsync(DateTimeOffset dueBefore, DateTimeOffset seenBefore, CancellationToken ct = default)
+    {
+        var rows = await (
+            from p in db.Posts.AsNoTracking()
+            where (p.Status == PostStatus.Queued || p.Status == PostStatus.Waiting) && p.ScheduledAt <= dueBefore
+            join a in db.Accounts.AsNoTracking() on p.AccountId equals a.Id
+            where a.DeviceId != null
+            join d in db.Devices.AsNoTracking() on a.DeviceId equals d.Id
+            where !d.JobsPaused && (d.LastSeenAt == null || d.LastSeenAt < seenBefore)
+            group p by new { d.Id, d.WorkspaceId } into g
+            select new { g.Key.Id, g.Key.WorkspaceId, Due = g.Count(), Oldest = g.Min(x => x.ScheduledAt) })
+            .ToListAsync(ct);
+        return rows.Select(r => new StalledDevice(r.WorkspaceId, r.Id, r.Due, r.Oldest)).ToList();
+    }
+
+    public async Task<IReadOnlyList<string>> ListSlotKeysOfDayAsync(Guid scheduleId, string dayPrefix, CancellationToken ct = default) =>
+        await db.Posts.AsNoTracking()
+            .Where(x => x.ScheduleId == scheduleId && x.SlotKey != null && x.SlotKey.StartsWith(dayPrefix))
+            .Select(x => x.SlotKey!)
+            .Distinct()
+            .ToListAsync(ct);
+
     // ---- links ----
 
     public Task<int> CountPublishedToLinkAsync(Guid linkId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default) =>

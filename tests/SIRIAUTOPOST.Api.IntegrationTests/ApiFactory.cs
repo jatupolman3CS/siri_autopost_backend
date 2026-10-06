@@ -56,6 +56,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Jwt:Key", "integration-test-signing-key-0123456789abcdef");
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);
+        builder.UseSetting("Notifications:DeviceWatch", "false"); // the tests run the watcher's command themselves
         builder.UseSetting("Notifications:Inline", "true"); // delivered inside the request, so tests see what was sent at once
         builder.UseSetting("Stripe:SecretKey", "sk_test_integration"); // the gateway is the fake; the keys make /billing/payment-config answer
         builder.UseSetting("Stripe:PublishableKey", PublishableKey);

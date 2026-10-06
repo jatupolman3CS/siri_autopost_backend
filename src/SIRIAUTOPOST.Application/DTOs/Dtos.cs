@@ -260,9 +260,10 @@ public sealed record JobMediaDto(Guid Id, string Name, string ContentType);
 /// </summary>
 /// <param name="TargetKind">"group" or "page": where a post goes (a page needs the browser to act as the page).</param>
 /// <param name="PageTags">The collection's page tags: names of pages the text mentions that become clickable @tags.</param>
+/// <param name="Shot">Take a picture of the posting window when done and send it with the result (a Telegram message with a screenshot is wanted).</param>
 public sealed record JobDto(
     Guid PostId, string GroupName, string GroupUrl, string Content, IReadOnlyList<JobMediaDto> Media, AntiBanDto AntiBan,
-    string Kind = "post", string TargetKind = "group", string? PageTags = null);
+    string Kind = "post", string TargetKind = "group", string? PageTags = null, bool Shot = false);
 
 /// <param name="Id">The membership; null for the owner.</param>
 /// <param name="Active">Joined (false: invited, waiting for that email to sign up).</param>

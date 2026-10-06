@@ -62,16 +62,17 @@ public sealed record RevokeDeviceCommand(Guid WorkspaceId, Guid DeviceId) : ICom
 
 public sealed class RevokeDeviceCommandHandler(
     IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps,
-    IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IDeviceEventRepository events, INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RevokeDeviceCommand, Unit>
 {
     public async Task<Unit> HandleAsync(RevokeDeviceCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct);
+        var cancelled = await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
         await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);
+        await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DeviceUnbound(device, cancelled)], ct);
         return Unit.Value;
     }
 }
@@ -84,17 +85,19 @@ internal static class DeviceRevocation
 
     public const string QueuedDetail = "อุปกรณ์ถูกยกเลิกการผูกแล้ว ต้องจับคู่เครื่องใหม่ก่อนจึงจะโพสต์ได้";
 
-    /// <summary>Disconnects the account, fails its unfinished posts and removes the device. The caller saves.</summary>
-    public static async Task RevokeAsync(
+    /// <summary>Disconnects the account, fails its unfinished posts and removes the device. The caller saves. Returns how many posts it cancelled.</summary>
+    public static async Task<int> RevokeAsync(
         Device device, string whilePostingDetail, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps,
         IDeviceRepository devices, IDeviceEventRepository events, DateTimeOffset now, CancellationToken ct)
     {
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         account?.Disconnect();
+        var cancelled = 0;
         foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
         {
             p.Fail(FailureCode.Network, whilePostingDetail, now);
             events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
+            cancelled++;
         }
         if (account is not null)
         {
@@ -102,12 +105,14 @@ internal static class DeviceRevocation
             {
                 p.Fail(FailureCode.Session, QueuedDetail, now);
                 events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
+                cancelled++;
             }
             // Comments that were to bump its posts have no browser to make them any more.
             foreach (var b in await bumps.ListOpenByAccountAsync(account.Id, ct)) b.Skip(QueuedDetail, now);
         }
         devices.Remove(device);
         events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Revoked, new { name = device.Name }, now));
+        return cancelled;
     }
 }
 
@@ -118,8 +123,8 @@ internal static class DeviceRevocation
 public sealed record UpdateDeviceCommand(Guid WorkspaceId, Guid DeviceId, string? Name, bool? JobsPaused) : ICommand<DeviceDto>;
 
 public sealed class UpdateDeviceCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts, IDeviceEventRepository events,
+    INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateDeviceCommand, DeviceDto>
 {
     public async Task<DeviceDto> HandleAsync(UpdateDeviceCommand c, CancellationToken ct = default)
@@ -137,13 +142,20 @@ public sealed class UpdateDeviceCommandHandler(
             account?.FollowDevice(device);
         }
         var now = clock.GetUtcNow();
+        var pauseChanged = false;
         if (c.JobsPaused is { } paused)
         {
+            pauseChanged = paused != device.JobsPaused;
             device.SetJobsPaused(paused);
             if (!paused) device.EndAutoPause(now, force: true); // "resume" also lifts the engine's own pause
         }
         events.Add(DevicePause.Changed(device, now));
         await uow.SaveChangesAsync(ct);
+        if (pauseChanged)
+        {
+            var waiting = account is null ? 0 : (await posts.ListOpenByAccountAsync(account.Id, ct)).Count;
+            await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DeviceJobsPaused(device, device.JobsPaused, waiting)], ct);
+        }
         return DeviceDto.From(device, account?.Id, now);
     }
 }
@@ -179,8 +191,8 @@ public sealed record PairDeviceCommand(string Code, string Name, string? Browser
 
 public sealed class PairDeviceCommandHandler(
     IDevicePairingRepository pairings, IWorkspaceRepository workspaces, IUserRepository users, IPlanRepository plans,
-    IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events, IDeviceSecrets secrets, IUnitOfWork uow,
-    TimeProvider clock)
+    IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events, IDeviceSecrets secrets,
+    INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<PairDeviceCommand, PairResultDto>
 {
     public async Task<PairResultDto> HandleAsync(PairDeviceCommand c, CancellationToken ct = default)
@@ -201,6 +213,7 @@ public sealed class PairDeviceCommandHandler(
         accounts.Add(account);
         events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Paired, new { name = device.Name, accountId = account.Id }, now));
         await uow.SaveChangesAsync(ct);
+        await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DevicePaired(device)], ct);
         return new PairResultDto(key, device.Id, device.Name, ws.Id, ws.Name, account.Id);
     }
 
@@ -216,7 +229,7 @@ public sealed record DeviceHeartbeatCommand(string? Version) : ICommand<DeviceSt
 
 public sealed class DeviceHeartbeatCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IUserRepository users, IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
+    IUserRepository users, IDeviceEventRepository events, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<DeviceHeartbeatCommand, DeviceStatusDto>
 {
     public async Task<DeviceStatusDto> HandleAsync(DeviceHeartbeatCommand c, CancellationToken ct = default)
@@ -225,9 +238,10 @@ public sealed class DeviceHeartbeatCommandHandler(
         var now = clock.GetUtcNow();
         if (device.Seen(c.Version, now))
             events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
-        DevicePause.Settle(device, events, now);
+        var pauseEnded = DevicePause.Settle(device, events, now, out var pauseReason);
         await uow.SaveChangesAsync(ct);
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
+        if (pauseEnded) await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DevicePauseEnded(device, pauseReason)], ct);
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         // "Paused" is also what a suspended, banned or paused customer's device is told, and a device the engine
         // paused itself (a Facebook block, posts that kept failing): it gets no jobs.
@@ -273,7 +287,7 @@ public sealed record ClaimJobCommand : ICommand<JobDto?>;
 
 public sealed class ClaimJobCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, ISetLinkRepository links,
+    IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, ISetLinkRepository links, ILinkSetRepository linkSets,
     IScheduleRepository schedules, ICollectionRepository collections, IPostBumpRepository bumps, IDeviceEventRepository events,
     ScheduleTopUp topUp, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ClaimJobCommand, JobDto?>
@@ -290,6 +304,7 @@ public sealed class ClaimJobCommandHandler(
 
         JobDto? job = null;
         Workspace? ws = null;
+        Device? taker = null;
         var notes = new Notes();
         try
         {
@@ -299,7 +314,7 @@ public sealed class ClaimJobCommandHandler(
             await uow.ExecuteInTransactionAsync($"claim:{current.DeviceId:N}", async () =>
             {
                 uow.DiscardChanges(); // what was loaded before the lock (the device at sign-in) may be out of date
-                var device = await DeviceAccess.RequireAsync(devices, current, ct);
+                var device = taker = await DeviceAccess.RequireAsync(devices, current, ct);
                 if (device.Seen(null, now))
                     events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
                 ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
@@ -325,16 +340,58 @@ public sealed class ClaimJobCommandHandler(
         {
             try
             {
-                notices.AddRange(await EngineNotices.FinishedRoundsAsync(posts, schedules, ws!.Id, notes.Slots, ct));
+                notices.AddRange(await EngineNotices.FinishedRoundsAsync(posts, schedules, ws!.Id, notes.Slots, now, ct));
             }
             catch (Exception)
             {
                 // A round summary is a courtesy.
             }
         }
+        if (taker is not null) notices.InsertRange(0, await JobNoticesAsync(ws!, taker, notes, now, ct));
         await EngineNotices.SendAsync(notifier, ws!.Id, notices, ct);
         return job;
     }
+
+    /// <summary>
+    /// The messages about the jobs themselves: a job lost (taken, never reported), posts skipped for being too late, the
+    /// device's rest being over, and the job this claim handed out. Only worked out for messages somebody would get.
+    /// </summary>
+    private async Task<List<Notice>> JobNoticesAsync(Workspace ws, Device device, Notes notes, DateTimeOffset now, CancellationToken ct)
+    {
+        var notices = new List<Notice>();
+        var n = ws.Notifications;
+        if (!n.Telegram.IsReady && !n.Line.IsReady) return notices; // nowhere to send: no lookups for nothing
+        try
+        {
+            if (notes.PauseEnded) notices.Add(EngineNotices.DevicePauseEnded(device, notes.PauseReason));
+            if (notes.LateSkipped > 0) notices.Add(EngineNotices.LateSkipped(notes.LateSkipped, device, notes.LateDetail!));
+            foreach (var lost in notes.Lost)
+            {
+                var setId = await LinkSetIdAsync(ws.Id, lost, ct);
+                if (!n.Resolve(NotifyEvent.Fail, setId, lost.LinkId).Any) continue;
+                notices.Add(EngineNotices.JobLost(lost, setId, device, await EngineNotices.ContextAsync(posts, schedules, linkSets, ws.Id, lost, setId, now, ct)));
+            }
+            if (notes.Taken is { } taken)
+            {
+                var setId = await LinkSetIdAsync(ws.Id, taken, ct);
+                if (n.Resolve(NotifyEvent.Job, setId, taken.LinkId).Any)
+                    notices.Add(EngineNotices.JobTaken(taken, setId, device, await EngineNotices.ContextAsync(posts, schedules, linkSets, ws.Id, taken, setId, now, ct), now));
+            }
+            if (notes.TakenBump is { } bump && n.Resolve(NotifyEvent.Job, null, null).Any)
+            {
+                var name = bump.ScheduleId is { } sid ? (await schedules.GetAsync(ws.Id, sid, ct))?.Name : null;
+                notices.Add(EngineNotices.BumpTaken(bump, device, name, now));
+            }
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // Telling people is a courtesy: the claim already happened.
+        }
+        return notices;
+    }
+
+    private async Task<Guid?> LinkSetIdAsync(Guid workspaceId, Post p, CancellationToken ct) =>
+        p.LinkId is { } id ? (await links.GetAsync(workspaceId, id, ct))?.LinkSetId : null;
 
     /// <summary>What a claim settled on the way, for the messages sent afterwards.</summary>
     private sealed class Notes
@@ -342,6 +399,21 @@ public sealed class ClaimJobCommandHandler(
         public int QuotaFailed { get; private set; }
         public string? QuotaDetail { get; private set; }
         public HashSet<(Guid ScheduleId, string SlotKey)> Slots { get; } = [];
+        /// <summary>Posts the device took and never reported on: failed by this claim.</summary>
+        public List<Post> Lost { get; } = [];
+        public int LateSkipped { get; private set; }
+        public string? LateDetail { get; private set; }
+        public bool PauseEnded { get; set; }
+        public string? PauseReason { get; set; }
+        /// <summary>The post (or bump) this claim handed out.</summary>
+        public Post? Taken { get; set; }
+        public PostBump? TakenBump { get; set; }
+
+        public void Late(string detail)
+        {
+            LateSkipped++;
+            LateDetail ??= detail;
+        }
 
         public void Quota(string detail)
         {
@@ -368,6 +440,7 @@ public sealed class ClaimJobCommandHandler(
             p.Fail(FailureCode.Network, "ไม่ได้รับผลการโพสต์จากส่วนขยายภายใน 15 นาที", now);
             events.Add(DeviceEvents.PostChanged(ws.Id, device.Id, p, now));
             notes.Settled(p);
+            notes.Lost.Add(p);
         }
         if (claimed.Any(p => !p.ClaimExpired(now))) return null; // one post at a time
         // A bump the browser took and never reported is not retried either (the comment may be there).
@@ -376,7 +449,8 @@ public sealed class ClaimJobCommandHandler(
         if (claimedBumps.Any(b => !b.ClaimExpired(now))) return null;
 
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
-        DevicePause.Settle(device, events, now); // a pause that ran out ends here
+        notes.PauseEnded = DevicePause.Settle(device, events, now, out var pauseReason); // a pause that ran out ends here
+        notes.PauseReason = pauseReason;
         if (device.JobsPaused || device.IsAutoPaused(now) || !ws.ExtensionOnline || account is null || !account.CanPost) return null;
         var owner = await users.OwnerOfAsync(ws, ct);
         if (!owner.CanPost) return null; // suspended, banned or paused by the platform admin
@@ -390,7 +464,7 @@ public sealed class ClaimJobCommandHandler(
         if (last is { } l && now - l < gap) return null;
 
         var due = await posts.ListDueAsync(account.Id, now, ct);
-        if (due.Count == 0) return await NextBumpAsync(device, ws, account, owner, now, ct);
+        if (due.Count == 0) return await NextBumpAsync(device, ws, account, owner, now, notes, ct);
 
         // Too many of the last day's posts failed: the engine stops until they age out (or the numbers are changed).
         if (advanced.StopFailPct > 0)
@@ -470,6 +544,7 @@ public sealed class ClaimJobCommandHandler(
             {
                 p.SkipLate(now);
                 Settle(p);
+                notes.Late("งานเหล่านี้ถึงเวลาตอนเครื่องไม่ได้รับงานนานเกินกำหนด (ตั้งไว้ที่หน้านโยบายออฟไลน์) จึงไม่โพสต์ย้อนหลัง");
                 continue;
             }
             if (holdUntil > now) continue; // the group had a post lately: it stays queued
@@ -515,20 +590,43 @@ public sealed class ClaimJobCommandHandler(
                 .ToList();
             // The page tags are the schedule's collection's (an empty text = tag nobody): the extension has no page of its own.
             var pageTags = "";
+            Guid? setOfPost = null;
             if (p.ScheduleId is { } scheduleOfPost && await schedules.GetAsync(ws.Id, scheduleOfPost, ct) is { } sch)
+            {
                 pageTags = (await collections.GetAsync(ws.Id, sch.CollectionId, ct))?.Settings.PageTags ?? "";
+                setOfPost = sch.LinkSetId;
+            }
             var kind = FacebookGroupUrl.KindOf(url) == FacebookTargetKind.Page ? "page" : "group";
-            return new JobDto(p.Id, p.Target, url, p.Content, items, AntiBanDto.From(ws.AntiBan), "post", kind, pageTags);
+            notes.Taken = p;
+            return new JobDto(
+                p.Id, p.Target, url, p.Content, items, AntiBanDto.From(ws.AntiBan), "post", kind, pageTags,
+                Shot: await WantsShotAsync(ws, owner, p, setOfPost, ct));
         }
         // Nothing to post right now (everything due was settled or is held back): a bump may go instead.
-        return await NextBumpAsync(device, ws, account, owner, now, ct);
+        return await NextBumpAsync(device, ws, account, owner, now, notes, ct);
     }
 
     /// <summary>
     /// The next comment that bumps a post of this account, or null. Only for an owner whose plan includes bumping; one that
     /// is long overdue is dropped (a bump a day late is no bump), and so is one whose schedule is gone.
     /// </summary>
-    private async Task<JobDto?> NextBumpAsync(Device device, Workspace ws, SocialAccount account, User owner, DateTimeOffset now, CancellationToken ct)
+    /// <summary>
+    /// Whether the extension should take a picture of the posting window for this post: somebody would get the message
+    /// about it on Telegram, with a screenshot (the "screenshot" event is on for that group). Saves the picture
+    /// (a few hundred KB) from being taken and sent when nobody would see it.
+    /// </summary>
+    private async Task<bool> WantsShotAsync(Workspace ws, User owner, Post p, Guid? setId, CancellationToken ct)
+    {
+        if (!owner.HasNotifications) return false;
+        var n = ws.Notifications;
+        setId ??= p.LinkId is { } lid ? (await links.GetAsync(ws.Id, lid, ct))?.LinkSetId : null;
+        return n.Resolve(NotifyEvent.Shot, setId, p.LinkId).Telegram
+            && (n.Resolve(NotifyEvent.Success, setId, p.LinkId).Telegram
+                || n.Resolve(NotifyEvent.Fail, setId, p.LinkId).Telegram
+                || n.Resolve(NotifyEvent.Block, setId, p.LinkId).Telegram);
+    }
+
+    private async Task<JobDto?> NextBumpAsync(Device device, Workspace ws, SocialAccount account, User owner, DateTimeOffset now, Notes notes, CancellationToken ct)
     {
         if (!owner.HasBump) return null;
         foreach (var b in await bumps.ListDueAsync(account.Id, now, ct))
@@ -544,6 +642,7 @@ public sealed class ClaimJobCommandHandler(
                 continue;
             }
             b.Claim(device.Id, now);
+            notes.TakenBump = b;
             var files = (await media.ListAsync(ws.Id, ct)).ToDictionary(f => f.Id);
             var items = b.MediaIds
                 .Where(files.ContainsKey)
@@ -561,8 +660,9 @@ public sealed class ClaimJobCommandHandler(
 /// <param name="Blocked">Facebook showed a warning or a posting limit.</param>
 /// <param name="AwaitingApproval">The group holds the post for admin approval.</param>
 /// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it: what a bump opens.</param>
+/// <param name="Shot">A picture of the posting window (already checked, see <see cref="ShotImage"/>): goes to Telegram with the message about this post.</param>
 public sealed record ReportJobResultCommand(
-    Guid PostId, bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null) : ICommand<PostDto>;
+    Guid PostId, bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null, byte[]? Shot = null) : ICommand<PostDto>;
 
 /// <summary>
 /// Settles a post the device reported on, and what follows from it: the link's health (a group that kept failing is
@@ -572,8 +672,8 @@ public sealed record ReportJobResultCommand(
 /// </summary>
 public sealed class ReportJobResultCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts,
-    ISetLinkRepository links, IScheduleRepository schedules, IUserRepository users, IPostBumpRepository bumps, IDeviceEventRepository events,
-    INotificationDispatcher notifier, IRandomSource random, IUnitOfWork uow, TimeProvider clock)
+    ISetLinkRepository links, ILinkSetRepository linkSets, IScheduleRepository schedules, IUserRepository users, IPostBumpRepository bumps,
+    IDeviceEventRepository events, INotificationDispatcher notifier, IRandomSource random, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ReportJobResultCommand, PostDto>
 {
     /// <summary>Hours a device rests after too many failed posts in a row.</summary>
@@ -593,6 +693,7 @@ public sealed class ReportJobResultCommandHandler(
         var advanced = ws.AntiBan.Advanced;
         var link = post.LinkId is { } linkId ? await links.GetAsync(ws.Id, linkId, ct) : null;
         var notices = new List<Notice>();
+        var where = await NoticeContextAsync(ws, post, link?.LinkSetId, c, now, ct);
 
         if (c.Ok)
         {
@@ -614,7 +715,7 @@ public sealed class ReportJobResultCommandHandler(
                 if (c.AwaitingApproval) link.RecordPendingApproval();
                 if (link.Health != health) events.Add(DeviceEvents.LinksChanged(ws.Id, device.Id, link.LinkSetId, link.Id, link.Health, now));
             }
-            notices.Add(EngineNotices.Posted(post, link?.LinkSetId, c.AwaitingApproval));
+            notices.Add(EngineNotices.Posted(post, link?.LinkSetId, c.AwaitingApproval, where, now));
         }
         else
         {
@@ -642,9 +743,9 @@ public sealed class ReportJobResultCommandHandler(
                 if (device.AutoPause(now + blockPause.Value, "Facebook ขัดขวางการโพสต์ ระบบพักเครื่องชั่วคราว", now))
                     events.Add(DevicePause.Changed(device, now));
             }
-            if (c.NeedsLogin) notices.Add(EngineNotices.NeedsLogin(post, link?.LinkSetId, device));
-            else if (c.Blocked) notices.Add(EngineNotices.Blocked(post, link?.LinkSetId, device, c.Error, blockPause));
-            else notices.Add(EngineNotices.Failed(post, link?.LinkSetId, c.Error));
+            if (c.NeedsLogin) notices.Add(EngineNotices.NeedsLogin(post, link?.LinkSetId, device, where));
+            else if (c.Blocked) notices.Add(EngineNotices.Blocked(post, link?.LinkSetId, device, c.Error, blockPause, where));
+            else notices.Add(EngineNotices.Failed(post, link?.LinkSetId, c.Error, where));
             if (switchedOff is not null) notices.Add(switchedOff);
 
             // This post and the ones before it all failed: rest the device for a while.
@@ -669,15 +770,35 @@ public sealed class ReportJobResultCommandHandler(
         {
             try
             {
-                notices.AddRange(await EngineNotices.FinishedRoundsAsync(posts, schedules, ws.Id, [(scheduleId, slot)], ct));
+                notices.AddRange(await EngineNotices.FinishedRoundsAsync(posts, schedules, ws.Id, [(scheduleId, slot)], now, ct));
             }
             catch (Exception)
             {
                 // A round summary is a courtesy.
             }
         }
+        // The picture belongs to the message about this post, which is always the first one.
+        if (c.Shot is not null && notices.Count > 0) notices[0] = notices[0] with { Photo = c.Shot };
         await EngineNotices.SendAsync(notifier, ws.Id, notices, ct);
         return PostDto.From(post);
+    }
+
+    /// <summary>
+    /// Where the post stands in its round, for the message about it. Only looked up when somebody would get that message,
+    /// and a failure here only leaves the message without those lines.
+    /// </summary>
+    private async Task<PostContext> NoticeContextAsync(Workspace ws, Post post, Guid? linkSetId, ReportJobResultCommand c, DateTimeOffset now, CancellationToken ct)
+    {
+        var ev = c.Ok ? NotifyEvent.Success : c.NeedsLogin || c.Blocked ? NotifyEvent.Block : NotifyEvent.Fail;
+        if (!ws.Notifications.Resolve(ev, linkSetId, post.LinkId).Any) return PostContext.None;
+        try
+        {
+            return await EngineNotices.ContextAsync(posts, schedules, linkSets, ws.Id, post, linkSetId, now, ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            return PostContext.None;
+        }
     }
 }
 
@@ -686,7 +807,8 @@ public sealed record ReportBumpResultCommand(Guid BumpId, bool Ok, bool NeedsLog
 
 public sealed class ReportBumpResultCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
-    IPostBumpRepository bumps, IDeviceEventRepository events, IRandomSource random, IUnitOfWork uow, TimeProvider clock)
+    IPostBumpRepository bumps, IScheduleRepository schedules, IDeviceEventRepository events, INotificationDispatcher notifier, IRandomSource random,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ReportBumpResultCommand, Unit>
 {
     public async Task<Unit> HandleAsync(ReportBumpResultCommand c, CancellationToken ct = default)
@@ -721,7 +843,25 @@ public sealed class ReportBumpResultCommandHandler(
             }
         }
         await uow.SaveChangesAsync(ct);
+        await NotifyAsync(device, bump, c, ct);
         return Unit.Value;
+    }
+
+    // Only for a workspace that has the message switched on (it looks the schedule up), and never a failure of the result.
+    private async Task NotifyAsync(Device device, PostBump bump, ReportBumpResultCommand c, CancellationToken ct)
+    {
+        try
+        {
+            var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct);
+            var ev = c.Ok ? NotifyEvent.Job : c.NeedsLogin || c.Blocked ? NotifyEvent.Block : NotifyEvent.Fail;
+            if (ws is null || !ws.Notifications.Resolve(ev, null, null).Any) return;
+            var name = bump.ScheduleId is { } sid ? (await schedules.GetAsync(ws.Id, sid, ct))?.Name : null;
+            await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.BumpDone(bump, device, c.Ok, c.NeedsLogin, c.Blocked, c.Error, name)], ct);
+        }
+        catch (Exception) when (!ct.IsCancellationRequested)
+        {
+            // A courtesy: the result is already saved.
+        }
     }
 }
 
@@ -752,9 +892,12 @@ internal static class DevicePause
         DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Updated,
             new { name = device.Name, jobsPaused = device.JobsPaused, autoPausedUntil = device.AutoPausedUntil, autoPauseReason = device.AutoPauseReason }, now);
 
-    /// <summary>The pause ran out: clears it and says so, once.</summary>
-    public static void Settle(Device device, IDeviceEventRepository events, DateTimeOffset now)
+    /// <summary>The pause ran out: clears it and says so, once. Returns true (and why it had paused) when there was one to end.</summary>
+    public static bool Settle(Device device, IDeviceEventRepository events, DateTimeOffset now, out string? reason)
     {
-        if (device.EndAutoPause(now)) events.Add(Changed(device, now));
+        reason = device.AutoPauseReason;
+        if (!device.EndAutoPause(now)) return false;
+        events.Add(Changed(device, now));
+        return true;
     }
 }

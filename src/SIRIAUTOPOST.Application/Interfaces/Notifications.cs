@@ -10,8 +10,9 @@ public interface INotificationDispatcher
 {
     /// <param name="linkSetId">The link set the event is about, when it is about one.</param>
     /// <param name="linkId">The group link the event is about, when it is about one.</param>
-    /// <param name="text">The message, in Thai.</param>
-    Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default);
+    /// <param name="text">The message, in Thai, as Telegram HTML (<see cref="Common.NotificationText"/>).</param>
+    /// <param name="photo">A picture of the posting window (JPEG/PNG) to go with the message, where the channel can show one.</param>
+    Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default, byte[]? photo = null);
 }
 
 public sealed record GatewayResult(bool Ok, string? Error)
@@ -35,7 +36,11 @@ public sealed record TelegramChatsResult(IReadOnlyList<TelegramChat> Chats, stri
 /// <summary>The outside world's side of notifications. Implementations log failures instead of throwing them.</summary>
 public interface INotificationGateway
 {
-    Task<GatewayResult> SendTelegramAsync(string token, string chatId, string text, CancellationToken ct = default);
+    /// <param name="html">The text is Telegram HTML (bold, no link preview) instead of plain text.</param>
+    Task<GatewayResult> SendTelegramAsync(string token, string chatId, string text, CancellationToken ct = default, bool html = false);
+
+    /// <summary>A picture with an optional caption (at most <see cref="Common.NotificationText.TelegramCaptionMax"/> characters).</summary>
+    Task<GatewayResult> SendTelegramPhotoAsync(string token, string chatId, byte[] photo, string? caption, CancellationToken ct = default, bool html = false);
 
     Task<GatewayResult> SendLineAsync(string token, string to, string text, CancellationToken ct = default);
 

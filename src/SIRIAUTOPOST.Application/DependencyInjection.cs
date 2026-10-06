@@ -60,6 +60,8 @@ public static class DependencyInjection
 
         // AI post drafts
         services.AddSingleton<AiUsage>();
+        services.AddSingleton<StalledDeviceTracker>();
+        services.AddCommand<CheckStalledDevicesCommand, int, CheckStalledDevicesCommandHandler>();
         services.AddQuery<GetAiStatusQuery, AiStatusDto, GetAiStatusQueryHandler>();
         services.AddCommand<WriteAiPostsCommand, AiDraftsDto, WriteAiPostsCommandHandler>();
 

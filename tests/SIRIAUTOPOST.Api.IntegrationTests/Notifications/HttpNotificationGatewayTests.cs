@@ -62,6 +62,89 @@ public class HttpNotificationGatewayTests
     private static (HttpNotificationGateway Gateway, FakeHandler Handler, CapturingLogger Log) Make(HttpStatusCode status, string json) =>
         Make((_, _) => Task.FromResult(Json(status, json)));
 
+    // ---- bold text and pictures ----
+
+    [Fact]
+    public async Task A_html_message_asks_for_bold_and_no_link_preview_and_a_plain_one_does_not()
+    {
+        var (gateway, handler, _) = Make(HttpStatusCode.OK, """{"ok":true}""");
+
+        await gateway.SendTelegramAsync(Token, " 42 ", "❌ <b>ไม่สำเร็จ</b>", html: true);
+        await gateway.SendTelegramAsync(Token, "42", "a <b> b");
+
+        using var html = JsonDocument.Parse(handler.Requests[0].Body!);
+        Assert.Equal("❌ <b>ไม่สำเร็จ</b>", html.RootElement.GetProperty("text").GetString());
+        Assert.Equal("HTML", html.RootElement.GetProperty("parse_mode").GetString());
+        Assert.True(html.RootElement.GetProperty("disable_web_page_preview").GetBoolean());
+        Assert.Equal("42", html.RootElement.GetProperty("chat_id").GetString());
+        using var plain = JsonDocument.Parse(handler.Requests[1].Body!);
+        Assert.False(plain.RootElement.TryGetProperty("parse_mode", out _)); // a plain text is sent as it is
+    }
+
+    [Fact]
+    public async Task A_html_message_too_long_for_one_message_is_sent_as_plain_text_instead_of_cutting_a_tag()
+    {
+        var (gateway, handler, _) = Make(HttpStatusCode.OK, """{"ok":true}""");
+
+        await gateway.SendTelegramAsync(Token, "1", "<b>" + new string('ก', 5000) + "</b>", html: true);
+
+        using var doc = JsonDocument.Parse(handler.Requests.Single().Body!);
+        Assert.False(doc.RootElement.TryGetProperty("parse_mode", out _));
+        var text = doc.RootElement.GetProperty("text").GetString()!;
+        Assert.Equal(HttpNotificationGateway.TelegramMaxText, text.Length);
+        Assert.DoesNotContain("<b>", text);
+    }
+
+    [Fact]
+    public async Task A_picture_is_posted_to_sendPhoto_as_a_form_with_its_caption()
+    {
+        var (gateway, handler, _) = Make(HttpStatusCode.OK, """{"ok":true}""");
+        byte[] jpeg = [0xFF, 0xD8, 0xFF, 0xE0, 0x01, 0x02];
+
+        var result = await gateway.SendTelegramPhotoAsync(Token, " 42 ", jpeg, "✅ <b>สำเร็จ</b>", html: true);
+
+        Assert.True(result.Ok);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Post, request.Method);
+        Assert.EndsWith("/sendPhoto", request.Uri.AbsolutePath);
+        Assert.Equal("multipart/form-data", request.ContentType);
+        Assert.Contains("name=chat_id", request.Body);
+        Assert.Contains("42", request.Body);
+        Assert.Contains("filename=shot.jpg", request.Body);
+        Assert.Contains("image/jpeg", request.Body);
+        Assert.Contains("name=caption", request.Body);
+        Assert.Contains("✅ <b>สำเร็จ</b>", request.Body);
+        Assert.Contains("name=parse_mode", request.Body);
+    }
+
+    [Fact]
+    public async Task A_picture_without_a_caption_sends_none_and_a_png_says_so()
+    {
+        var (gateway, handler, _) = Make(HttpStatusCode.OK, """{"ok":true}""");
+        byte[] png = [0x89, 0x50, 0x4E, 0x47, 0x01];
+
+        await gateway.SendTelegramPhotoAsync(Token, "42", png, null);
+
+        var body = Assert.Single(handler.Requests).Body!;
+        Assert.DoesNotContain("name=caption", body);
+        Assert.Contains("filename=shot.png", body);
+    }
+
+    [Fact]
+    public async Task A_picture_refused_is_a_failure_that_never_shows_the_token()
+    {
+        var (gateway, _, log) = Make(HttpStatusCode.BadRequest, $$"""{"ok":false,"description":"Bad Request: wrong file at bot{{Token}}"}""");
+
+        var result = await gateway.SendTelegramPhotoAsync(Token, "42", [0xFF, 0xD8, 0xFF, 0x00], "x");
+
+        Assert.False(result.Ok);
+        Assert.DoesNotContain(Token, result.Error);
+        Assert.DoesNotContain(log.Lines, line => line.Contains(Token));
+        Assert.False((await gateway.SendTelegramPhotoAsync("bad token!", "42", [0xFF, 0xD8, 0xFF, 0x00], "x")).Ok);
+        Assert.False((await gateway.SendTelegramPhotoAsync(Token, " ", [0xFF, 0xD8, 0xFF, 0x00], "x")).Ok);
+        Assert.False((await gateway.SendTelegramPhotoAsync(Token, "42", [], "x")).Ok);
+    }
+
     // ---- request shapes ----
 
     [Fact]

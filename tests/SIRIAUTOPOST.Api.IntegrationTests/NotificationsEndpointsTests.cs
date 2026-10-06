@@ -21,8 +21,8 @@ public class NotificationsEndpointsTests(ApiFactory factory)
 
     internal static object Events(
         bool success = false, bool fail = true, bool shot = true, bool round = true, bool startStop = true, bool block = true, bool offline = true,
-        bool quota = false) =>
-        new { success, fail, shot, round, startStop, block, offline, quota };
+        bool quota = false, bool job = false) =>
+        new { success, fail, shot, round, startStop, block, offline, quota, job };
 
     /// <summary>A complete request body: the API wants every part (a null token keeps the stored one).</summary>
     internal static object Settings(

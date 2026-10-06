@@ -179,13 +179,14 @@ public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateT
 
 // ---------- notifications ----------
 
-public sealed record NotifyEventsDto(bool Success, bool Fail, bool Shot, bool Round, bool StartStop, bool Block, bool Offline, bool Quota)
+public sealed record NotifyEventsDto(
+    bool Success, bool Fail, bool Shot, bool Round, bool StartStop, bool Block, bool Offline, bool Quota, bool Job = false)
 {
-    public static NotifyEventsDto From(NotifyEventSet e) => new(e.Success, e.Fail, e.Shot, e.Round, e.StartStop, e.Block, e.Offline, e.Quota);
+    public static NotifyEventsDto From(NotifyEventSet e) => new(e.Success, e.Fail, e.Shot, e.Round, e.StartStop, e.Block, e.Offline, e.Quota, e.Job);
 
     public NotifyEventSet ToSettings() => new()
     {
-        Success = Success, Fail = Fail, Shot = Shot, Round = Round, StartStop = StartStop, Block = Block, Offline = Offline, Quota = Quota,
+        Success = Success, Fail = Fail, Shot = Shot, Round = Round, StartStop = StartStop, Block = Block, Offline = Offline, Quota = Quota, Job = Job,
     };
 }
 

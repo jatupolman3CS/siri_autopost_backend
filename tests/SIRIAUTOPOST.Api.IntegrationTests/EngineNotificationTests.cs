@@ -11,16 +11,16 @@ using static SIRIAUTOPOST.Api.IntegrationTests.EngineTestSupport;
 
 namespace SIRIAUTOPOST.Api.IntegrationTests;
 
-internal sealed record Sent(NotifyEvent Event, Guid WorkspaceId, Guid? LinkSetId, Guid? LinkId, string Text);
+internal sealed record Sent(NotifyEvent Event, Guid WorkspaceId, Guid? LinkSetId, Guid? LinkId, string Text, byte[]? Photo = null);
 
 /// <summary>Remembers what the engine asked to be sent.</summary>
 internal sealed class RecordingNotifier : INotificationDispatcher
 {
     public ConcurrentQueue<Sent> Messages { get; } = new();
 
-    public Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default)
+    public Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default, byte[]? photo = null)
     {
-        Messages.Enqueue(new Sent(ev, workspaceId, linkSetId, linkId, text));
+        Messages.Enqueue(new Sent(ev, workspaceId, linkSetId, linkId, text, photo));
         return Task.CompletedTask;
     }
 
@@ -29,7 +29,7 @@ internal sealed class RecordingNotifier : INotificationDispatcher
 
 internal sealed class ThrowingNotifier : INotificationDispatcher
 {
-    public Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default) =>
+    public Task NotifyAsync(NotifyEvent ev, Guid workspaceId, Guid? linkSetId, Guid? linkId, string text, CancellationToken ct = default, byte[]? photo = null) =>
         throw new InvalidOperationException("Telegram is down");
 }
 
@@ -50,8 +50,18 @@ public class EngineNotificationTests(ApiFactory factory)
     {
         var notifier = new RecordingNotifier();
         var host = HostWith(notifier);
-        return (await host.ShopAsync(factory.Clock, links: links, posts: posts), notifier, host);
+        var shop = await host.ShopAsync(factory.Clock, links: links, posts: posts);
+        await EnableTelegramAsync(shop);
+        notifier.Messages.Clear(); // what setting the shop up said (pairing the machine is announced too)
+        return (shop, notifier, host);
     }
+
+    // Telegram on with the messages these tests look at: the engine only works out a message's details (set, round, next
+    // group) when somebody would get it, and asks the device for a screenshot only when one would go along.
+    private static async Task EnableTelegramAsync(Shop shop, bool shot = true) =>
+        (await shop.Owner.PutAsJsonAsync($"{shop.Api}/notifications",
+            NotificationsEndpointsTests.Settings("123:tg", "-100123", tgOn: true, events: NotificationsEndpointsTests.Events(success: true, shot: shot, quota: true)), Json))
+            .EnsureSuccessStatusCode();
 
     private static async Task<PostDto> RunAsync(Shop shop, int link = 0, bool ok = true, bool blocked = false, bool needsLogin = false, bool awaitingApproval = false)
     {
@@ -82,9 +92,10 @@ public class EngineNotificationTests(ApiFactory factory)
 
         var sent = Assert.Single(notifier.Of(NotifyEvent.Success));
         Assert.Equal((shop.Ws, shop.Set.Id, shop.Link(1).Id), (sent.WorkspaceId, sent.LinkSetId, sent.LinkId));
-        Assert.Contains("โพสต์สำเร็จ", sent.Text);
-        Assert.Contains("กลุ่ม 1 (C1)", sent.Text);
-        Assert.Contains("โพสต์", sent.Text.Split('“')[1]);
+        Assert.StartsWith("✅ <b>ทดสอบ · โพสต์สำเร็จ</b>", sent.Text); // the test post says so
+        Assert.Contains("<b>กลุ่ม 1 (C1)</b>\n" + shop.Link(1).Url, sent.Text); // the group in bold, its address under it
+        Assert.Contains("ชุด " + shop.Set.Name, sent.Text);
+        Assert.Contains("🕒", sent.Text);
         Assert.Single(notifier.Messages); // nothing else
     }
 
@@ -99,8 +110,8 @@ public class EngineNotificationTests(ApiFactory factory)
         await RunAsync(shop, 1, awaitingApproval: true);
 
         var failed = Assert.Single(notifier.Of(NotifyEvent.Fail));
-        Assert.Contains("โพสต์ล้มเหลว", failed.Text);
-        Assert.Contains("โดนจำกัดการโพสต์", failed.Text);
+        Assert.Contains("❌ <b>ทดสอบ · โพสต์ไม่สำเร็จ ข้ามกลุ่มนี้</b>", failed.Text);
+        Assert.Contains("สาเหตุ: โดนจำกัดการโพสต์", failed.Text);
         Assert.Contains("กลุ่ม 0 (C0)", failed.Text);
         Assert.Equal(shop.Link(0).Id, failed.LinkId);
         var pending = Assert.Single(notifier.Of(NotifyEvent.Success));
@@ -139,7 +150,8 @@ public class EngineNotificationTests(ApiFactory factory)
         var fails = notifier.Of(NotifyEvent.Fail);
         Assert.Equal(4, fails.Count); // three failures and the switch-off
         var off = fails[^1];
-        Assert.Contains("ปิดกลุ่ม กลุ่ม 0 อัตโนมัติ", off.Text);
+        Assert.Contains("ปิดกลุ่มอัตโนมัติ", off.Text);
+        Assert.Contains("กลุ่ม 0", off.Text);
         Assert.Contains("3 ครั้ง", off.Text);
         Assert.Equal((shop.Set.Id, shop.Link(0).Id), (off.LinkSetId, off.LinkId));
     }
@@ -177,11 +189,12 @@ public class EngineNotificationTests(ApiFactory factory)
         Assert.NotNull(await shop.RunNextAsync(ok: false, error: "ไม่ผ่าน"));
 
         var round = Assert.Single(notifier.Of(NotifyEvent.Round));
-        Assert.Contains("จบรอบโพสต์", round.Text);
+        Assert.Contains("สรุปรอบ", round.Text);
         Assert.Contains("ตารางเช้า", round.Text);
-        Assert.Contains("สำเร็จ 1", round.Text);
-        Assert.Contains("ล้มเหลว 1", round.Text);
-        Assert.Contains("จากทั้งหมด 2", round.Text);
+        Assert.Contains("สำเร็จ 1 กลุ่ม", round.Text);
+        Assert.Contains("ไม่สำเร็จ 1 กลุ่ม", round.Text);
+        Assert.Contains("ไม่ผ่าน", round.Text); // the failed group is named with its reason
+        Assert.Contains("ทั้งหมด 2 กลุ่ม", round.Text);
         Assert.Equal((shop.Ws, shop.Set.Id, null), (round.WorkspaceId, round.LinkSetId, round.LinkId));
     }
 
@@ -201,8 +214,102 @@ public class EngineNotificationTests(ApiFactory factory)
         Assert.Null(await shop.ClaimAsync()); // the second one is skipped: its group is off
 
         var round = Assert.Single(notifier.Of(NotifyEvent.Round));
-        Assert.Contains("สำเร็จ 1", round.Text);
-        Assert.Contains("ข้าม 1", round.Text);
+        Assert.Contains("สำเร็จ 1 กลุ่ม", round.Text);
+        Assert.Contains("ข้าม 1 กลุ่ม", round.Text);
+    }
+
+    [Fact]
+    public async Task A_message_in_a_round_names_the_set_the_schedule_the_round_the_place_in_it_and_the_next_group()
+    {
+        var (shop, notifier, host) = await StartAsync(links: 2);
+        using var _ = shop;
+        await using var __ = host;
+        await DueScheduleAsync(shop, 2);
+
+        Assert.NotNull(await shop.RunNextAsync(ok: false, error: "กดโพสต์แล้วแต่หน้าต่างไม่ปิด"));
+
+        // The layout the extension has always sent to Telegram: headline, group, address, reason, where, what is next.
+        var lines = Assert.Single(notifier.Of(NotifyEvent.Fail)).Text.Split('\n');
+        Assert.Equal(6, lines.Length);
+        Assert.Equal("❌ <b>โพสต์ไม่สำเร็จ ข้ามกลุ่มนี้</b>", lines[0]);
+        Assert.StartsWith("<b>กลุ่ม ", lines[1]);
+        Assert.StartsWith("https://www.facebook.com/groups/", lines[2]);
+        Assert.Equal("สาเหตุ: กดโพสต์แล้วแต่หน้าต่างไม่ปิด", lines[3]);
+        Assert.Equal("ชุด กลุ่มขายของ · ตารางเช้า · รอบ 1 (กลุ่ม 1/2)", lines[4]);
+        Assert.Matches(@"^⏭ กลุ่มถัดไป: \d\d/\d\d \d\d:\d\d:\d\d$", lines[5]);
+
+        shop.Wait(TimeSpan.FromMinutes(5));
+        Assert.NotNull(await shop.RunNextAsync(ok: true));
+        var done = Assert.Single(notifier.Of(NotifyEvent.Success)).Text.Split('\n');
+        Assert.Equal("✅ <b>โพสต์สำเร็จ</b>", done[0]);
+        Assert.Equal("ชุด กลุ่มขายของ · ตารางเช้า · รอบ 1 (กลุ่ม 2/2)", done[3]);
+        Assert.Matches(@"^🕒 \d\d/\d\d \d\d:\d\d:\d\d$", done[4]);
+        Assert.Equal(5, done.Length); // the round is over and nothing else is queued: no "next" line
+    }
+
+    [Fact]
+    public async Task Things_a_person_typed_are_escaped_so_they_cannot_break_the_message()
+    {
+        var (shop, notifier, host) = await StartAsync();
+        using var _ = shop;
+        await using var __ = host;
+
+        await RunAsync(shop, 0, ok: false); // the error text is the test helper's
+        await shop.TestPostAsync(0);
+        var job = await shop.ClaimAsync();
+        await shop.ReportAsync(job!.PostId, ok: false, error: "<script>x</script> & ผิดพลาด");
+
+        var text = notifier.Of(NotifyEvent.Fail).Last().Text;
+        Assert.Contains("สาเหตุ: &lt;script&gt;x&lt;/script&gt; &amp; ผิดพลาด", text);
+        Assert.DoesNotContain("<script>", text);
+    }
+
+    private static readonly byte[] SamplePicture = [0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x02, 0x03];
+
+    private static string DataUrl(byte[] bytes, string type = "image/jpeg") => $"data:{type};base64,{Convert.ToBase64String(bytes)}";
+
+    [Fact]
+    public async Task A_job_asks_for_a_screenshot_only_when_a_telegram_message_with_one_would_go_and_the_picture_goes_with_the_message()
+    {
+        var (shop, notifier, host) = await StartAsync(links: 1);
+        using var _ = shop;
+        await using var __ = host;
+
+        await shop.TestPostAsync(0);
+        var job = await shop.ClaimAsync();
+        Assert.True(job!.Shot);
+        await shop.ReportAsync(job.PostId, ok: true, shot: DataUrl(SamplePicture));
+        var posted = Assert.Single(notifier.Of(NotifyEvent.Success));
+        Assert.Equal(SamplePicture, posted.Photo);
+
+        // The screenshot event switched off: nobody would see a picture, so the device is not asked to take one.
+        await EnableTelegramAsync(shop, shot: false);
+        shop.Wait(TimeSpan.FromMinutes(5));
+        await shop.TestPostAsync(0);
+        var plain = await shop.ClaimAsync();
+        Assert.False(plain!.Shot);
+        await shop.ReportAsync(plain.PostId, ok: true, shot: DataUrl(SamplePicture)); // a picture sent anyway still only reaches the message
+        Assert.Equal(2, notifier.Of(NotifyEvent.Success).Count);
+    }
+
+    [Fact]
+    public async Task A_failure_carries_its_picture_too_and_something_that_is_not_a_picture_is_ignored()
+    {
+        var (shop, notifier, host) = await StartAsync(links: 1);
+        using var _ = shop;
+        await using var __ = host;
+
+        await shop.TestPostAsync(0);
+        var failing = await shop.ClaimAsync();
+        await shop.ReportAsync(failing!.PostId, ok: false, error: "ผิดพลาด", shot: DataUrl(SamplePicture, "image/png"));
+        Assert.Equal(SamplePicture, Assert.Single(notifier.Of(NotifyEvent.Fail)).Photo);
+
+        shop.Wait(TimeSpan.FromMinutes(5));
+        await shop.TestPostAsync(0);
+        var junk = await shop.ClaimAsync();
+        var result = await shop.ReportAsync(junk!.PostId, ok: true, shot: DataUrl("not a picture"u8.ToArray(), "text/plain"));
+        Assert.Equal(PostStatus.Success, result.Status); // the result is what matters
+        Assert.Null(notifier.Of(NotifyEvent.Success).Last().Photo);
     }
 
     [Fact]

@@ -173,7 +173,7 @@ public sealed record AddCollectionPostCommand(Guid WorkspaceId, Guid CollectionI
 
 public sealed class AddCollectionPostCommandHandler(
     IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IMediaRepository media,
-    CollectionPostViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    CollectionPostViews views, PlanQuotas quotas, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AddCollectionPostCommand, CollectionPostDto>
 {
     public async Task<CollectionPostDto> HandleAsync(AddCollectionPostCommand c, CancellationToken ct = default)
@@ -184,6 +184,7 @@ public sealed class AddCollectionPostCommandHandler(
         var post = CollectionPost.Create(collection, c.Text, c.MediaIds, now);
         await CollectionLookups.EnsureMediaExistAsync(media, c.WorkspaceId, post.MediaIds, ct);
         await CollectionLookups.EnsureRoomForPostsAsync(posts, c.WorkspaceId, 1, ct);
+        await quotas.EnsureLibraryPostsAsync(c.WorkspaceId, 1, ct);
         posts.Add(post);
         posts.AddMember(CollectionMember.Create(c.WorkspaceId, collection.Id, post.Id, now));
         await uow.SaveChangesAsync(ct);
@@ -197,7 +198,7 @@ public sealed record AddCollectionPostsBatchCommand(Guid WorkspaceId, Guid Colle
 
 public sealed class AddCollectionPostsBatchCommandHandler(
     IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IMediaRepository media,
-    CollectionPostViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    CollectionPostViews views, PlanQuotas quotas, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AddCollectionPostsBatchCommand, IReadOnlyList<CollectionPostDto>>
 {
     public const int MaxItems = 20;
@@ -210,6 +211,7 @@ public sealed class AddCollectionPostsBatchCommandHandler(
         var created = c.Items.Select(i => CollectionPost.Create(collection, i.Text, i.MediaIds, now)).ToList();
         await CollectionLookups.EnsureMediaExistAsync(media, c.WorkspaceId, created.SelectMany(p => p.MediaIds), ct);
         await CollectionLookups.EnsureRoomForPostsAsync(posts, c.WorkspaceId, created.Count, ct);
+        await quotas.EnsureLibraryPostsAsync(c.WorkspaceId, created.Count, ct);
         posts.AddRange(created);
         posts.AddMembers(created.Select(p => CollectionMember.Create(c.WorkspaceId, collection.Id, p.Id, now)));
         await uow.SaveChangesAsync(ct);

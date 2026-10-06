@@ -11,7 +11,8 @@ namespace SIRIAUTOPOST.Api.IntegrationTests;
 internal sealed record ScheduleSpec(
     string Mode = "daily", string[]? Times = null, string Order = "rotate", string? StartDate = null, string OnceTime = "14:00",
     int EveryHours = 6, string FirstTime = "09:00", string DripFrom = "09:00", string DripTo = "21:00", int DripCount = 3,
-    Dictionary<string, string[]>? Overrides = null, int Offset = 0, string? Name = null, int BumpHours = 0, int AutoDeleteDays = 0, bool StartNow = false);
+    Dictionary<string, string[]>? Overrides = null, int Offset = 0, string? Name = null, int BumpHours = 0, int AutoDeleteDays = 0, bool StartNow = false,
+    object? Bump = null);
 
 /// <summary>
 /// A workspace the engine can run: an owner (Pro unless said otherwise) with a browser paired, a collection of posts and
@@ -69,6 +70,7 @@ internal sealed class Shop : IDisposable
         overrides = spec.Overrides,
         utcOffsetMinutes = spec.Offset,
         startNow = spec.StartNow,
+        bump = spec.Bump,
     };
 
     public Task<HttpResponseMessage> TryCreateScheduleAsync(ScheduleSpec? spec = null, HttpClient? as_ = null) =>
@@ -111,9 +113,14 @@ internal sealed class Shop : IDisposable
     }
 
     public async Task<PostDto> ReportAsync(
-        Guid post, bool ok = true, bool awaitingApproval = false, bool needsLogin = false, bool blocked = false, string? error = null) =>
-        await (await Device.PostAsJsonAsync($"/api/device/jobs/{post}/result", new { ok, awaitingApproval, needsLogin, blocked, error }, Json))
+        Guid post, bool ok = true, bool awaitingApproval = false, bool needsLogin = false, bool blocked = false, string? error = null,
+        string? postUrl = null) =>
+        await (await Device.PostAsJsonAsync($"/api/device/jobs/{post}/result", new { ok, awaitingApproval, needsLogin, blocked, error, postUrl }, Json))
             .ReadAsync<PostDto>();
+
+    /// <summary>The result of a bump job.</summary>
+    public async Task<HttpResponseMessage> ReportBumpAsync(Guid bump, bool ok = true, bool needsLogin = false, bool blocked = false, string? error = null) =>
+        await Device.PostAsJsonAsync($"/api/device/bumps/{bump}/result", new { ok, needsLogin, blocked, error }, Json);
 
     /// <summary>Claims the next post and reports it; null when there was none.</summary>
     public async Task<PostDto?> RunNextAsync(bool ok = true, bool blocked = false, bool needsLogin = false, bool awaitingApproval = false, string? error = null)

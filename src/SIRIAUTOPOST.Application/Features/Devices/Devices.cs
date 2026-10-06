@@ -6,6 +6,7 @@ using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Exceptions;
 using SIRIAUTOPOST.Domain.Interfaces;
+using SIRIAUTOPOST.Domain.Services;
 using SIRIAUTOPOST.Domain.ValueObjects;
 
 namespace SIRIAUTOPOST.Application.Features.Devices;
@@ -60,7 +61,7 @@ public sealed class CreatePairingCodeCommandHandler(
 public sealed record RevokeDeviceCommand(Guid WorkspaceId, Guid DeviceId) : ICommand<Unit>;
 
 public sealed class RevokeDeviceCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts,
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps,
     IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RevokeDeviceCommand, Unit>
 {
@@ -68,7 +69,7 @@ public sealed class RevokeDeviceCommandHandler(
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, devices, events, clock.GetUtcNow(), ct);
+        await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
         await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);
         return Unit.Value;
@@ -85,8 +86,8 @@ internal static class DeviceRevocation
 
     /// <summary>Disconnects the account, fails its unfinished posts and removes the device. The caller saves.</summary>
     public static async Task RevokeAsync(
-        Device device, string whilePostingDetail, IAccountRepository accounts, IPostRepository posts, IDeviceRepository devices,
-        IDeviceEventRepository events, DateTimeOffset now, CancellationToken ct)
+        Device device, string whilePostingDetail, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps,
+        IDeviceRepository devices, IDeviceEventRepository events, DateTimeOffset now, CancellationToken ct)
     {
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         account?.Disconnect();
@@ -96,11 +97,15 @@ internal static class DeviceRevocation
             events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
         }
         if (account is not null)
+        {
             foreach (var p in await posts.ListOpenByAccountAsync(account.Id, ct))
             {
                 p.Fail(FailureCode.Session, QueuedDetail, now);
                 events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
             }
+            // Comments that were to bump its posts have no browser to make them any more.
+            foreach (var b in await bumps.ListOpenByAccountAsync(account.Id, ct)) b.Skip(QueuedDetail, now);
+        }
         devices.Remove(device);
         events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Revoked, new { name = device.Name }, now));
     }
@@ -124,6 +129,10 @@ public sealed class UpdateDeviceCommandHandler(
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         if (c.Name is not null)
         {
+            // Extensions of one workspace must have different names: they are told apart by name when posting.
+            var wanted = c.Name.Trim();
+            if (wanted.Length > 0 && (await devices.ListNamesAsync(ws.Id, device.Id, ct)).Any(n => Device.SameName(n, wanted)))
+                throw new DomainException($"มีส่วนขยายชื่อ \"{wanted}\" อยู่ในบัญชีนี้แล้ว ตั้งชื่อที่ไม่ซ้ำกัน");
             device.Rename(c.Name);
             account?.FollowDevice(device);
         }
@@ -184,7 +193,9 @@ public sealed class PairDeviceCommandHandler(
         await DeviceLimit.EnsureRoomAsync(ws, users, plans, devices, accounts, workspaces, ct);
 
         var key = secrets.NewDeviceKey();
-        var device = Device.Pair(ws.Id, c.Name, c.Browser ?? "", c.Version ?? "", secrets.Hash(key), now);
+        // A second browser that pairs with the same name ("Chrome 6/10/2569") gets "(2)": names are unique in a workspace.
+        var name = Device.UniqueName(c.Name, await devices.ListNamesAsync(ws.Id, null, ct));
+        var device = Device.Pair(ws.Id, name, c.Browser ?? "", c.Version ?? "", secrets.Hash(key), now);
         devices.Add(device);
         var account = SocialAccount.Connect(ws.Id, device, await accounts.CountAsync(ws.Id, ct));
         accounts.Add(account);
@@ -263,8 +274,8 @@ public sealed record ClaimJobCommand : ICommand<JobDto?>;
 public sealed class ClaimJobCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
     IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, ISetLinkRepository links,
-    IScheduleRepository schedules, IDeviceEventRepository events, ScheduleTopUp topUp, INotificationDispatcher notifier,
-    IUnitOfWork uow, TimeProvider clock)
+    IScheduleRepository schedules, ICollectionRepository collections, IPostBumpRepository bumps, IDeviceEventRepository events,
+    ScheduleTopUp topUp, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ClaimJobCommand, JobDto?>
 {
     /// <summary>The failure rate only stops the engine once this many posts finished in the last 24 hours.</summary>
@@ -293,7 +304,8 @@ public sealed class ClaimJobCommandHandler(
                     events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
                 ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
                 job = await NextAsync(device, ws, now, notes, ct);
-                if (job is not null)
+                // A bump is a comment, not a post: it has no event of its own for the posts list.
+                if (job is { Kind: "post" })
                     events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Post, new { postId = job.PostId, status = PostStatus.Posting }, now));
                 await uow.SaveChangesAsync(ct);
             }, ct);
@@ -358,6 +370,10 @@ public sealed class ClaimJobCommandHandler(
             notes.Settled(p);
         }
         if (claimed.Any(p => !p.ClaimExpired(now))) return null; // one post at a time
+        // A bump the browser took and never reported is not retried either (the comment may be there).
+        var claimedBumps = await bumps.ListClaimedByAsync(device.Id, ct);
+        foreach (var b in claimedBumps.Where(b => b.ClaimExpired(now))) b.Fail("ไม่ได้รับผลการดันโพสต์จากส่วนขยายภายใน 15 นาที", now);
+        if (claimedBumps.Any(b => !b.ClaimExpired(now))) return null;
 
         var account = await accounts.GetByDeviceAsync(device.Id, ct);
         DevicePause.Settle(device, events, now); // a pause that ran out ends here
@@ -367,11 +383,14 @@ public sealed class ClaimJobCommandHandler(
 
         var advanced = ws.AntiBan.Advanced;
         var gap = TimeSpan.FromMinutes(Math.Max(ws.AntiBan.Min, advanced.MinGap));
-        var last = await posts.LastPublishedAtAsync(account.Id, ct);
+        // The pause between two actions of one account counts bumps too: a comment right after a post is as fast as two posts.
+        var lastPosted = await posts.LastPublishedAtAsync(account.Id, ct);
+        var lastBump = await bumps.LastDoneAtAsync(account.Id, ct);
+        var last = lastPosted is { } lp0 && lastBump is { } lb ? (lp0 > lb ? lp0 : lb) : lastPosted ?? lastBump;
         if (last is { } l && now - l < gap) return null;
 
         var due = await posts.ListDueAsync(account.Id, now, ct);
-        if (due.Count == 0) return null;
+        if (due.Count == 0) return await NextBumpAsync(device, ws, account, owner, now, ct);
 
         // Too many of the last day's posts failed: the engine stops until they age out (or the numbers are changed).
         if (advanced.StopFailPct > 0)
@@ -494,7 +513,43 @@ public sealed class ClaimJobCommandHandler(
                 .Where(files.ContainsKey)
                 .Select(id => new JobMediaDto(id, files[id].Name, files[id].ContentType))
                 .ToList();
-            return new JobDto(p.Id, p.Target, url, p.Content, items, AntiBanDto.From(ws.AntiBan));
+            // The page tags are the schedule's collection's (an empty text = tag nobody): the extension has no page of its own.
+            var pageTags = "";
+            if (p.ScheduleId is { } scheduleOfPost && await schedules.GetAsync(ws.Id, scheduleOfPost, ct) is { } sch)
+                pageTags = (await collections.GetAsync(ws.Id, sch.CollectionId, ct))?.Settings.PageTags ?? "";
+            var kind = FacebookGroupUrl.KindOf(url) == FacebookTargetKind.Page ? "page" : "group";
+            return new JobDto(p.Id, p.Target, url, p.Content, items, AntiBanDto.From(ws.AntiBan), "post", kind, pageTags);
+        }
+        // Nothing to post right now (everything due was settled or is held back): a bump may go instead.
+        return await NextBumpAsync(device, ws, account, owner, now, ct);
+    }
+
+    /// <summary>
+    /// The next comment that bumps a post of this account, or null. Only for an owner whose plan includes bumping; one that
+    /// is long overdue is dropped (a bump a day late is no bump), and so is one whose schedule is gone.
+    /// </summary>
+    private async Task<JobDto?> NextBumpAsync(Device device, Workspace ws, SocialAccount account, User owner, DateTimeOffset now, CancellationToken ct)
+    {
+        if (!owner.HasBump) return null;
+        foreach (var b in await bumps.ListDueAsync(account.Id, now, ct))
+        {
+            if (b.TooLate(now))
+            {
+                b.Skip("เลยเวลาดันโพสต์แล้ว", now);
+                continue;
+            }
+            if (b.ScheduleId is { } scheduleId && await schedules.GetAsync(ws.Id, scheduleId, ct) is null)
+            {
+                b.Skip("ตารางโพสต์ถูกลบแล้ว", now);
+                continue;
+            }
+            b.Claim(device.Id, now);
+            var files = (await media.ListAsync(ws.Id, ct)).ToDictionary(f => f.Id);
+            var items = b.MediaIds
+                .Where(files.ContainsKey)
+                .Select(id => new JobMediaDto(id, files[id].Name, files[id].ContentType))
+                .ToList();
+            return new JobDto(b.Id, b.Target, b.Url, b.Text, items, AntiBanDto.From(ws.AntiBan), "bump");
         }
         return null;
     }
@@ -505,8 +560,9 @@ public sealed class ClaimJobCommandHandler(
 /// <param name="NeedsLogin">Facebook was logged out or asked for a checkpoint: the account needs a new login.</param>
 /// <param name="Blocked">Facebook showed a warning or a posting limit.</param>
 /// <param name="AwaitingApproval">The group holds the post for admin approval.</param>
+/// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it: what a bump opens.</param>
 public sealed record ReportJobResultCommand(
-    Guid PostId, bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error) : ICommand<PostDto>;
+    Guid PostId, bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null) : ICommand<PostDto>;
 
 /// <summary>
 /// Settles a post the device reported on, and what follows from it: the link's health (a group that kept failing is
@@ -516,8 +572,8 @@ public sealed record ReportJobResultCommand(
 /// </summary>
 public sealed class ReportJobResultCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts,
-    ISetLinkRepository links, IScheduleRepository schedules, IDeviceEventRepository events, INotificationDispatcher notifier,
-    IRandomSource random, IUnitOfWork uow, TimeProvider clock)
+    ISetLinkRepository links, IScheduleRepository schedules, IUserRepository users, IPostBumpRepository bumps, IDeviceEventRepository events,
+    INotificationDispatcher notifier, IRandomSource random, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ReportJobResultCommand, PostDto>
 {
     /// <summary>Hours a device rests after too many failed posts in a row.</summary>
@@ -541,6 +597,15 @@ public sealed class ReportJobResultCommandHandler(
         if (c.Ok)
         {
             post.CompletePosted(c.AwaitingApproval, now);
+            // Where it went up on Facebook (a bump opens it); nothing to bump while the group still has to approve it.
+            if (!c.AwaitingApproval)
+            {
+                post.RecordPostUrl(c.PostUrl);
+                if (post.ScheduleId is { } bumpScheduleId && post.PostUrl is not null
+                    && await schedules.GetAsync(ws.Id, bumpScheduleId, ct) is { BumpHours: > 0 } bumpSchedule
+                    && (await users.OwnerOfAsync(ws, ct)).HasBump)
+                    bumps.AddRange(BumpPlanner.Plan(post, bumpSchedule, now, random.NextDouble));
+            }
             account?.MarkHealthy();
             if (link is not null)
             {
@@ -613,6 +678,50 @@ public sealed class ReportJobResultCommandHandler(
         }
         await EngineNotices.SendAsync(notifier, ws.Id, notices, ct);
         return PostDto.From(post);
+    }
+}
+
+/// <summary>The extension's report on a bump it took: the comment was made, or why not.</summary>
+public sealed record ReportBumpResultCommand(Guid BumpId, bool Ok, bool NeedsLogin, bool Blocked, string? Error) : ICommand<Unit>;
+
+public sealed class ReportBumpResultCommandHandler(
+    ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
+    IPostBumpRepository bumps, IDeviceEventRepository events, IRandomSource random, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<ReportBumpResultCommand, Unit>
+{
+    public async Task<Unit> HandleAsync(ReportBumpResultCommand c, CancellationToken ct = default)
+    {
+        var now = clock.GetUtcNow();
+        var device = await DeviceAccess.RequireAsync(devices, current, ct);
+        if (device.Seen(null, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
+        var bump = await bumps.GetAsync(device.WorkspaceId, c.BumpId, ct);
+        if (bump is null || bump.ClaimedByDeviceId != device.Id) throw new NotFoundException("งานดันโพสต์", c.BumpId);
+        var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        if (c.Ok)
+        {
+            bump.Complete(now);
+            account?.MarkHealthy();
+        }
+        else
+        {
+            bump.Fail(c.Error, now);
+            if (c.NeedsLogin) account?.MarkNeedsLogin();
+            // A Facebook warning on a comment is a warning all the same: rest the browser like after a blocked post.
+            if (c.Blocked)
+            {
+                var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
+                if (ws.AntiBan.AutoPause)
+                {
+                    var advanced = ws.AntiBan.Advanced;
+                    var rest = TimeSpan.FromHours(advanced.BlockMin + random.NextDouble() * (advanced.BlockMax - advanced.BlockMin));
+                    if (device.AutoPause(now + rest, "Facebook ขัดขวางการดันโพสต์ ระบบพักเครื่องชั่วคราว", now))
+                        events.Add(DevicePause.Changed(device, now));
+                }
+            }
+        }
+        await uow.SaveChangesAsync(ct);
+        return Unit.Value;
     }
 }
 

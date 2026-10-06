@@ -70,7 +70,8 @@ public sealed class GetBackupQueryHandler(
             }
             backupSchedules.Add(new BackupScheduleDto(
                 s.Name, cName, lName, s.Mode, s.Times, s.EveryHours, s.FirstTime, s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-                s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays, overrides, s.Active, s.UtcOffsetMinutes, s.Repeat));
+                s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays, overrides, s.Active, s.UtcOffsetMinutes, s.Repeat,
+                BumpPlanDto.From(s.Bump)));
         }
 
         var n = ws.Notifications;
@@ -116,7 +117,7 @@ public sealed record RestoreBackupCommand(Guid WorkspaceId, BackupDto Backup) : 
 public sealed class RestoreBackupCommandHandler(
     IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IMediaRepository media, ICollectionRepository collections,
     ICollectionPostRepository collectionPosts, ILinkSetRepository linkSets, ISetLinkRepository setLinks, IScheduleRepository schedules,
-    IPostRepository posts, ScheduleTopUp topUp, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IPostRepository posts, ScheduleTopUp topUp, PlanQuotas quotas, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RestoreBackupCommand, RestoreResultDto>
 {
     public async Task<RestoreResultDto> HandleAsync(RestoreBackupCommand c, CancellationToken ct = default)
@@ -130,6 +131,10 @@ public sealed class RestoreBackupCommandHandler(
         if (b.Schedules.Count > Schedule.MaxPerWorkspace) throw new DomainException($"ไฟล์มีตารางโพสต์เกิน {Schedule.MaxPerWorkspace} ตาราง");
         if (b.Collections.Sum(x => x.Posts?.Count ?? 0) + (b.Posts?.Count ?? 0) > CollectionPost.MaxPerWorkspace)
             throw new DomainException($"ไฟล์มีโพสต์เกิน {CollectionPost.MaxPerWorkspace:N0} โพสต์");
+        // The package's size limits count the whole file (a restore replaces what the workspace has) plus the owner's other workspaces.
+        await quotas.EnsureRestoreFitsAsync(
+            ws.Id, b.LinkSets.Sum(x => x.Links?.Count ?? 0), b.Collections.SelectMany(x => x.Posts ?? []).Concat(b.Posts ?? [])
+                .Select(p => string.IsNullOrWhiteSpace(p.Key) ? Guid.NewGuid().ToString() : p.Key.Trim()).Distinct().Count(), ct);
         RequireUnique(b.Collections.Select(x => x.Name), "ชื่อชุดโพสต์");
         RequireUnique(b.LinkSets.Select(x => x.Name), "ชื่อชุดลิงก์");
 
@@ -210,10 +215,13 @@ public sealed class RestoreBackupCommandHandler(
             if (!newSets.TryGetValue((bsc.LinkSet ?? "").Trim(), out var set))
                 throw new DomainException($"ตาราง \"{bsc.Name}\" อ้างถึงชุดลิงก์ \"{bsc.LinkSet}\" ที่ไม่มีในไฟล์");
             var start = ParseDate(bsc.StartDate, bsc.UtcOffsetMinutes, now, bsc.Name);
+            var bump = bsc.Bump?.ToPlan();
+            if (bump is not null) bump.MediaIds = bump.MediaIds.Where(library.Contains).ToList(); // a file the library no longer has is dropped
             var schedule = Schedule.Create(
                 ws.Id, bsc.Name, collection.Id, set.Id, bsc.Mode, bsc.Times, bsc.EveryHours, bsc.FirstTime, start, bsc.OnceTime, bsc.Order,
                 bsc.DripFrom, bsc.DripTo, bsc.DripCount, bsc.BumpHours, bsc.AutoDeleteDays,
-                TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count), repeat: bsc.Repeat);
+                TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count), repeat: bsc.Repeat,
+                bump: bump);
             if (!bsc.Active) schedule.SetActive(false);
             newSchedules.Add(schedule);
         }

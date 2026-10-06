@@ -38,6 +38,16 @@
       <p id="pairMsg" class="muted" hidden></p>
     </section>
 
+    <!-- Just paired: nothing but the good news. The browser may not be signed in to the web app at all (or as another person), so
+         there is nothing else to show or to open from here. -->
+    <section id="pairDone" class="card accent done" hidden>
+      <h2>✅ เชื่อมต่อสำเร็จ</h2>
+      <p class="muted">เครื่องนี้เชื่อมกับ AutoPost แล้ว ปิดแท็บนี้ได้เลย</p>
+      <div class="row">
+        <button id="btnCloseTab" class="btn primary" type="button">ปิดแท็บนี้</button>
+      </div>
+    </section>
+
     <!-- Not paired -->
     <section id="unpairedCard" class="card" hidden>
       <h2>ยังไม่ได้เชื่อมกับเว็บ AutoPost</h2>

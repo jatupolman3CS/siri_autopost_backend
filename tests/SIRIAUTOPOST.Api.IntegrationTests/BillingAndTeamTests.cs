@@ -59,7 +59,7 @@ public class BillingAndTeamTests(ApiFactory factory)
     [Fact]
     public async Task Inviting_needs_seats_from_the_plan()
     {
-        var (owner, _, ws) = await factory.SignUpAsync("pro"); // 1 seat: the owner
+        var (owner, _, ws) = await factory.SignUpAsync("basic"); // 1 seat: the owner
         var res = await owner.PostAsJsonAsync($"/api/workspaces/{ws}/members", new { email = "x@shop.co", role = "editor" }, Json);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, res.StatusCode);
     }
@@ -93,7 +93,7 @@ public class BillingAndTeamTests(ApiFactory factory)
         var schedule = new
         {
             content = "จากทีม", startAt = DateTimeOffset.UtcNow.AddHours(3), useDelay = false, repeat = "none",
-            targets = new[] { new { accountId = accounts.First(a => a.Platform == Platform.Ig).Id } },
+            targets = new[] { new { accountId = (await factory.SeedAccountAsync(ws)).Id } },
         };
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", schedule, Json)).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await editor.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", schedule, Json)).StatusCode);

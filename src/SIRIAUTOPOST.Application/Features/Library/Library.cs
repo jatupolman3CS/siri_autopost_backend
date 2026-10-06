@@ -37,12 +37,14 @@ public sealed class GetMediaContentQueryHandler(IWorkspaceRepository workspaces,
 public sealed record UploadMediaCommand(Guid WorkspaceId, string FileName, string ContentType, byte[] Data, Guid? FolderId = null) : ICommand<MediaDto>;
 
 public sealed class UploadMediaCommandHandler(
-    IWorkspaceRepository workspaces, IMediaRepository media, IMediaFolderRepository folders, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IMediaRepository media, IMediaFolderRepository folders, PlanQuotas quotas, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UploadMediaCommand, MediaDto>
 {
     public async Task<MediaDto> HandleAsync(UploadMediaCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        await quotas.EnsureImagesAsync(c.WorkspaceId, 1, ct);
         var file = MediaFile.Create(c.WorkspaceId, c.FileName, c.ContentType, c.Data, clock.GetUtcNow());
         if (c.FolderId is { } fid)
         {

@@ -22,7 +22,7 @@ public class BillingTests
     public void Customer_overrides_win_over_the_plan_and_zero_means_unlimited()
     {
         var pro = PlanSetting.Defaults.Single(p => p.Key == PlanKey.Pro);
-        Assert.Equal(new EffectiveLimits(10, null, 3, 1), EffectiveLimits.Of(pro, null));
+        Assert.Equal(new EffectiveLimits(10, 300, 3, 3, 300, 1000, 1000), EffectiveLimits.Of(pro, null));
         var limits = EffectiveLimits.Of(pro, new LimitOverrides { Devices = 5, Accounts = 0 });
         Assert.Equal((null, 5), (limits.Accounts, limits.Devices));
     }

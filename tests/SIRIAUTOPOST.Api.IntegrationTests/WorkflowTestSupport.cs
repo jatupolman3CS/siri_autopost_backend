@@ -102,6 +102,20 @@ internal static class WorkflowTestSupport
         (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!
             .First(a => a.Platform == platform && a.Connected == connected);
 
+    /// <summary>
+    /// A Facebook account that no browser posts for, made straight in the database (a new workspace has none any more; the
+    /// demo accounts used to be what tests took for "an account without a browser").
+    /// </summary>
+    public static Task<AccountDto> SeedAccountAsync(
+        this ApiFactory factory, Guid ws, string name = "@shop", string target = "ฟีด", AccountHealth health = AccountHealth.Ok, string[]? groups = null) =>
+        factory.WithDbAsync(async db =>
+        {
+            var account = SocialAccount.Create(ws, Platform.Fb, name, "", target, health, groups, await db.Accounts.CountAsync(a => a.WorkspaceId == ws));
+            db.Accounts.Add(account);
+            await db.SaveChangesAsync();
+            return AccountDto.From(account);
+        });
+
     public const string FillerTarget = "ตัวเต็ม";
 
     /// <summary>

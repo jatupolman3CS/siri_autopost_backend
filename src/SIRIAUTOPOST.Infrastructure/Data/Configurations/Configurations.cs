@@ -107,6 +107,7 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         b.Property(x => x.SlotKey).HasMaxLength(20);
         b.Property(x => x.TargetUrl).HasMaxLength(Post.MaxTargetUrlLength);
         b.Property(x => x.Code).HasMaxLength(Post.MaxCodeLength);
+        b.Property(x => x.PostUrl).HasMaxLength(Post.MaxPostUrlLength);
         // A schedule's run is idempotent: one post per target and slot. Posts without a schedule are not constrained.
         b.HasIndex(x => new { x.ScheduleId, x.TargetKey, x.SlotKey }).IsUnique().HasFilter("schedule_id IS NOT NULL");
         b.HasIndex(x => new { x.ScheduleId, x.Status, x.ScheduledAt }).HasFilter("schedule_id IS NOT NULL");
@@ -118,6 +119,27 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         b.HasIndex(x => new { x.WorkspaceId, x.Status });
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
         b.HasOne<SocialAccount>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class PostBumpConfiguration : IEntityTypeConfiguration<PostBump>
+{
+    public void Configure(EntityTypeBuilder<PostBump> b)
+    {
+        b.ToTable("POST_BUMPS");
+        b.Property(x => x.Url).HasMaxLength(Post.MaxPostUrlLength).IsRequired();
+        b.Property(x => x.Target).HasMaxLength(Post.MaxTargetLength);
+        b.Property(x => x.Text).HasMaxLength(BumpPlan.MaxTextLength + 200);
+        b.Property(x => x.FailureDetail).HasMaxLength(PostBump.MaxDetailLength);
+        // One bump per post and round: a result that is reported twice cannot queue them twice.
+        b.HasIndex(x => new { x.PostId, x.Round }).IsUnique();
+        b.HasIndex(x => new { x.AccountId, x.Status, x.DueAt });
+        b.HasIndex(x => x.ScheduleId).HasFilter("schedule_id IS NOT NULL");
+        b.HasIndex(x => x.ClaimedByDeviceId);
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<Post>().WithMany().HasForeignKey(x => x.PostId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<SocialAccount>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<Device>().WithMany().HasForeignKey(x => x.ClaimedByDeviceId).OnDelete(DeleteBehavior.SetNull);
     }
 }
 
@@ -185,7 +207,8 @@ public sealed class DeviceConfiguration : IEntityTypeConfiguration<Device>
         b.Property(x => x.KeyHash).HasMaxLength(64).IsRequired();
         b.Property(x => x.AutoPauseReason).HasMaxLength(200);
         b.HasIndex(x => x.KeyHash).IsUnique();
-        b.HasIndex(x => x.WorkspaceId);
+        // The extensions of one workspace have different names (the handlers check it without regard to case; this is the backstop).
+        b.HasIndex(x => new { x.WorkspaceId, x.Name }).IsUnique();
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
     }
 }
@@ -279,6 +302,35 @@ public sealed class PromoConfiguration : IEntityTypeConfiguration<Promo>
         b.Property(x => x.Code).HasMaxLength(30).IsRequired();
         b.HasIndex(x => x.Code).IsUnique();
         b.Property(x => x.Discount).HasMaxLength(10).IsRequired();
+    }
+}
+
+public sealed class PaymentAttemptConfiguration : IEntityTypeConfiguration<PaymentAttempt>
+{
+    public void Configure(EntityTypeBuilder<PaymentAttempt> b)
+    {
+        b.ToTable("PAYMENT_ATTEMPTS");
+        b.Property(x => x.StripePaymentIntentId).HasMaxLength(100).IsRequired();
+        b.Property(x => x.StripeSubscriptionId).HasMaxLength(100);
+        b.Property(x => x.PromoCode).HasMaxLength(30);
+        b.Property(x => x.Amount).HasPrecision(12, 2);
+        b.Property(x => x.FailureMessage).HasMaxLength(500);
+        // One row per Stripe PaymentIntent: the webhook and the checkout's status calls both find the same row.
+        b.HasIndex(x => x.StripePaymentIntentId).IsUnique();
+        b.HasIndex(x => new { x.UserId, x.CreatedAt });
+        b.HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class PaymentOverrideConfiguration : IEntityTypeConfiguration<PaymentOverride>
+{
+    public void Configure(EntityTypeBuilder<PaymentOverride> b)
+    {
+        b.ToTable("PAYMENT_OVERRIDES");
+        // One row for the whole platform; created the first time an admin saves.
+        b.HasKey(x => x.Id);
+        b.Property(x => x.Id).ValueGeneratedNever();
+        b.Property(x => x.Emails).HasColumnType("text[]");
     }
 }
 
@@ -437,6 +489,7 @@ public sealed class ScheduleConfiguration : IEntityTypeConfiguration<Schedule>
         b.Property(x => x.OnceTime).HasMaxLength(5);
         b.Property(x => x.DripFrom).HasMaxLength(5);
         b.Property(x => x.DripTo).HasMaxLength(5);
+        b.Property(x => x.Bump).HasColumnName("bump_plan").HasColumnType("jsonb").HasJsonConversion(() => new BumpPlan());
         b.Property(x => x.Overrides).HasColumnType("jsonb")
             .HasJsonConversion(() => new Dictionary<string, List<string>>());
         b.HasIndex(x => new { x.WorkspaceId, x.Active });

@@ -3,25 +3,12 @@ using SIRIAUTOPOST.Domain.Exceptions;
 
 namespace SIRIAUTOPOST.Domain.ValueObjects;
 
-/// <summary>Maximum posts per day for each platform.</summary>
+/// <summary>Maximum posts per day for each platform (Facebook only for now; stored workspaces may still hold the old keys of other networks, which are ignored).</summary>
 public class PlatformLimits
 {
     public int Fb { get; set; } = 40;
-    public int X { get; set; } = 20;
-    public int Ig { get; set; } = 10;
-    public int Tt { get; set; } = 5;
-    public int Line { get; set; } = 3;
-    public int Th { get; set; } = 10;
 
-    public int For(Platform p) => p switch
-    {
-        Platform.Fb => Fb,
-        Platform.X => X,
-        Platform.Ig => Ig,
-        Platform.Tt => Tt,
-        Platform.Line => Line,
-        _ => Th,
-    };
+    public int For(Platform p) => Fb;
 }
 
 /// <summary>
@@ -75,7 +62,8 @@ public class AntiBanSettings
 {
     public const int MinDelayFloor = 1;
     public const int MaxDelayCeiling = 60;
-    public const int MaxDailyLimit = 200;
+    /// <summary>The highest posts-per-24-hours a platform may be set to (as high as the overall cap, <see cref="AdvancedAntiBanSettings.DailyAll"/>).</summary>
+    public const int MaxDailyLimit = 500;
 
     public int Min { get; set; } = 3;
     public int Max { get; set; } = 12;
@@ -85,6 +73,9 @@ public class AntiBanSettings
     public bool Shuffle { get; set; } = true;
     public bool AutoPause { get; set; } = true;
     public bool Warmup { get; set; }
+    /// <summary>How fast the extension types a post: slow, normal or fast (a Pro setting like the other human-behaviour ones).</summary>
+    public string TypingSpeed { get; set; } = "normal";
+    public static readonly string[] TypingSpeeds = ["slow", "normal", "fast"];
     /// <summary>The advanced numbers (Pro and above); see <see cref="AdvancedAntiBanSettings"/>.</summary>
     public AdvancedAntiBanSettings Advanced { get; set; } = new();
 
@@ -92,9 +83,9 @@ public class AntiBanSettings
     {
         if (Min < MinDelayFloor || Max > MaxDelayCeiling || Min >= Max)
             throw new DomainException($"ช่วงหน่วงเวลาต้องอยู่ระหว่าง {MinDelayFloor}–{MaxDelayCeiling} นาที และค่าต่ำสุดต้องน้อยกว่าค่าสูงสุด");
-        foreach (var p in Enum.GetValues<Platform>())
-            if (Limits.For(p) is < 1 or > MaxDailyLimit)
-                throw new DomainException($"เพดานต่อวันต้องอยู่ระหว่าง 1–{MaxDailyLimit}");
+        if (Limits.Fb is < 1 or > MaxDailyLimit)
+            throw new DomainException($"เพดานต่อวันต้องอยู่ระหว่าง 1–{MaxDailyLimit}");
+        if (!TypingSpeeds.Contains(TypingSpeed)) throw new DomainException("ความเร็วในการพิมพ์ต้องเป็น ช้า ปกติ หรือเร็ว");
         Advanced.Validate();
     }
 }

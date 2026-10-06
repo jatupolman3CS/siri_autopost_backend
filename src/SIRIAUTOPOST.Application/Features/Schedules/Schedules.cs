@@ -57,7 +57,8 @@ public sealed class ScheduleViews(
             s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount,
             s.BumpHours, s.AutoDeleteDays,
             s.Overrides.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value),
-            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow, s.Repeat);
+            s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow, s.Repeat,
+            BumpPlanDto.From(s.Bump));
 }
 
 public sealed record GetSchedulesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ScheduleDto>>;
@@ -83,8 +84,8 @@ public sealed record CreateScheduleCommand(Guid WorkspaceId, SaveScheduleRequest
 
 public sealed class CreateScheduleCommandHandler(
     IWorkspaceRepository workspaces, IScheduleRepository schedules, ICollectionRepository collections, ICollectionPostRepository collectionPosts,
-    ILinkSetRepository linkSets, ISetLinkRepository setLinks, IAccountRepository accounts, ScheduleTopUp topUp, ScheduleViews views,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    ILinkSetRepository linkSets, ISetLinkRepository setLinks, IAccountRepository accounts, IUserRepository users, IMediaRepository media,
+    ScheduleTopUp topUp, ScheduleViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreateScheduleCommand, ScheduleCreatedDto>
 {
     public const string NoDevice = "ยังไม่มีบัญชี Facebook ที่ผูกกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อนสร้างตารางโพสต์";
@@ -133,9 +134,17 @@ public sealed class CreateScheduleCommandHandler(
             name = $"{collection.Name} → {set.Name}";
             if (name.Length > Schedule.MaxNameLength) name = name[..Schedule.MaxNameLength];
         }
+        // Bumping is a top-plan feature (the owner's plan counts, whoever asks).
+        var bump = r.Bump?.ToPlan();
+        if (r.BumpHours > 0)
+        {
+            if (!(await users.OwnerOfAsync(ws, ct)).HasBump) throw new ForbiddenException(FeatureGates.PremiumRequired);
+            if (bump is { MediaIds.Count: > 0 } && await media.CountExistingAsync(ws.Id, bump.MediaIds, ct) != bump.MediaIds.Distinct().Count())
+                throw new DomainException("ไม่พบรูปสำหรับดันโพสต์บางรายการในคลัง");
+        }
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
-            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat);
+            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat, bump);
         var made = MaterializeResult.None;
         // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
         await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
@@ -259,8 +268,10 @@ public sealed class GetBestTimesQueryHandler(
 /// first usable one), or another account of the workspace; the post is a given or a random usable one of the collection;
 /// <paramref name="Text"/> replaces its text.
 /// </summary>
+/// <param name="DeviceId">The extension (browser) that sends it, when the workspace has several; null = the one the link set names.</param>
 public sealed record CreateTestPostCommand(
-    Guid WorkspaceId, Guid LinkSetId, Guid? LinkId, Guid? AccountId, Guid CollectionId, Guid? CollectionPostId, string? Text) : ICommand<PostDto>;
+    Guid WorkspaceId, Guid LinkSetId, Guid? LinkId, Guid? AccountId, Guid CollectionId, Guid? CollectionPostId, string? Text,
+    Guid? DeviceId = null) : ICommand<PostDto>;
 
 public sealed class CreateTestPostCommandHandler(
     IWorkspaceRepository workspaces, ILinkSetRepository linkSets, ISetLinkRepository setLinks, IAccountRepository accounts,
@@ -295,7 +306,9 @@ public sealed class CreateTestPostCommandHandler(
                 link = ScheduleTargets.Resolve(set, links, accountList).FirstOrDefault(t => t.Link is not null)?.Link;
                 if (link is null) throw new DomainException("ชุดลิงก์นี้ยังไม่มีกลุ่มที่ใช้ทดสอบได้ เลือกกลุ่มหรือบัญชีที่จะทดสอบ");
             }
-            account = LinkSetAccounts.PostingAccount(set, accountList) ?? throw new DomainException(CreateScheduleCommandHandler.NoDevice);
+            account = c.DeviceId is { } chosen
+                ? TestDevices.AccountOf(accountList, chosen)
+                : LinkSetAccounts.PostingAccount(set, accountList) ?? throw new DomainException(CreateScheduleCommandHandler.NoDevice);
         }
 
         var all = await collectionPosts.ListByCollectionAsync(ws.Id, collection.Id, ct);
@@ -321,6 +334,69 @@ public sealed class CreateTestPostCommandHandler(
             link?.Url, code);
         postRepo.Add(post);
         if (account.DeviceId is { } deviceId) events.Add(DeviceEvents.PostChanged(ws.Id, deviceId, post, now));
+        await uow.SaveChangesAsync(ct);
+        return PostDto.From(post);
+    }
+}
+
+/// <summary>Which browser a test post goes to when the workspace has more than one extension.</summary>
+internal static class TestDevices
+{
+    /// <summary>The Facebook account of the chosen device; 404 when the workspace has no such device, 422 when it has no account.</summary>
+    public static SocialAccount AccountOf(IReadOnlyList<SocialAccount> accounts, Guid deviceId) =>
+        accounts.FirstOrDefault(a => a.DeviceId == deviceId) ?? throw new NotFoundException("ส่วนขยาย", deviceId);
+
+    /// <summary>
+    /// The account that sends a test with no device named: when only one extension is connected it, else the person must
+    /// choose (a test that goes to an arbitrary browser would say nothing about the one they meant to try).
+    /// </summary>
+    public static SocialAccount Default(IReadOnlyList<SocialAccount> accounts)
+    {
+        var connected = accounts.Where(a => a.IsConnected).ToList();
+        return connected.Count switch
+        {
+            0 => throw new DomainException(CreateScheduleCommandHandler.NoDevice),
+            1 => connected[0],
+            _ => throw new DomainException("มีส่วนขยายมากกว่า 1 เครื่อง เลือกส่วนขยายที่จะส่งงานทดสอบก่อน"),
+        };
+    }
+}
+
+/// <summary>
+/// A test of the jobs without any collection or link set: a Facebook group or page address, a text and library images,
+/// sent to the chosen extension at once. The text goes through the same composing as a schedule's (spintax resolved; a
+/// <c>{{code}}</c> with no group code leaves nothing behind), so what is sent is what the person typed.
+/// </summary>
+public sealed record CreateManualTestPostCommand(Guid WorkspaceId, string Url, string Text, IReadOnlyList<Guid>? MediaIds, Guid? DeviceId)
+    : ICommand<PostDto>;
+
+public sealed class CreateManualTestPostCommandHandler(
+    IWorkspaceRepository workspaces, IAccountRepository accounts, IMediaRepository media, IPostRepository postRepo,
+    IDeviceEventRepository events, IRandomSource random, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<CreateManualTestPostCommand, PostDto>
+{
+    public const int MaxMedia = 10;
+
+    public async Task<PostDto> HandleAsync(CreateManualTestPostCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var url = FacebookGroupUrl.Normalize(c.Url)
+            ?? throw new DomainException("ลิงก์ต้องเป็นลิงก์กลุ่มหรือเพจ Facebook เช่น https://www.facebook.com/groups/ชื่อกลุ่ม");
+        var text = (c.Text ?? "").Trim();
+        if (text.Length == 0) throw new DomainException("ใส่ข้อความที่ต้องการทดสอบ");
+        var mediaIds = (c.MediaIds ?? []).Distinct().ToList();
+        if (mediaIds.Count > MaxMedia) throw new DomainException($"แนบรูปทดสอบได้ไม่เกิน {MaxMedia} รูป");
+        if (mediaIds.Count > 0 && await media.CountExistingAsync(ws.Id, mediaIds, ct) != mediaIds.Count)
+            throw new DomainException("ไม่พบไฟล์รูปบางรายการในคลัง");
+
+        var accountList = await accounts.ListAsync(ws.Id, ct);
+        var account = c.DeviceId is { } deviceId ? TestDevices.AccountOf(accountList, deviceId) : TestDevices.Default(accountList);
+        var composed = PostComposer.ComposeFull(text, null, new CollectionSettings(), random.NextDouble);
+        var name = FacebookGroupUrl.NameFromSlug(FacebookGroupUrl.Slug(url)!);
+        var now = clock.GetUtcNow();
+        var post = Post.Test(ws.Id, account, name.Length > 0 ? name : url, composed, mediaIds, now, null, null, url, null);
+        postRepo.Add(post);
+        if (account.DeviceId is { } id) events.Add(DeviceEvents.PostChanged(ws.Id, id, post, now));
         await uow.SaveChangesAsync(ct);
         return PostDto.From(post);
     }

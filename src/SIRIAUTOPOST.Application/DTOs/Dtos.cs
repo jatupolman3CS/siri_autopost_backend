@@ -12,9 +12,16 @@ public sealed record UserDto(Guid Id, string Email, string Name, UserRole Role, 
 
 /// <param name="Price">Baht per month, monthly billing.</param>
 /// <param name="Posts">Posts per 24 hours; null = unlimited (same for the other limits).</param>
-public sealed record PlanDto(PlanKey Key, int Price, int? Accounts, int? Posts, int? Devices, int? Seats)
+/// <param name="Groups">Facebook groups and pages (links of the link sets).</param>
+/// <param name="Images">Files in the image library.</param>
+/// <param name="LibraryPosts">Posts in the post library.</param>
+/// <param name="Features">What the package includes besides its numbers (<see cref="PlanFeatures"/> keys).</param>
+public sealed record PlanDto(
+    PlanKey Key, int Price, int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups, int? Images, int? LibraryPosts,
+    IReadOnlyList<string> Features)
 {
-    public static PlanDto From(PlanSetting p) => new(p.Key, p.Price, p.Accounts, p.Posts, p.Devices, p.Seats);
+    public static PlanDto From(PlanSetting p) =>
+        new(p.Key, p.Price, p.Accounts, p.Posts, p.Devices, p.Seats, p.Groups, p.Images, p.LibraryPosts, PlanFeatures.For(p.Key));
 }
 
 /// <param name="Amount">Baht, positive (a refund is money going back); Stripe's satang give it cents.</param>
@@ -45,20 +52,32 @@ public sealed record BillingDto(
     bool CancelAtPeriodEnd, bool CanManagePayment, CardDto? Card, LimitsDto Limits, UsageDto Usage);
 
 /// <summary>Limits in force for a customer; null = unlimited.</summary>
-public sealed record LimitsDto(int? Accounts, int? Posts, int? Devices, int? Seats)
+public sealed record LimitsDto(int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups, int? Images, int? LibraryPosts)
 {
-    public static LimitsDto From(EffectiveLimits l) => new(l.Accounts, l.Posts, l.Devices, l.Seats);
+    public static LimitsDto From(EffectiveLimits l) => new(l.Accounts, l.Posts, l.Devices, l.Seats, l.Groups, l.Images, l.LibraryPosts);
 }
 
-/// <param name="Accounts">Accounts connected through the extension, all the customer's workspaces (the sample accounts do not count).</param>
+/// <param name="Accounts">Accounts connected through the extension, all the customer's workspaces.</param>
 /// <param name="PostsLast24h">Posts published in the last 24 hours, all the customer's workspaces: the plan's posts-per-day window.</param>
 /// <param name="Devices">Devices in the customer's busiest workspace: devices are limited per workspace.</param>
-public sealed record UsageDto(int Accounts, int PostsLast24h, int Devices);
+/// <param name="Groups">Groups and pages in the link sets of all the customer's workspaces.</param>
+/// <param name="Images">Files in the image libraries of all the customer's workspaces.</param>
+/// <param name="LibraryPosts">Posts in the post libraries of all the customer's workspaces.</param>
+public sealed record UsageDto(int Accounts, int PostsLast24h, int Devices, int Groups, int Images, int LibraryPosts);
 
 /// <summary>The outcome of choosing a plan: the plan changed already, or the customer must pay first at <paramref name="CheckoutUrl"/>.</summary>
 public sealed record PlanChangeDto(UserDto User, string? CheckoutUrl);
 
 public sealed record UrlDto(string Url);
+
+/// <param name="Enabled">The server has an AI key; without one the web app disables every AI button.</param>
+/// <param name="Allowed">The workspace owner's plan includes the AI writer.</param>
+/// <param name="Model">The model that answers (empty while disabled).</param>
+/// <param name="DraftsLeftToday">Drafts this workspace may still ask for today; null = no daily limit.</param>
+public sealed record AiStatusDto(bool Enabled, bool Allowed, string Model, int? DraftsLeftToday);
+
+/// <summary>Drafts written by the AI: one text each, not saved anywhere.</summary>
+public sealed record AiDraftsDto(IReadOnlyList<string> Variants);
 
 public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserDto User);
 
@@ -70,12 +89,15 @@ public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserD
 /// <param name="Notifications">The owner's plan includes Telegram/LINE notifications.</param>
 /// <param name="AutoReply">The owner's plan includes auto-reply rules.</param>
 /// <param name="ClientReports">The owner's plan includes shareable client reports (Agency).</param>
+/// <param name="Ai">The owner's plan includes AI post drafts.</param>
+/// <param name="Bump">The owner's plan includes bumping posts.</param>
 public sealed record WorkspaceDto(
     Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role, LimitsDto Limits, bool AdvancedAntiBan, bool Notifications,
-    bool AutoReply, bool ClientReports)
+    bool AutoReply, bool ClientReports, bool Ai, bool Bump)
 {
     public static WorkspaceDto From(Workspace w, int posts7, int members, WorkspaceRole role, LimitsDto limits, User owner) =>
-        new(w.Id, w.Name, posts7, members, role, limits, owner.HasAdvancedAntiBan, owner.HasNotifications, owner.HasAutoReply, owner.HasClientReports);
+        new(w.Id, w.Name, posts7, members, role, limits, owner.HasAdvancedAntiBan, owner.HasNotifications, owner.HasAutoReply, owner.HasClientReports,
+            owner.HasAi, owner.HasBump);
 }
 
 /// <param name="Connected">Posts through a paired browser (false for the demo accounts).</param>
@@ -133,11 +155,11 @@ public sealed record SnippetDto(Guid Id, string Title, string Text, int UsedCoun
     public static SnippetDto From(Snippet s) => new(s.Id, s.Title, s.Text, s.UsedCount, s.Active);
 }
 
-public sealed record PlatformLimitsDto(int Fb, int X, int Ig, int Tt, int Line, int Th)
+public sealed record PlatformLimitsDto(int Fb)
 {
-    public static PlatformLimitsDto From(PlatformLimits l) => new(l.Fb, l.X, l.Ig, l.Tt, l.Line, l.Th);
+    public static PlatformLimitsDto From(PlatformLimits l) => new(l.Fb);
 
-    public PlatformLimits ToSettings() => new() { Fb = Fb, X = X, Ig = Ig, Tt = Tt, Line = Line, Th = Th };
+    public PlatformLimits ToSettings() => new() { Fb = Fb };
 }
 
 /// <summary>The advanced anti-ban numbers (Pro and above; lower plans keep the stored values).</summary>
@@ -155,17 +177,19 @@ public sealed record AdvancedAntiBanDto(
     };
 }
 
+/// <param name="TypingSpeed">slow, normal or fast: how fast the extension types (an old client may omit it: normal).</param>
 public sealed record AntiBanDto(
-    int Min, int Max, PlatformLimitsDto Limits, bool Typing, bool Scroll, bool Shuffle, bool AutoPause, bool Warmup, AdvancedAntiBanDto Advanced)
+    int Min, int Max, PlatformLimitsDto Limits, bool Typing, bool Scroll, bool Shuffle, bool AutoPause, bool Warmup, AdvancedAntiBanDto Advanced,
+    string TypingSpeed = "normal")
 {
     public static AntiBanDto From(AntiBanSettings s) =>
         new(s.Min, s.Max, PlatformLimitsDto.From(s.Limits), s.Typing, s.Scroll, s.Shuffle, s.AutoPause, s.Warmup,
-            AdvancedAntiBanDto.From(s.Advanced));
+            AdvancedAntiBanDto.From(s.Advanced), s.TypingSpeed);
 
     public AntiBanSettings ToSettings() => new()
     {
         Min = Min, Max = Max, Limits = Limits.ToSettings(),
-        Typing = Typing, Scroll = Scroll, Shuffle = Shuffle, AutoPause = AutoPause, Warmup = Warmup,
+        Typing = Typing, Scroll = Scroll, Shuffle = Shuffle, AutoPause = AutoPause, Warmup = Warmup, TypingSpeed = TypingSpeed ?? "normal",
         Advanced = Advanced?.ToSettings() ?? new AdvancedAntiBanSettings(), // an old client may omit it
     };
 }
@@ -229,8 +253,16 @@ public sealed record GroupLinkDto(string Name, string Url);
 
 public sealed record JobMediaDto(Guid Id, string Name, string ContentType);
 
-/// <summary>One post for the extension to publish now, in one Facebook group.</summary>
-public sealed record JobDto(Guid PostId, string GroupName, string GroupUrl, string Content, IReadOnlyList<JobMediaDto> Media, AntiBanDto AntiBan);
+/// <summary>
+/// One job for the extension to do now: a post to publish in one Facebook group or page (<paramref name="Kind"/> "post"), or
+/// a bump, a comment on a post made earlier (<paramref name="Kind"/> "bump": <paramref name="GroupUrl"/> is then the post's
+/// address and <paramref name="PostId"/> the id to report the result of at <c>bumps/{id}/result</c>).
+/// </summary>
+/// <param name="TargetKind">"group" or "page": where a post goes (a page needs the browser to act as the page).</param>
+/// <param name="PageTags">The collection's page tags: names of pages the text mentions that become clickable @tags.</param>
+public sealed record JobDto(
+    Guid PostId, string GroupName, string GroupUrl, string Content, IReadOnlyList<JobMediaDto> Media, AntiBanDto AntiBan,
+    string Kind = "post", string TargetKind = "group", string? PageTags = null);
 
 /// <param name="Id">The membership; null for the owner.</param>
 /// <param name="Active">Joined (false: invited, waiting for that email to sign up).</param>
@@ -242,7 +274,7 @@ public sealed record CustomerJobsDto(int Ok, int Failed, int Queued, int Running
 public sealed record CustomerDeviceDto(Guid Id, string Name, string Browser, DateTimeOffset? LastSeenAt, bool Online);
 
 /// <summary>null keeps the plan's value, 0 = unlimited.</summary>
-public sealed record LimitOverridesDto(int? Accounts, int? Posts, int? Devices, int? Seats);
+public sealed record LimitOverridesDto(int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups, int? Images, int? LibraryPosts);
 
 /// <param name="Accounts">Accounts connected through the extension.</param>
 /// <param name="Seats">People in the customer's workspaces, the customer included.</param>
@@ -291,6 +323,20 @@ public sealed record AdminJobDto(
 public sealed record PromoDto(string Code, string Discount, int Uses, DateTimeOffset ExpiresAt, bool Active)
 {
     public static PromoDto From(Promo p) => new(p.Code, p.Discount, p.Uses, p.ExpiresAt, p.Active);
+}
+
+/// <summary>The admin's payment test switch (see <c>PaymentOverride</c>).</summary>
+/// <param name="Amount">Baht charged for a billing period instead of the plan's price, for the listed customers only.</param>
+/// <param name="Emails">The customers it applies to (normalised).</param>
+/// <param name="UpdatedAt">When an admin saved it last; null until the first save.</param>
+/// <param name="MinAmount">The least Stripe can charge, baht.</param>
+/// <param name="PaymentsConnected">Stripe is configured; without it nothing can be paid, test amount or not.</param>
+public sealed record PaymentOverrideDto(bool Enabled, int Amount, IReadOnlyList<string> Emails, DateTimeOffset? UpdatedAt, int MinAmount, bool PaymentsConnected)
+{
+    public static PaymentOverrideDto From(PaymentOverride? p, bool paymentsConnected) =>
+        p is null
+            ? new PaymentOverrideDto(false, PlanSetting.MinPaidPrice, [], null, PlanSetting.MinPaidPrice, paymentsConnected)
+            : new PaymentOverrideDto(p.Enabled, p.Amount, p.Emails.ToList(), p.UpdatedAt, PlanSetting.MinPaidPrice, paymentsConnected);
 }
 
 /// <summary>The extension settings of one device (client/lib/shared.js shape), as saved last.</summary>

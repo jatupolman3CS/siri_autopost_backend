@@ -34,7 +34,7 @@ public sealed record GetBillingQuery : IQuery<BillingDto>;
 
 public sealed class GetBillingQueryHandler(
     IUserRepository users, IPlanRepository plans, IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts,
-    IDeviceRepository devices, IPaymentGateway gateway, ICurrentUser current, TimeProvider clock)
+    IDeviceRepository devices, IPaymentGateway gateway, PlanQuotas quotas, ICurrentUser current, TimeProvider clock)
     : IQueryHandler<GetBillingQuery, BillingDto>
 {
     public async Task<BillingDto> HandleAsync(GetBillingQuery q, CancellationToken ct = default)
@@ -46,10 +46,11 @@ public sealed class GetBillingQueryHandler(
         var limits = await plans.ForAsync(user, ct);
         var own = (await workspaces.ListByOwnerAsync(user.Id, ct)).Select(w => w.Id).ToList();
         var perWorkspace = (await devices.ListByWorkspacesAsync(own, ct)).GroupBy(d => d.WorkspaceId).Select(g => g.Count());
+        var (groups, images, libraryPosts) = await quotas.UsageOfOwnerAsync(own, ct);
         var usage = new UsageDto(
             await accounts.CountConnectedAsync(own, ct),
             await posts.CountPublishedSinceAsync(own, clock.GetUtcNow().AddDays(-1), ct),
-            perWorkspace.DefaultIfEmpty(0).Max());
+            perWorkspace.DefaultIfEmpty(0).Max(), groups, images, libraryPosts);
 
         return new BillingDto(
             gateway.Enabled, user.Plan, user.Cycle, user.Status, user.HasSubscription, user.PlanRenewsAt, user.CancelAtPeriodEnd, known,
@@ -62,12 +63,13 @@ public sealed class GetBillingQueryHandler(
 /// A paid plan for a customer with no subscription returns the Stripe Checkout page to pay at; the plan changes
 /// when Stripe confirms the payment. A customer who already has a subscription moves to the new plan at once,
 /// the difference prorated and invoiced by Stripe (choosing the current plan again takes back a scheduled
-/// cancellation). A promo code applies to the first invoice only.
+/// cancellation). A promo code applies to the first invoice only. A customer the admin listed for a payment test
+/// (<see cref="PaymentOverride"/>) is charged the test amount for the period instead of the plan's price.
 /// </summary>
 public sealed record ChangePlanCommand(PlanKey Plan, BillingCycle? Cycle, string? PromoCode) : ICommand<PlanChangeDto>;
 
 public sealed class ChangePlanCommandHandler(
-    IUserRepository users, IPlanRepository plans, IPromoRepository promos, IAuditRepository audit,
+    IUserRepository users, IPlanRepository plans, IPromoRepository promos, IAuditRepository audit, IPaymentOverrideRepository overrides,
     IPaymentGateway gateway, PaymentSync sync, IAppUrls urls, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ChangePlanCommand, PlanChangeDto>
 {
@@ -90,12 +92,20 @@ public sealed class ChangePlanCommandHandler(
         else if (user.HasSubscription)
         {
             if (promoCode.Length > 0) throw new DomainException("ใช้โค้ดส่วนลดได้ตอนสมัครแผนครั้งแรกเท่านั้น");
-            await MoveSubscriptionAsync(user, plan, cycle, ct);
+            await MoveSubscriptionAsync(user, plan, cycle, await TestAmountAsync(user, promoCode, ct), now, ct);
         }
-        else checkoutUrl = await StartCheckoutAsync(user, plan, cycle, promoCode, now, ct);
+        else checkoutUrl = await StartCheckoutAsync(user, plan, cycle, promoCode, await TestAmountAsync(user, promoCode, ct), now, ct);
 
         await uow.SaveChangesAsync(ct);
         return new PlanChangeDto(UserDto.From(user), checkoutUrl);
+    }
+
+    /// <summary>The admin's test amount for this customer (null = the plan's price). It replaces the price, so a promo code cannot go with it.</summary>
+    private async Task<int?> TestAmountAsync(User user, string promoCode, CancellationToken ct)
+    {
+        var amount = (await overrides.GetAsync(ct))?.ChargeFor(user.Email);
+        if (amount is not null && promoCode.Length > 0) throw new DomainException("ใช้โค้ดส่วนลดไม่ได้ขณะที่บัญชีนี้อยู่ในโหมดทดสอบการชำระเงิน");
+        return amount;
     }
 
     private async Task GoFreeAsync(User user, DateTimeOffset now, CancellationToken ct)
@@ -106,6 +116,10 @@ public sealed class ChangePlanCommandHandler(
             var snapshot = await gateway.SetCancelAtPeriodEndAsync(user.StripeSubscriptionId!, true, ct);
             sync.ApplySubscription(user, snapshot, user.Id);
         }
+        else if (user.IsPrepaid)
+        {
+            // Paid up to its end date (PromptPay) and nothing renews it: choosing Free just lets it run out.
+        }
         else if (user.Plan != PlanKey.Free)
         {
             var from = user.Plan;
@@ -114,7 +128,7 @@ public sealed class ChangePlanCommandHandler(
         }
     }
 
-    private async Task MoveSubscriptionAsync(User user, PlanSetting plan, BillingCycle cycle, CancellationToken ct)
+    private async Task MoveSubscriptionAsync(User user, PlanSetting plan, BillingCycle cycle, int? testAmount, DateTimeOffset now, CancellationToken ct)
     {
         if (!gateway.Enabled) throw new DomainException(NotReady);
         var id = user.StripeSubscriptionId!;
@@ -124,11 +138,16 @@ public sealed class ChangePlanCommandHandler(
             if (!user.CancelAtPeriodEnd) return; // already on it
             snapshot = await gateway.SetCancelAtPeriodEndAsync(id, false, ct);
         }
-        else snapshot = await gateway.ChangeSubscriptionAsync(id, plan.Key, cycle, plan.Price, ct);
+        else
+        {
+            snapshot = await gateway.ChangeSubscriptionAsync(id, plan.Key, cycle, plan.Price, testAmount, ct);
+            RecordTestAmount(user, plan.Key, testAmount, now);
+        }
         sync.ApplySubscription(user, snapshot, user.Id);
     }
 
-    private async Task<string> StartCheckoutAsync(User user, PlanSetting plan, BillingCycle cycle, string promoCode, DateTimeOffset now, CancellationToken ct)
+    private async Task<string> StartCheckoutAsync(
+        User user, PlanSetting plan, BillingCycle cycle, string promoCode, int? testAmount, DateTimeOffset now, CancellationToken ct)
     {
         if (!gateway.Enabled) throw new DomainException(NotReady);
         Promo? promo = null;
@@ -145,10 +164,19 @@ public sealed class ChangePlanCommandHandler(
         }
         var web = urls.WebBase;
         var discount = promo is null ? 0 : Pricing.FirstDiscount(plan.Price, cycle, promo.Discount);
-        return await gateway.CreateCheckoutAsync(new CheckoutRequest(
+        var url = await gateway.CreateCheckoutAsync(new CheckoutRequest(
             user.Id, customer, plan.Key, cycle, plan.Price, discount, promo?.Code,
             SuccessUrl: $"{web}/app/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
-            CancelUrl: $"{web}/app/billing?checkout=cancel"), ct);
+            CancelUrl: $"{web}/app/billing?checkout=cancel",
+            ChargeOverride: testAmount), ct);
+        RecordTestAmount(user, plan.Key, testAmount, now);
+        return url;
+    }
+
+    /// <summary>The activity log says when a customer was charged the test amount instead of the plan's price (saved with the handler's unit of work).</summary>
+    private void RecordTestAmount(User user, PlanKey plan, int? testAmount, DateTimeOffset now)
+    {
+        if (testAmount is { } amount) audit.Add(AuditEntry.Create(user.Id, user.Id, AuditAction.PaymentOverrideUsed, now, AuditEntry.Key(plan), Money.Text(amount)));
     }
 }
 
@@ -202,7 +230,8 @@ public sealed class CreatePortalSessionCommandHandler(IUserRepository users, IPa
 public sealed record StripeWebhookCommand(string Payload, string? Signature) : ICommand<Unit>;
 
 public sealed class StripeWebhookCommandHandler(
-    IPaymentGateway gateway, PaymentSync sync, IUserRepository users, IPaymentEventRepository processed, IUnitOfWork uow, TimeProvider clock)
+    IPaymentGateway gateway, PaymentSync sync, PaymentIntentSync intents, IUserRepository users, IPaymentEventRepository processed,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<StripeWebhookCommand, Unit>
 {
     public async Task<Unit> HandleAsync(StripeWebhookCommand c, CancellationToken ct = default)
@@ -228,6 +257,10 @@ public sealed class StripeWebhookCommandHandler(
                 break;
             case RefundEvent e:
                 await sync.RecordRefundAsync(e.Refund, ct);
+                break;
+            case PaymentIntentEvent e:
+                // The in-app checkout's payments (pending, paid, failed). Ones that are not ours (renewals) are ignored.
+                await intents.ApplyAsync(e.PaymentIntentId, ct);
                 break;
         }
 

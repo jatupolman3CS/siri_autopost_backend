@@ -20,17 +20,16 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task New_workspaces_start_with_the_sample_accounts_and_snippets()
+    public async Task New_workspaces_start_empty_with_no_sample_accounts_or_snippets()
     {
         var (client, _, ws) = await factory.SignUpAsync();
 
+        // Facebook groups and pages are all the system posts to: no sample Instagram, X, TikTok, LINE or Threads accounts.
         var accounts = (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
-        Assert.Equal(7, accounts.Count);
-        Assert.Equal(20, accounts[0].Groups.Count);
-        Assert.Contains(accounts, a => a.Health == AccountHealth.Relogin);
+        Assert.Empty(accounts);
 
         var snippets = (await client.GetFromJsonAsync<List<SnippetDto>>($"/api/workspaces/{ws}/snippets", Json))!;
-        Assert.Equal(4, snippets.Count);
+        Assert.Empty(snippets);
     }
 
     [Fact]
@@ -52,9 +51,8 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
     public async Task Schedule_list_and_delete_posts()
     {
         var (client, _, ws) = await factory.SignUpAsync();
-        var accounts = (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
-        var page = accounts[0];
-        var ig = accounts.First(a => a.Platform == Platform.Ig);
+        var page = await factory.SeedAccountAsync(ws, "เพจตัวอย่าง", "เพจ", groups: ["กลุ่ม 1", "กลุ่ม 2", "กลุ่ม 3"]);
+        var ig = await factory.SeedAccountAsync(ws);
 
         var res = await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", new
         {
@@ -83,7 +81,7 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
     public async Task Scheduling_reports_field_and_rule_errors()
     {
         var (client, _, ws) = await factory.SignUpAsync();
-        var accounts = (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
+        var other = await factory.SeedAccountAsync(ws);
 
         var empty = await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule",
             new { content = "", startAt = DateTimeOffset.UtcNow.AddHours(1), repeat = "none", targets = Array.Empty<object>() }, Json);
@@ -92,13 +90,13 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
         Assert.Contains("content", problem!.Errors.Keys);
         Assert.Contains("targets", problem.Errors.Keys);
 
-        var tiktok = accounts.First(a => a.Health == AccountHealth.Relogin);
+        var tiktok = await factory.SeedAccountAsync(ws, "@shop_tt", "โปรไฟล์", AccountHealth.Relogin);
         var relogin = await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule",
             new { content = "hi", startAt = DateTimeOffset.UtcNow.AddHours(1), repeat = "none", targets = new[] { new { accountId = tiktok.Id } } }, Json);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, relogin.StatusCode);
 
         var past = await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule",
-            new { content = "hi", startAt = DateTimeOffset.UtcNow.AddHours(-1), repeat = "none", targets = new[] { new { accountId = accounts[2].Id } } }, Json);
+            new { content = "hi", startAt = DateTimeOffset.UtcNow.AddHours(-1), repeat = "none", targets = new[] { new { accountId = other.Id } } }, Json);
         Assert.Equal(HttpStatusCode.UnprocessableEntity, past.StatusCode);
     }
 
@@ -134,14 +132,14 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
     public async Task Offline_simulation_holds_and_releases_due_posts()
     {
         var (client, _, ws) = await factory.SignUpAsync();
-        var accounts = (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
+        var page = await factory.SeedAccountAsync(ws, "เพจตัวอย่าง", "เพจ", groups: ["ก", "ข", "ค", "ง", "จ", "ฉ"]);
         await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", new
         {
             content = "hi",
             startAt = DateTimeOffset.UtcNow.AddHours(1),
             useDelay = true,
             repeat = "none",
-            targets = new[] { new { accountId = accounts[0].Id, groups = accounts[0].Groups.Take(6) } },
+            targets = new[] { new { accountId = page.Id, groups = page.Groups.Take(6) } },
         }, Json);
 
         async Task<int> Count(PostStatus status) =>
@@ -177,14 +175,14 @@ public class WorkspaceEndpointsTests(ApiFactory factory)
         var content = await client.GetByteArrayAsync($"/api/workspaces/{ws}/media/{media.Id}/content");
         Assert.Equal(7, content.Length);
 
-        var accounts = (await client.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
+        var other = await factory.SeedAccountAsync(ws);
         var res = await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", new
         {
             content = "มีรูป",
             mediaIds = new[] { media.Id },
             startAt = DateTimeOffset.UtcNow.AddHours(1),
             repeat = "none",
-            targets = new[] { new { accountId = accounts[2].Id } },
+            targets = new[] { new { accountId = other.Id } },
         }, Json);
         res.EnsureSuccessStatusCode();
 

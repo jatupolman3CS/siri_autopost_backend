@@ -26,9 +26,10 @@ public sealed record SubscriptionSnapshot(
 
 /// <param name="Price">The plan's price per month, baht (the yearly rate is worked out from it).</param>
 /// <param name="FirstDiscount">Baht a promo code takes off the first invoice (0 = none).</param>
+/// <param name="ChargeOverride">The admin's test amount (<see cref="PaymentOverride"/>): the baht charged for a billing period instead of the plan's price; null = the plan's price.</param>
 public sealed record CheckoutRequest(
     Guid UserId, string CustomerId, PlanKey Plan, BillingCycle Cycle, int Price, int FirstDiscount, string? PromoCode,
-    string SuccessUrl, string CancelUrl);
+    string SuccessUrl, string CancelUrl, int? ChargeOverride = null);
 
 /// <param name="Paid">The session is complete and its first payment went through (or nothing was due).</param>
 /// <param name="UserId">The user the session was created for (client_reference_id).</param>
@@ -72,13 +73,29 @@ public interface IPaymentGateway
 
     Task<CheckoutSessionSnapshot> GetCheckoutSessionAsync(string sessionId, CancellationToken ct = default);
 
+    /// <summary>
+    /// The in-app checkout for card, Apple Pay, Google Pay and Link: an incomplete subscription whose first invoice
+    /// the browser pays with Stripe.js. The plan starts when Stripe says the subscription is active.
+    /// </summary>
+    Task<StartedPayment> CreateSubscriptionPaymentAsync(SubscriptionPaymentRequest request, CancellationToken ct = default);
+
+    /// <summary>The in-app checkout for PromptPay: one PaymentIntent for one period of a plan (no subscription).</summary>
+    Task<StartedPayment> CreatePrepaidPaymentAsync(PrepaidPaymentRequest request, CancellationToken ct = default);
+
+    /// <summary>The PaymentIntent as Stripe has it now.</summary>
+    Task<PaymentIntentSnapshot> GetPaymentIntentAsync(string paymentIntentId, CancellationToken ct = default);
+
     /// <summary>The Billing Portal page where the customer updates the card, sees invoices and cancels.</summary>
     Task<string> CreatePortalAsync(string customerId, string returnUrl, CancellationToken ct = default);
 
     Task<SubscriptionSnapshot> GetSubscriptionAsync(string subscriptionId, CancellationToken ct = default);
 
-    /// <summary>Moves a live subscription to another plan or cycle now; the difference is prorated and invoiced at once. Fails when the card declines.</summary>
-    Task<SubscriptionSnapshot> ChangeSubscriptionAsync(string subscriptionId, PlanKey plan, BillingCycle cycle, int price, CancellationToken ct = default);
+    /// <summary>
+    /// Moves a live subscription to another plan or cycle now; the difference is prorated and invoiced at once. Fails when the card declines.
+    /// <paramref name="chargeOverride"/> (the admin's test amount) replaces the price of one billing period when set.
+    /// </summary>
+    Task<SubscriptionSnapshot> ChangeSubscriptionAsync(
+        string subscriptionId, PlanKey plan, BillingCycle cycle, int price, int? chargeOverride = null, CancellationToken ct = default);
 
     /// <summary>Schedules the subscription to end with the period (or takes the schedule back).</summary>
     Task<SubscriptionSnapshot> SetCancelAtPeriodEndAsync(string subscriptionId, bool cancel, CancellationToken ct = default);

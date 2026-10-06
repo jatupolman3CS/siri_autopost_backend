@@ -25,6 +25,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
     public const string AdminEmail = "admin@test.local";
     public const string AdminPassword = "admin-password";
     public const string StripeWebhookSecret = "whsec_integration_test";
+    public const string PublishableKey = "pk_test_integration";
 
     public static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web)
     {
@@ -36,6 +37,9 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
 
     /// <summary>Stripe, played by the tests. Tests that switch it off or make it decline must put it back.</summary>
     public FakePaymentGateway Payments { get; } = new(StripeWebhookSecret);
+
+    /// <summary>The AI writer, played by the tests (a real key is never used). Tests that switch it off must put it back.</summary>
+    public FakeAiWriter Ai { get; } = new();
 
     /// <summary>Telegram and LINE, played by the tests: notifications are delivered inline and recorded here.</summary>
     public FakeNotificationGateway Notifications { get; } = new();
@@ -53,11 +57,15 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);
         builder.UseSetting("Notifications:Inline", "true"); // delivered inside the request, so tests see what was sent at once
+        builder.UseSetting("Stripe:SecretKey", "sk_test_integration"); // the gateway is the fake; the keys make /billing/payment-config answer
+        builder.UseSetting("Stripe:PublishableKey", PublishableKey);
         builder.ConfigureTestServices(s =>
         {
             s.AddSingleton<TimeProvider>(Clock);
             s.RemoveAll<IPaymentGateway>();
             s.AddSingleton<IPaymentGateway>(Payments);
+            s.RemoveAll<IAiWriter>();
+            s.AddSingleton<IAiWriter>(Ai);
             s.RemoveAll<INotificationGateway>();
             s.AddSingleton<INotificationGateway>(Notifications);
         });
@@ -175,4 +183,19 @@ public sealed class TestClock : TimeProvider
 public sealed class ApiCollection : ICollectionFixture<ApiFactory>
 {
     public const string Name = "api";
+}
+
+/// <summary>An AI writer that answers at once with numbered drafts of the topic (or is switched off, like a server with no key).</summary>
+public sealed class FakeAiWriter : IAiWriter
+{
+    public bool IsOn { get; set; } = true;
+    public bool Enabled => IsOn;
+    public string Model => "fake-model";
+    public List<AiDraftRequest> Requests { get; } = [];
+
+    public Task<IReadOnlyList<string>> DraftAsync(AiDraftRequest request, CancellationToken ct = default)
+    {
+        Requests.Add(request);
+        return Task.FromResult<IReadOnlyList<string>>(Enumerable.Range(1, request.Count).Select(i => $"{{{{code}}}}\nร่าง {i}: {request.Topic}").ToList());
+    }
 }

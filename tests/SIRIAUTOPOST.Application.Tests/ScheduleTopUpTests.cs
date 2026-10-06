@@ -203,8 +203,9 @@ public class ScheduleTopUpTests
         var bigLinks = Enumerable.Range(0, 150).Select(i => SetLink.Create(rig.World.Ws.Id, big.Id, $"g{i}", $"https://www.facebook.com/groups/big{i}", "", 0, Now, i)).ToList();
         rig.World.LinkSets.GetAsync(rig.World.Ws.Id, big.Id, Arg.Any<CancellationToken>()).Returns(big);
         rig.World.SetLinks.ListBySetAsync(rig.World.Ws.Id, big.Id, Arg.Any<CancellationToken>()).Returns(bigLinks);
-        var tooMany = rig.Add(Schedule.Create(rig.World.Ws.Id, "ใหญ่", rig.World.Collection.Id, big.Id, ScheduleMode.Daily, ["18:00"], 6, "09:00", Today,
-            "14:00", PostOrder.Rotate, "09:00", "21:00", 3, 0, 0, null, 420, Now)); // 150 links x 14 days
+        var tooMany = rig.Add(Schedule.Create(rig.World.Ws.Id, "ใหญ่", rig.World.Collection.Id, big.Id, ScheduleMode.Daily,
+            Enumerable.Range(8, 14).Select(h => $"{h:00}:00"), 6, "09:00", Today,
+            "14:00", PostOrder.Rotate, "09:00", "21:00", 3, 0, 0, null, 420, Now)); // 150 links x 14 times = 2,100 posts a day
         var fine = rig.Add(rig.World.NewSchedule());
 
         var created = await rig.TopUp().EnsureAsync(rig.World.Ws.Id);

@@ -48,6 +48,13 @@ public class Post : Entity
     public string? Code { get; private set; }
     /// <summary>Sent from the test page: one real post, due at once.</summary>
     public bool IsTest { get; private set; }
+    /// <summary>
+    /// The address of the post on Facebook, as the extension saw it right after posting (empty when it could not find
+    /// it, or the group holds the post for approval). A bump opens this address.
+    /// </summary>
+    public string? PostUrl { get; private set; }
+
+    public const int MaxPostUrlLength = 500;
 
     private Post() { } // EF Core
 
@@ -228,6 +235,17 @@ public class Post : Entity
         PublishedAt = now.ToUniversalTime();
         ClaimedByDeviceId = null;
         UpdatedAt = now;
+    }
+
+    /// <summary>Remembers where the post went up on Facebook; anything but a Facebook address is ignored.</summary>
+    public void RecordPostUrl(string? url)
+    {
+        var u = (url ?? "").Trim();
+        if (u.Length == 0 || u.Length > MaxPostUrlLength) return;
+        if (!Uri.TryCreate(u, UriKind.Absolute, out var uri) || uri.Scheme is not ("https" or "http")) return;
+        var host = uri.Host.ToLowerInvariant();
+        if (host != "facebook.com" && !host.EndsWith(".facebook.com") && host != "fb.com" && !host.EndsWith(".fb.com")) return;
+        PostUrl = u;
     }
 
     /// <summary>Could not be posted (by the device, or refused before it was handed out).</summary>

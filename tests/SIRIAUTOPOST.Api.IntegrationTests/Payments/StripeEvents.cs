@@ -64,6 +64,12 @@ public static class StripeEvents
             },
         };
 
+    /// <summary>A PaymentIntent as payment_intent.* events carry it (the app only takes its id and reads the rest from Stripe).</summary>
+    public static object PaymentIntent(string id, string status = "succeeded", decimal baht = 790) => new Dictionary<string, object?>
+    {
+        ["id"] = id, ["object"] = "payment_intent", ["status"] = status, ["amount"] = (long)(baht * 100), ["currency"] = "thb",
+    };
+
     public static object Refund(string id, string paymentIntent, decimal baht, string status = "succeeded") => new Dictionary<string, object?>
     {
         ["id"] = id, ["object"] = "refund", ["amount"] = (long)(baht * 100), ["currency"] = "thb",

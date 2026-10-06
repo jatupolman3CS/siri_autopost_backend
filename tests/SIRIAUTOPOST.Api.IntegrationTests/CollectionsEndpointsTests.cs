@@ -324,7 +324,7 @@ public class CollectionsEndpointsTests(ApiFactory factory)
     [Fact]
     public async Task A_workspace_holds_at_most_100_collections_and_5000_posts()
     {
-        var (client, _, ws) = await factory.SignUpAsync();
+        var (client, _, ws) = await factory.SignUpAsync("agency"); // the package's own limits would stop a smaller plan first
         var now = DateTimeOffset.UtcNow;
         PostCollection? last = null;
         await factory.WithDbAsync(async db =>

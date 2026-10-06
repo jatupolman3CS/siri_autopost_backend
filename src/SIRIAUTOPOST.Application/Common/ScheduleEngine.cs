@@ -66,6 +66,10 @@ public sealed class ScheduleMaterializer(
     IPostRepository posts, ICollectionRepository collections, ICollectionPostRepository collectionPosts, ILinkSetRepository linkSets,
     ISetLinkRepository setLinks, IAccountRepository accounts, IRandomSource random)
 {
+    /// <summary>The refusal of a schedule whose single day holds more posts than one run may make.</summary>
+    public static readonly string TooManyPerDay =
+        $"ตารางนี้มีงานเกิน {Schedule.MaxPostsPerRun:N0} งานในวันเดียว ลดจำนวนกลุ่มหรือจำนวนเวลาโพสต์ แล้วลองใหม่";
+
     public async Task<MaterializeResult> MaterializeAsync(
         Workspace ws, Schedule s, DateOnly fromLocal, DateOnly toLocal, DateTimeOffset now, CancellationToken ct = default)
     {
@@ -177,9 +181,7 @@ public sealed class ScheduleMaterializer(
         // A slot nobody's post allows (a post limited to evenings, to a weekday, to a date range) makes nothing.
         void Queue(string slotKey, DateOnly day, int minutes, List<(ScheduleTarget Target, DateTimeOffset At)> fresh)
         {
-            if (created.Count + fresh.Count > Schedule.MaxPostsPerRun)
-                throw new DomainException(
-                    $"ตารางนี้จะสร้างโพสต์เกิน {Schedule.MaxPostsPerRun:N0} โพสต์ในครั้งเดียว ลดจำนวนกลุ่มหรือจำนวนเวลาโพสต์ แล้วลองใหม่");
+            if (created.Count + fresh.Count > Schedule.MaxPostsPerRun) throw new DomainException(TooManyPerDay);
 
             CollectionPost? shared = null;
             if (s.Order == PostOrder.Rotate)
@@ -240,6 +242,10 @@ public sealed class ScheduleMaterializer(
 
         // A Once schedule that starts now has no time of its own: the round above is all of it.
         var regular = !(s.Mode == ScheduleMode.Once && s.StartNow);
+        // A run makes whole days, at most MaxPostsPerRun posts: a big schedule (many groups, several times a day) gets
+        // the days that fit now and the rest from the next top-up, because GeneratedThrough stops at the last day made.
+        // Only one day that is bigger than that on its own is refused.
+        var through = toLocal;
         for (var day = fromLocal; regular && day <= toLocal; day = day.AddDays(1))
         {
             if (!s.Matches(day)) continue;
@@ -250,6 +256,15 @@ public sealed class ScheduleMaterializer(
                     if (!buckets.TryGetValue(slot, out var list)) buckets[slot] = list = [];
                     list.Add(t);
                 }
+
+            // The most the day can add (today's past slots counted too, so it is never less than what is made).
+            var most = buckets.Sum(b => b.Value.Count(t => !existing.Contains((t.TargetKey, Schedule.SlotKey(day, b.Key)))));
+            if (created.Count + most > Schedule.MaxPostsPerRun)
+            {
+                if (created.Count == 0) throw new DomainException(TooManyPerDay);
+                through = day.AddDays(-1);
+                break;
+            }
 
             foreach (var (slot, members) in buckets)
             {
@@ -267,7 +282,7 @@ public sealed class ScheduleMaterializer(
                 throw new QueueFullException(queued, created.Count, Schedule.MaxQueuedPerWorkspace);
         }
         foreach (var post in created) posts.Add(post);
-        s.MarkGenerated(s.GeneratedThrough is { } done && done > toLocal ? done : toLocal, cursor);
+        s.MarkGenerated(s.GeneratedThrough is { } done && done > through ? done : through, cursor);
         return created.Count == 0
             ? new MaterializeResult(0, null, null, [], usable.Count, Advanced: true)
             : new MaterializeResult(created.Count, created.Min(p => p.ScheduledAt), created.Max(p => p.ScheduledAt),

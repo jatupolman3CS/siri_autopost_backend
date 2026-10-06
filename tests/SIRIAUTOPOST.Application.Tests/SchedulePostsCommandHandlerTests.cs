@@ -26,7 +26,7 @@ public class SchedulePostsCommandHandlerTests
     {
         _ws = Workspace.Create(_userId, "Shop", Now);
         _page = SocialAccount.Create(_ws.Id, Platform.Fb, "Page", "", "เพจ", groups: ["A", "B", "C"]);
-        _ig = SocialAccount.Create(_ws.Id, Platform.Ig, "@shop", "", "ฟีด");
+        _ig = SocialAccount.Create(_ws.Id, Platform.Fb, "@shop", "", "ฟีด");
         _workspaces.GetByIdAsync(_ws.Id, Arg.Any<CancellationToken>()).Returns(_ws);
         _accounts.ListAsync(_ws.Id, Arg.Any<CancellationToken>()).Returns([_page, _ig]);
         _posts.When(p => p.Add(Arg.Any<Post>())).Do(c => _added.Add(c.Arg<Post>()));

@@ -135,7 +135,7 @@ public class WorkflowDtoTests
     {
         var device = Device.Pair(Ws, "PC", "Chrome", "2.2", "h", Now);
         var demoPage = SocialAccount.Create(Ws, Platform.Fb, "เพจตัวอย่าง", "", "เพจ");
-        var ig = SocialAccount.Create(Ws, Platform.Ig, "@shop", "", "ฟีด");
+        var ig = SocialAccount.Create(Ws, Platform.Fb, "@shop", "", "ฟีด");
         var connected = SocialAccount.Connect(Ws, device, 2);
         var all = new[] { demoPage, ig, connected };
 
@@ -173,7 +173,7 @@ public class WorkflowDtoTests
 
         var owner = User.Create("a@b.co", "A", UserRole.User, PlanKey.Pro, Now);
         var ws = Workspace.Create(owner.Id, "Shop", Now);
-        var w = WorkspaceDto.From(ws, 0, 1, WorkspaceRole.Owner, new LimitsDto(null, null, null, null), owner);
+        var w = WorkspaceDto.From(ws, 0, 1, WorkspaceRole.Owner, new LimitsDto(null, null, null, null, null, null, null), owner);
         Assert.Equal((true, true, true, false), (w.AdvancedAntiBan, w.Notifications, w.AutoReply, w.ClientReports));
     }
 }

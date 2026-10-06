@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Accounts;
 using SIRIAUTOPOST.Application.Features.Admin;
+using SIRIAUTOPOST.Application.Features.Ai;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Backup;
 using SIRIAUTOPOST.Application.Features.Billing;
@@ -44,12 +45,23 @@ public static class DependencyInjection
         // Plans and billing
         services.AddQuery<GetPlansQuery, IReadOnlyList<PlanDto>, GetPlansQueryHandler>();
         services.AddQuery<GetInvoicesQuery, IReadOnlyList<TransactionDto>, GetInvoicesQueryHandler>();
+        services.AddScoped<PlanQuotas>();
         services.AddScoped<PaymentSync>();
+        services.AddScoped<PaymentIntentSync>();
+        services.AddQuery<GetPaymentConfigQuery, PaymentConfigDto, GetPaymentConfigQueryHandler>();
+        services.AddCommand<StartPaymentCommand, PaymentIntentDto, StartPaymentCommandHandler>();
+        services.AddCommand<ConfirmPaymentCommand, PaymentStatusDto, ConfirmPaymentCommandHandler>();
+        services.AddCommand<EndPrepaidPlansCommand, int, EndPrepaidPlansCommandHandler>();
         services.AddQuery<GetBillingQuery, BillingDto, GetBillingQueryHandler>();
         services.AddCommand<ChangePlanCommand, PlanChangeDto, ChangePlanCommandHandler>();
         services.AddCommand<ConfirmCheckoutCommand, UserDto, ConfirmCheckoutCommandHandler>();
         services.AddCommand<CreatePortalSessionCommand, UrlDto, CreatePortalSessionCommandHandler>();
         services.AddCommand<StripeWebhookCommand, Unit, StripeWebhookCommandHandler>();
+
+        // AI post drafts
+        services.AddSingleton<AiUsage>();
+        services.AddQuery<GetAiStatusQuery, AiStatusDto, GetAiStatusQueryHandler>();
+        services.AddCommand<WriteAiPostsCommand, AiDraftsDto, WriteAiPostsCommandHandler>();
 
         // Team
         services.AddQuery<GetMembersQuery, IReadOnlyList<MemberDto>, GetMembersQueryHandler>();
@@ -156,6 +168,7 @@ public static class DependencyInjection
         services.AddCommand<DeleteScheduleCommand, Unit, DeleteScheduleCommandHandler>();
         services.AddQuery<GetBestTimesQuery, IReadOnlyList<string>, GetBestTimesQueryHandler>();
         services.AddCommand<CreateTestPostCommand, PostDto, CreateTestPostCommandHandler>();
+        services.AddCommand<CreateManualTestPostCommand, PostDto, CreateManualTestPostCommandHandler>();
         services.AddQuery<GetBackupQuery, BackupDto, GetBackupQueryHandler>();
         services.AddCommand<RestoreBackupCommand, RestoreResultDto, RestoreBackupCommandHandler>();
 
@@ -179,6 +192,7 @@ public static class DependencyInjection
         services.AddCommand<SyncDeviceGroupsCommand, int, SyncDeviceGroupsCommandHandler>();
         services.AddCommand<ClaimJobCommand, JobDto?, ClaimJobCommandHandler>();
         services.AddCommand<ReportJobResultCommand, PostDto, ReportJobResultCommandHandler>();
+        services.AddCommand<ReportBumpResultCommand, Unit, ReportBumpResultCommandHandler>();
         services.AddQuery<GetDeviceMediaQuery, MediaContent, GetDeviceMediaQueryHandler>();
 
         // The extension's own campaigns: edited in the web app, synced by the device
@@ -222,6 +236,8 @@ public static class DependencyInjection
         services.AddQuery<GetPromosQuery, IReadOnlyList<PromoDto>, GetPromosQueryHandler>();
         services.AddCommand<CreatePromoCommand, PromoDto, CreatePromoCommandHandler>();
         services.AddCommand<SetPromoActiveCommand, PromoDto, SetPromoActiveCommandHandler>();
+        services.AddQuery<GetPaymentOverrideQuery, PaymentOverrideDto, GetPaymentOverrideQueryHandler>();
+        services.AddCommand<SetPaymentOverrideCommand, PaymentOverrideDto, SetPaymentOverrideCommandHandler>();
 
         return services;
     }

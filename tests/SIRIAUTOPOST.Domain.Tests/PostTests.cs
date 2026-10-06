@@ -37,7 +37,7 @@ public class PostTests
     [Fact]
     public void Schedule_refuses_accounts_that_must_sign_in_again_or_belong_elsewhere()
     {
-        var expired = SocialAccount.Create(Ws, Platform.Tt, "tt", "", "โปรไฟล์", AccountHealth.Relogin);
+        var expired = SocialAccount.Create(Ws, Platform.Fb, "tt", "", "โปรไฟล์", AccountHealth.Relogin);
         Assert.Throws<DomainException>(() => Post.Schedule(Ws, expired, "x", "hi", [], Now.AddHours(1), Now));
         Assert.Throws<DomainException>(() => Post.Schedule(Guid.NewGuid(), Page, "A", "hi", [], Now.AddHours(1), Now));
     }

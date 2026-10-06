@@ -35,10 +35,16 @@ services:
       # Stripe takes the payments (empty key: paid plans cannot be bought). The webhook endpoint to register
       # in the Stripe dashboard is <public address>/api/webhooks/stripe.
       Stripe__SecretKey: ${Stripe__SecretKey:-}
+      Stripe__PublishableKey: ${Stripe__PublishableKey:-}
+      Stripe__SubscriptionPaymentMethods: ${Stripe__SubscriptionPaymentMethods:-card,link}
       Stripe__WebhookSecret: ${Stripe__WebhookSecret:-}
       Stripe__ReturnBaseUrl: ${Stripe__ReturnBaseUrl:-}
       Stripe__Currency: ${Stripe__Currency:-thb}
       Stripe__PortalConfigurationId: ${Stripe__PortalConfigurationId:-}
+      # AI post drafts (Pro and above): the platform's Anthropic key. Empty = the AI buttons stay off.
+      Ai__ApiKey: ${Ai__ApiKey:-}
+      Ai__Model: ${Ai__Model:-claude-sonnet-5-5}
+      Ai__DailyLimit: ${Ai__DailyLimit:-50}
     depends_on:
       db:
         condition: service_healthy

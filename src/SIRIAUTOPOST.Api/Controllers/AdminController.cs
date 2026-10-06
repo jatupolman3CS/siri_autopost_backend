@@ -17,11 +17,12 @@ public sealed class AdminController : ControllerBase
     public sealed record StatusRequest(CustomerStatus Status);
     public sealed record PausedRequest(bool Paused);
     public sealed record PlanRequest(PlanKey Plan);
-    public sealed record LimitsRequest(int? Accounts, int? Posts, int? Devices, int? Seats);
+    public sealed record LimitsRequest(int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups, int? Images, int? LibraryPosts);
     public sealed record NoteRequest(string? Note);
-    public sealed record PlanSettingsRequest(int Price, int? Accounts, int? Posts, int? Devices, int? Seats);
+    public sealed record PlanSettingsRequest(int Price, int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups, int? Images, int? LibraryPosts);
     public sealed record PromoRequest(string Code, string Discount, DateTimeOffset? ExpiresAt);
     public sealed record ActiveRequest(bool Active);
+    public sealed record PaymentOverrideRequest(bool Enabled, int Amount, IReadOnlyList<string>? Emails);
 
     [HttpGet("summary")]
     public Task<AdminSummaryDto> Summary([FromServices] IQueryHandler<GetAdminSummaryQuery, AdminSummaryDto> h, CancellationToken ct) =>
@@ -71,7 +72,7 @@ public sealed class AdminController : ControllerBase
     /// <summary>null keeps the plan's value, 0 = unlimited.</summary>
     [HttpPut("customers/{id:guid}/limits")]
     public Task<CustomerDto> Limits(Guid id, LimitsRequest r, [FromServices] ICommandHandler<SetCustomerLimitsCommand, CustomerDto> h, CancellationToken ct) =>
-        h.HandleAsync(new SetCustomerLimitsCommand(id, r.Accounts, r.Posts, r.Devices, r.Seats), ct);
+        h.HandleAsync(new SetCustomerLimitsCommand(id, r.Accounts, r.Posts, r.Devices, r.Seats, r.Groups, r.Images, r.LibraryPosts), ct);
 
     [HttpPut("customers/{id:guid}/note")]
     public Task<CustomerDto> Note(Guid id, NoteRequest r, [FromServices] ICommandHandler<SetCustomerNoteCommand, CustomerDto> h, CancellationToken ct) =>
@@ -109,7 +110,7 @@ public sealed class AdminController : ControllerBase
 
     [HttpPut("plans/{key}")]
     public Task<PlanDto> UpdatePlan(PlanKey key, PlanSettingsRequest r, [FromServices] ICommandHandler<UpdatePlanCommand, PlanDto> h, CancellationToken ct) =>
-        h.HandleAsync(new UpdatePlanCommand(key, r.Price, r.Accounts, r.Posts, r.Devices, r.Seats), ct);
+        h.HandleAsync(new UpdatePlanCommand(key, r.Price, r.Accounts, r.Posts, r.Devices, r.Seats, r.Groups, r.Images, r.LibraryPosts), ct);
 
     [HttpGet("promos")]
     public Task<IReadOnlyList<PromoDto>> Promos([FromServices] IQueryHandler<GetPromosQuery, IReadOnlyList<PromoDto>> h, CancellationToken ct) =>
@@ -122,4 +123,15 @@ public sealed class AdminController : ControllerBase
     [HttpPut("promos/{code}/active")]
     public Task<PromoDto> PromoActive(string code, ActiveRequest r, [FromServices] ICommandHandler<SetPromoActiveCommand, PromoDto> h, CancellationToken ct) =>
         h.HandleAsync(new SetPromoActiveCommand(code, r.Active), ct);
+
+    /// <summary>The payment test switch: the amount the listed customers are charged instead of the plan's price.</summary>
+    [HttpGet("payment-override")]
+    public Task<PaymentOverrideDto> PaymentOverride(
+        [FromServices] IQueryHandler<GetPaymentOverrideQuery, PaymentOverrideDto> h, CancellationToken ct) =>
+        h.HandleAsync(new GetPaymentOverrideQuery(), ct);
+
+    [HttpPut("payment-override")]
+    public Task<PaymentOverrideDto> SetPaymentOverride(
+        PaymentOverrideRequest r, [FromServices] ICommandHandler<SetPaymentOverrideCommand, PaymentOverrideDto> h, CancellationToken ct) =>
+        h.HandleAsync(new SetPaymentOverrideCommand(r.Enabled, r.Amount, r.Emails ?? []), ct);
 }

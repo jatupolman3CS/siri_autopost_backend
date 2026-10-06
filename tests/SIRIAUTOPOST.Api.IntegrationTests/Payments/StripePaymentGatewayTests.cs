@@ -45,8 +45,8 @@ public class StripePaymentGatewayTests
     private static string List(string url, params string[] items) =>
         $$$"""{"object":"list","url":"{{{url}}}","has_more":false,"data":[{{{string.Join(",", items)}}}]}""";
 
-    private static StripePaymentGateway Gateway(Stub stub, string key = "sk_test_unit", string currency = "thb") =>
-        new(Options.Create(new StripeOptions { SecretKey = key, WebhookSecret = "whsec_x", PortalConfigurationId = "bpc_1", Currency = currency }),
+    private static StripePaymentGateway Gateway(Stub stub, string key = "sk_test_unit", string currency = "thb", string methods = "card,link") =>
+        new(Options.Create(new StripeOptions { SecretKey = key, WebhookSecret = "whsec_x", PortalConfigurationId = "bpc_1", Currency = currency, SubscriptionPaymentMethods = methods }),
             NullLogger<StripePaymentGateway>.Instance, new HttpClient(stub));
 
     private static string SubscriptionJson(string id = "sub_1", string status = "active", string plan = "pro", string interval = "month", string extra = "") =>
@@ -324,6 +324,174 @@ public class StripePaymentGatewayTests
         await Assert.ThrowsAsync<DomainException>(() => gateway.CreatePortalAsync("cus_1", "https://a/b"));
         Assert.Null(await gateway.GetCardAsync("cus_1"));
         Assert.Empty(stub.Calls);
+    }
+
+    // --- the in-app checkout -------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task A_card_or_wallet_payment_is_an_incomplete_subscription_whose_first_invoice_the_browser_pays()
+    {
+        var stub = new Stub();
+        stub.Answer = c => (c.Method.Method, c.Path) switch
+        {
+            ("GET", "/v1/products/autopost_pro") => (HttpStatusCode.NotFound, Error("resource_missing", "No such product")),
+            ("POST", "/v1/products") => (HttpStatusCode.OK, """{"id":"autopost_pro","object":"product"}"""),
+            ("POST", "/v1/coupons") => (HttpStatusCode.OK, """{"id":"cpn_1","object":"coupon"}"""),
+            ("POST", "/v1/subscriptions") => (HttpStatusCode.OK, """
+                {"id":"sub_9","object":"subscription","customer":"cus_1","status":"incomplete",
+                 "latest_invoice":{"id":"in_1","object":"invoice","amount_due":63200,
+                   "confirmation_secret":{"client_secret":"pi_1TestIntent_secret_abc123","type":"payment_intent"}}}
+                """),
+            _ => (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path)),
+        };
+        var attempt = Guid.NewGuid();
+
+        var started = await Gateway(stub).CreateSubscriptionPaymentAsync(new SubscriptionPaymentRequest(
+            UserId, "cus_1", PlanKey.Pro, BillingCycle.Month, 790, 158, "LAUNCH20", null, attempt));
+
+        // The browser gets the secret of the first invoice's PaymentIntent, and the amount is Stripe's own figure for it.
+        Assert.Equal(new StartedPayment("pi_1TestIntent", "pi_1TestIntent_secret_abc123", 632m, "sub_9"), started);
+        var call = stub.Calls.Single(c => c.Path == "/v1/subscriptions");
+        var s = call.Fields;
+        Assert.Equal(("cus_1", "default_incomplete"), (s["customer"], s["payment_behavior"]));
+        Assert.Equal(("on_subscription", "card", "link"), (
+            s["payment_settings[save_default_payment_method]"], s["payment_settings[payment_method_types][0]"], s["payment_settings[payment_method_types][1]"]));
+        Assert.Equal(("autopost_pro", "thb", "79000", "month"), (
+            s["items[0][price_data][product]"], s["items[0][price_data][currency]"], s["items[0][price_data][unit_amount]"], s["items[0][price_data][recurring][interval]"]));
+        Assert.Equal("cpn_1", s["discounts[0][coupon]"]);
+        Assert.Equal(("pro", "month", UserId.ToString(), "LAUNCH20"), (s["metadata[plan]"], s["metadata[cycle]"], s["metadata[user_id]"], s["metadata[promo]"]));
+        Assert.Equal("latest_invoice.confirmation_secret", s["expand[0]"]);
+        Assert.Equal($"payment-subscription:{attempt}", call.Headers.GetValues("Idempotency-Key").Single());
+    }
+
+    [Theory]
+    [InlineData("card", "card", null)]
+    [InlineData(" Card , LINK ,card", "card", "link")]
+    [InlineData("", null, null)] // left to the account's Dashboard settings
+    public async Task The_subscription_payment_method_types_can_be_set_or_left_to_the_dashboard(string setting, string? first, string? second)
+    {
+        var stub = new Stub();
+        stub.Answer = c => (c.Method.Method, c.Path) switch
+        {
+            ("GET", "/v1/products/autopost_pro") => (HttpStatusCode.OK, """{"id":"autopost_pro","object":"product"}"""),
+            ("POST", "/v1/subscriptions") => (HttpStatusCode.OK, """
+                {"id":"sub_m","object":"subscription","customer":"cus_1","status":"incomplete",
+                 "latest_invoice":{"id":"in_m","object":"invoice","amount_due":79000,
+                   "confirmation_secret":{"client_secret":"pi_m_secret_x","type":"payment_intent"}}}
+                """),
+            _ => (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path)),
+        };
+
+        await Gateway(stub, methods: setting).CreateSubscriptionPaymentAsync(new SubscriptionPaymentRequest(
+            UserId, "cus_1", PlanKey.Pro, BillingCycle.Month, 790, 0, null, null, Guid.NewGuid()));
+
+        var s = stub.Calls.Single(c => c.Path == "/v1/subscriptions").Fields;
+        Assert.Equal(first, s.GetValueOrDefault("payment_settings[payment_method_types][0]"));
+        Assert.Equal(second, s.GetValueOrDefault("payment_settings[payment_method_types][1]"));
+        Assert.False(s.ContainsKey("payment_settings[payment_method_types][2]"));
+    }
+
+    [Fact]
+    public async Task A_test_amount_replaces_the_price_of_the_subscription_period()
+    {
+        var stub = new Stub();
+        stub.Answer = c => (c.Method.Method, c.Path) switch
+        {
+            ("GET", "/v1/products/autopost_basic") => (HttpStatusCode.OK, """{"id":"autopost_basic","object":"product"}"""),
+            ("POST", "/v1/subscriptions") => (HttpStatusCode.OK, """
+                {"id":"sub_t","object":"subscription","customer":"cus_1","status":"incomplete",
+                 "latest_invoice":{"id":"in_t","object":"invoice","amount_due":2000,
+                   "confirmation_secret":{"client_secret":"pi_t_secret_x","type":"payment_intent"}}}
+                """),
+            _ => (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path)),
+        };
+
+        var started = await Gateway(stub).CreateSubscriptionPaymentAsync(new SubscriptionPaymentRequest(
+            UserId, "cus_1", PlanKey.Basic, BillingCycle.Year, 290, 0, null, 20, Guid.NewGuid()));
+
+        Assert.Equal(20m, started.Amount);
+        var s = stub.Calls.Single(c => c.Path == "/v1/subscriptions").Fields;
+        Assert.Equal("2000", s["items[0][price_data][unit_amount]"]); // not 278,400 satang
+        Assert.False(s.ContainsKey("discounts[0][coupon]"));
+    }
+
+    [Fact]
+    public async Task A_subscription_without_a_payment_secret_is_a_gateway_failure_not_a_blank_checkout()
+    {
+        var stub = new Stub();
+        stub.Answer = c => c.Path switch
+        {
+            "/v1/products/autopost_pro" => (HttpStatusCode.OK, """{"id":"autopost_pro","object":"product"}"""),
+            "/v1/subscriptions" => (HttpStatusCode.OK, """{"id":"sub_0","object":"subscription","customer":"cus_1","status":"active","latest_invoice":{"id":"in_0","object":"invoice","amount_due":0}}"""),
+            _ => (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path)),
+        };
+
+        await Assert.ThrowsAsync<PaymentGatewayException>(() => Gateway(stub).CreateSubscriptionPaymentAsync(new SubscriptionPaymentRequest(
+            UserId, "cus_1", PlanKey.Pro, BillingCycle.Month, 790, 0, null, null, Guid.NewGuid())));
+    }
+
+    [Fact]
+    public async Task PromptPay_is_one_payment_intent_for_one_period_with_no_subscription()
+    {
+        var stub = new Stub();
+        stub.Answer = c => c.Path == "/v1/payment_intents"
+            ? (HttpStatusCode.OK, """{"id":"pi_pp","object":"payment_intent","client_secret":"pi_pp_secret_zzz","status":"requires_payment_method","amount":63200}""")
+            : (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path));
+        var attempt = Guid.NewGuid();
+
+        var started = await Gateway(stub).CreatePrepaidPaymentAsync(new PrepaidPaymentRequest(
+            UserId, "cus_1", "buyer@shop.co", PlanKey.Pro, BillingCycle.Month, 632m, "LAUNCH20", attempt));
+
+        Assert.Equal(new StartedPayment("pi_pp", "pi_pp_secret_zzz", 632m, null), started);
+        var call = Assert.Single(stub.Calls);
+        var f = call.Fields;
+        Assert.Equal(("63200", "thb", "cus_1", "buyer@shop.co"), (f["amount"], f["currency"], f["customer"], f["receipt_email"]));
+        Assert.Equal("promptpay", f["allowed_payment_method_types[0]"]);
+        Assert.False(f.ContainsKey("automatic_payment_methods[enabled]"));
+        Assert.Equal(("prepaid", "pro", "month", UserId.ToString()), (f["metadata[kind]"], f["metadata[plan]"], f["metadata[cycle]"], f["metadata[user_id]"]));
+        Assert.Equal($"payment-prepaid:{attempt}", call.Headers.GetValues("Idempotency-Key").Single());
+    }
+
+    [Theory]
+    [InlineData("succeeded", "", """{"id":"ch_1","object":"charge","receipt_url":"https://pay.stripe.com/receipts/r1","payment_method_details":{"type":"card","card":{"brand":"visa","wallet":{"type":"apple_pay"}}}}""", PaymentIntentState.Succeeded, PaymentMethodKind.ApplePay, null, "https://pay.stripe.com/receipts/r1")]
+    [InlineData("succeeded", "", """{"id":"ch_1","object":"charge","payment_method_details":{"type":"card","card":{"brand":"visa","wallet":{"type":"google_pay"}}}}""", PaymentIntentState.Succeeded, PaymentMethodKind.GooglePay, null, null)]
+    [InlineData("succeeded", "", """{"id":"ch_1","object":"charge","payment_method_details":{"type":"card","card":{"brand":"visa"}}}""", PaymentIntentState.Succeeded, PaymentMethodKind.Card, null, null)]
+    [InlineData("succeeded", "", """{"id":"ch_1","object":"charge","payment_method_details":{"type":"link"}}""", PaymentIntentState.Succeeded, PaymentMethodKind.Link, null, null)]
+    [InlineData("succeeded", "", """{"id":"ch_1","object":"charge","payment_method_details":{"type":"promptpay"}}""", PaymentIntentState.Succeeded, PaymentMethodKind.Promptpay, null, null)]
+    [InlineData("processing", "", "null", PaymentIntentState.Pending, null, null, null)]
+    [InlineData("requires_action", "", "null", PaymentIntentState.Pending, null, null, null)]
+    [InlineData("requires_payment_method", "", "null", PaymentIntentState.Pending, null, null, null)] // a fresh one nobody tried
+    [InlineData("requires_payment_method", ""","last_payment_error":{"type":"card_error","message":"Your card was declined."}""", "null", PaymentIntentState.Failed, null, "Your card was declined.", null)]
+    [InlineData("canceled", """,  "cancellation_reason":"abandoned" """, "null", PaymentIntentState.Failed, null, "abandoned", null)]
+    public async Task A_payment_intent_is_read_with_its_charge_and_told_apart_as_pending_paid_or_failed(
+        string status, string extra, string charge, PaymentIntentState state, PaymentMethodKind? method, string? message, string? receipt)
+    {
+        var stub = new Stub();
+        var json = $$"""{"id":"pi_1","object":"payment_intent","status":"{{status}}","amount":63200,"currency":"thb","latest_charge":{{charge}}{{extra}}}""";
+        stub.Answer = _ => (HttpStatusCode.OK, json);
+
+        var snapshot = await Gateway(stub).GetPaymentIntentAsync("pi_1");
+
+        Assert.Equal(new PaymentIntentSnapshot("pi_1", state, 632m, method, message, receipt), snapshot);
+        Assert.Equal("/v1/payment_intents/pi_1", stub.Calls.Single().Path);
+        Assert.Equal("latest_charge", stub.Calls.Single().Fields["expand[0]"]);
+    }
+
+    [Fact]
+    public void The_four_payment_intent_events_are_taken_by_id_and_the_rest_are_not()
+    {
+        const string secret = "whsec_paymentIntentEventsSecret123456";
+        var parser = new StripeWebhookParser(secret);
+
+        // Sign the very body that is parsed (each Event(...) call makes its own event id).
+        foreach (var type in new[] { "payment_intent.succeeded", "payment_intent.payment_failed", "payment_intent.processing", "payment_intent.canceled" })
+        {
+            var body = StripeEvents.Event(type, StripeEvents.PaymentIntent("pi_77"));
+            var evt = Assert.IsType<PaymentIntentEvent>(parser.Parse(body, StripeEvents.Signature(body, secret)));
+            Assert.Equal("pi_77", evt.PaymentIntentId);
+        }
+        var created = StripeEvents.Event("payment_intent.created", StripeEvents.PaymentIntent("pi_77"));
+        Assert.Null(parser.Parse(created, StripeEvents.Signature(created, secret)));
     }
 
     [Fact]

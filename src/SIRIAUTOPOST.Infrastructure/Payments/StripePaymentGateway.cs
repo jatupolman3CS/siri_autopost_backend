@@ -75,7 +75,7 @@ public sealed class StripePaymentGateway : IPaymentGateway
             SuccessUrl = r.SuccessUrl,
             CancelUrl = r.CancelUrl,
             Locale = "th",
-            LineItems = [new Stripe.Checkout.SessionLineItemOptions { Quantity = 1, PriceData = await PriceDataAsync(r.Plan, r.Cycle, r.Price, ct) }],
+            LineItems = [new Stripe.Checkout.SessionLineItemOptions { Quantity = 1, PriceData = await PriceDataAsync(r.Plan, r.Cycle, r.Price, r.ChargeOverride, ct) }],
             Metadata = metadata,
             SubscriptionData = new Stripe.Checkout.SessionSubscriptionDataOptions { Metadata = metadata },
         };
@@ -97,6 +97,88 @@ public sealed class StripePaymentGateway : IPaymentGateway
         return created.Url ?? throw new PaymentGatewayException("Stripe ไม่ได้ส่งหน้าชำระเงินกลับมา");
     });
 
+    // The in-app checkout. A subscription made "default_incomplete" stays incomplete until its first invoice is paid:
+    // Stripe hands back that invoice's client secret and the browser pays it with Stripe.js (card, Apple Pay, Google
+    // Pay and Link all come out of the card/link types below; Stripe.js decides which the device can show).
+    public Task<StartedPayment> CreateSubscriptionPaymentAsync(SubscriptionPaymentRequest r, CancellationToken ct = default) => Call(async () =>
+    {
+        var metadata = StripeMapping.Metadata(r.UserId, r.Plan, r.Cycle, r.PromoCode);
+        var options = new SubscriptionCreateOptions
+        {
+            Customer = r.CustomerId,
+            Items =
+            [
+                new SubscriptionItemOptions
+                {
+                    PriceData = new SubscriptionItemPriceDataOptions
+                    {
+                        Currency = Currency,
+                        Product = await ProductAsync(r.Plan, ct),
+                        UnitAmount = Money.Satang(r.ChargeOverride ?? Pricing.Period(r.Price, r.Cycle)),
+                        Recurring = new SubscriptionItemPriceDataRecurringOptions { Interval = StripeMapping.Interval(r.Cycle) },
+                    },
+                },
+            ],
+            PaymentBehavior = "default_incomplete",
+            PaymentSettings = new SubscriptionPaymentSettingsOptions
+            {
+                // The card used now pays the renewals too.
+                SaveDefaultPaymentMethod = "on_subscription",
+                PaymentMethodTypes = SubscriptionMethods(),
+            },
+            Metadata = metadata,
+            Expand = ["latest_invoice.confirmation_secret"],
+        };
+        if (r.FirstDiscount > 0)
+        {
+            var coupon = await new CouponService(Client).CreateAsync(new CouponCreateOptions
+            {
+                AmountOff = Money.Satang(r.FirstDiscount),
+                Currency = Currency,
+                Duration = "once",
+                MaxRedemptions = 1,
+                Name = $"Promo {r.PromoCode}",
+                Metadata = new Dictionary<string, string> { [StripeMapping.PromoKey] = r.PromoCode ?? "", [StripeMapping.UserKey] = r.UserId.ToString() },
+            }, cancellationToken: ct);
+            options.Discounts = [new SubscriptionDiscountOptions { Coupon = coupon.Id }];
+        }
+        var subscription = await new SubscriptionService(Client).CreateAsync(
+            options, new RequestOptions { IdempotencyKey = $"payment-subscription:{r.AttemptId}" }, ct);
+        var invoice = subscription.LatestInvoice;
+        var secret = invoice?.ConfirmationSecret?.ClientSecret
+            ?? throw new PaymentGatewayException("Stripe ไม่ได้ส่งข้อมูลสำหรับชำระเงินกลับมา");
+        return new StartedPayment(StripeMapping.IntentIdOf(secret), secret, Money.FromSatang(invoice!.AmountDue), subscription.Id);
+    });
+
+    /// <summary>The payment method types of the subscription's first invoice; null leaves the choice to the account's Dashboard settings.</summary>
+    private List<string>? SubscriptionMethods()
+    {
+        var types = (options.SubscriptionPaymentMethods ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return types.Length == 0 ? null : types.Select(t => t.ToLowerInvariant()).Distinct().ToList();
+    }
+
+    // PromptPay is single-use at Stripe: it cannot be on a subscription, so it is one PaymentIntent for one period.
+    public Task<StartedPayment> CreatePrepaidPaymentAsync(PrepaidPaymentRequest r, CancellationToken ct = default) => Call(async () =>
+    {
+        var metadata = StripeMapping.Metadata(r.UserId, r.Plan, r.Cycle, r.PromoCode);
+        metadata[StripeMapping.KindKey] = StripeMapping.PrepaidKind;
+        var intent = await new PaymentIntentService(Client).CreateAsync(new PaymentIntentCreateOptions
+        {
+            Amount = Money.Satang(r.Amount),
+            Currency = Currency,
+            Customer = r.CustomerId,
+            AllowedPaymentMethodTypes = ["promptpay"],
+            ReceiptEmail = r.Email,
+            Description = $"AutoPost {r.Plan} ({StripeMapping.Key(r.Cycle)})",
+            Metadata = metadata,
+        }, new RequestOptions { IdempotencyKey = $"payment-prepaid:{r.AttemptId}" }, ct);
+        return new StartedPayment(intent.Id, intent.ClientSecret, r.Amount, null);
+    });
+
+    public Task<PaymentIntentSnapshot> GetPaymentIntentAsync(string paymentIntentId, CancellationToken ct = default) => Call(async () =>
+        StripeMapping.PaymentIntent(await new PaymentIntentService(Client).GetAsync(
+            paymentIntentId, new PaymentIntentGetOptions { Expand = ["latest_charge"] }, cancellationToken: ct)));
+
     public Task<CheckoutSessionSnapshot> GetCheckoutSessionAsync(string sessionId, CancellationToken ct = default) => Call(async () =>
         StripeMapping.Session(await new Stripe.Checkout.SessionService(Client).GetAsync(sessionId, cancellationToken: ct)));
 
@@ -116,7 +198,7 @@ public sealed class StripePaymentGateway : IPaymentGateway
         StripeMapping.Subscription(await new SubscriptionService(Client).GetAsync(subscriptionId, cancellationToken: ct)));
 
     public Task<SubscriptionSnapshot> ChangeSubscriptionAsync(
-        string subscriptionId, Domain.Enums.PlanKey plan, BillingCycle cycle, int price, CancellationToken ct = default) => Call(async () =>
+        string subscriptionId, Domain.Enums.PlanKey plan, BillingCycle cycle, int price, int? chargeOverride = null, CancellationToken ct = default) => Call(async () =>
     {
         var subscriptions = new SubscriptionService(Client);
         var current = await subscriptions.GetAsync(subscriptionId, cancellationToken: ct);
@@ -132,7 +214,7 @@ public sealed class StripePaymentGateway : IPaymentGateway
                     {
                         Currency = Currency,
                         Product = await ProductAsync(plan, ct),
-                        UnitAmount = Money.Satang(Pricing.Period(price, cycle)),
+                        UnitAmount = Money.Satang(chargeOverride ?? Pricing.Period(price, cycle)),
                         Recurring = new SubscriptionItemPriceDataRecurringOptions { Interval = StripeMapping.Interval(cycle) },
                     },
                 },
@@ -227,11 +309,13 @@ public sealed class StripePaymentGateway : IPaymentGateway
         return id;
     }
 
-    private async Task<Stripe.Checkout.SessionLineItemPriceDataOptions> PriceDataAsync(Domain.Enums.PlanKey plan, BillingCycle cycle, int price, CancellationToken ct) => new()
+    private async Task<Stripe.Checkout.SessionLineItemPriceDataOptions> PriceDataAsync(
+        Domain.Enums.PlanKey plan, BillingCycle cycle, int price, int? chargeOverride, CancellationToken ct) => new()
     {
         Currency = Currency,
         Product = await ProductAsync(plan, ct),
-        UnitAmount = Money.Satang(Pricing.Period(price, cycle)),
+        // The admin's test amount (PaymentOverride) replaces the price of the period; the plan the customer gets is the same.
+        UnitAmount = Money.Satang(chargeOverride ?? Pricing.Period(price, cycle)),
         Recurring = new Stripe.Checkout.SessionLineItemPriceDataRecurringOptions { Interval = StripeMapping.Interval(cycle) },
     };
 

@@ -117,6 +117,11 @@ jobs:
         run: node client/tools/test-cloud.mjs http://localhost:5100
       - name: A web schedule alone hands work to an extension with no campaign setup
         run: node client/tools/test-schedule-flow.mjs http://localhost:5100
+      - name: Bumping a post and posting to a Facebook page
+        env:
+          # The bump is due hours after its post: the test moves its due time in the database (psql comes with the runner image).
+          TEST_PSQL: psql postgresql://postgres:postgres@localhost:5432/siriautopost -tA -c
+        run: node client/tools/test-bump-flow.mjs http://localhost:5100
       - name: API log
         if: failure()
         run: cat "$RUNNER_TEMP/api.log"

@@ -10,17 +10,24 @@ public class LimitOverrides
     public int? Posts { get; set; }
     public int? Devices { get; set; }
     public int? Seats { get; set; }
+    public int? Groups { get; set; }
+    public int? Images { get; set; }
+    public int? LibraryPosts { get; set; }
 
-    public bool IsEmpty => Accounts is null && Posts is null && Devices is null && Seats is null;
+    public bool IsEmpty =>
+        Accounts is null && Posts is null && Devices is null && Seats is null && Groups is null && Images is null && LibraryPosts is null;
 }
 
 /// <summary>What a customer may use; null = unlimited.</summary>
-public sealed record EffectiveLimits(int? Accounts, int? Posts, int? Devices, int? Seats)
+public sealed record EffectiveLimits(
+    int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups = null, int? Images = null, int? LibraryPosts = null)
 {
     public static EffectiveLimits Of(Entities.PlanSetting plan, LimitOverrides? o)
     {
         static int? Pick(int? over, int? planValue) => over is null ? planValue : over == 0 ? null : over;
-        return new(Pick(o?.Accounts, plan.Accounts), Pick(o?.Posts, plan.Posts), Pick(o?.Devices, plan.Devices), Pick(o?.Seats, plan.Seats));
+        return new(
+            Pick(o?.Accounts, plan.Accounts), Pick(o?.Posts, plan.Posts), Pick(o?.Devices, plan.Devices), Pick(o?.Seats, plan.Seats),
+            Pick(o?.Groups, plan.Groups), Pick(o?.Images, plan.Images), Pick(o?.LibraryPosts, plan.LibraryPosts));
     }
 }
 

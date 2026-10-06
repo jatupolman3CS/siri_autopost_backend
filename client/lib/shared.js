@@ -136,9 +136,19 @@ export function spin(text) {
   return out;
 }
 
-// Accepts facebook.com/groups/<id-or-slug> in many shapes and returns a
-// canonical https://www.facebook.com/groups/<id>/ link, or null.
-export function normalizeGroupUrl(raw) {
+// First path segments that are Facebook's own screens, not a page (mirrors FacebookGroupUrl.Reserved in the API).
+const RESERVED_PAGE_SEGMENTS = new Set([
+  'groups', 'pages', 'watch', 'marketplace', 'events', 'share', 'sharer', 'reel', 'reels', 'stories', 'story.php', 'photo',
+  'photos', 'photo.php', 'video', 'videos', 'login', 'login.php', 'home.php', 'settings', 'help', 'policies', 'privacy', 'ads',
+  'business', 'gaming', 'people', 'permalink.php', 'hashtag', 'search', 'friends', 'messages', 'notifications', 'bookmarks',
+  'fundraisers', 'jobs', 'offers', 'public', 'dialog', 'plugins', 'profile.php', 'checkpoint', 'recover', 'r.php', 'l.php',
+  'composer', 'feeds', 'saved', 'memories', 'campaign', 'careers', 'directory', 'legal', 'about', 'support', 'tr', 'flx',
+]);
+
+// What a Facebook address points to: { kind: 'group' | 'page', url } with a canonical address, or null. A group is
+// /groups/<id-or-slug>; a page is a vanity address (facebook.com/<name>, 5+ letters, digits or dots),
+// profile.php?id=<id>, /pages/<name>/<id> or /p/<name-id>.
+export function facebookTarget(raw) {
   let s = String(raw || '').trim();
   if (!s) return null;
   if (!/^https?:\/\//i.test(s)) s = 'https://' + s;
@@ -148,10 +158,27 @@ export function normalizeGroupUrl(raw) {
   } catch {
     return null;
   }
-  if (!/(^|\.)facebook\.com$/i.test(u.hostname)) return null;
-  const m = u.pathname.match(/^\/groups\/([^/?#]+)/i);
-  if (!m) return null;
-  return `https://www.facebook.com/groups/${m[1]}/`;
+  if (!/^(?:(?:www|m|web|mbasic)\.)?(?:facebook|fb)\.com$/i.test(u.hostname)) return null;
+  const path = u.pathname;
+  let m = path.match(/^\/groups\/([^/?#]+)/i);
+  if (m) return /[A-Za-z0-9]/.test(m[1]) && /^[A-Za-z0-9._-]+$/.test(m[1]) ? { kind: 'group', url: `https://www.facebook.com/groups/${m[1]}/` } : null;
+  if (/^\/profile\.php$/i.test(path)) {
+    const id = u.searchParams.get('id') || '';
+    return /^\d{5,}$/.test(id) ? { kind: 'page', url: `https://www.facebook.com/profile.php?id=${id}` } : null;
+  }
+  m = path.match(/^\/pages\/([^/?#]+)\/(\d{5,})/i);
+  if (m) return { kind: 'page', url: `https://www.facebook.com/pages/${m[1]}/${m[2]}` };
+  m = path.match(/^\/p\/([A-Za-z0-9._%-]+)(?:\/|$)/i);
+  if (m && /[A-Za-z0-9]/.test(m[1])) return { kind: 'page', url: `https://www.facebook.com/p/${m[1]}` };
+  m = path.match(/^\/([A-Za-z0-9.]{5,})(?:\/|$)/);
+  if (m && !RESERVED_PAGE_SEGMENTS.has(m[1].toLowerCase()) && /[A-Za-z]/.test(m[1])) return { kind: 'page', url: `https://www.facebook.com/${m[1]}` };
+  return null;
+}
+
+// Accepts a Facebook group or page address in many shapes and returns its canonical link, or null.
+export function normalizeGroupUrl(raw) {
+  const t = facebookTarget(raw);
+  return t ? t.url : null;
 }
 
 export function parseGroups(text) {

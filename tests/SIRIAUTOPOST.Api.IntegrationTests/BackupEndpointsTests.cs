@@ -33,7 +33,7 @@ public class BackupEndpointsTests(ApiFactory factory)
     /// one has media), two link sets (a set with codes, a cap, a group that is off, another account), three schedules (one
     /// paused), advanced anti-ban numbers, notification rules, an auto-reply rule, and a Telegram token that must never leave.
     /// </summary>
-    private async Task<Rich> RichAsync(string plan = "pro")
+    private async Task<Rich> RichAsync(string plan = "agency")
     {
         var shop = await factory.ShopAsync(plan, links: 0, posts: 0);
         var (owner, ws) = (shop.Owner, shop.Ws);
@@ -59,7 +59,7 @@ public class BackupEndpointsTests(ApiFactory factory)
         await owner.AddPostAsync(ws, plain.Id, "โพสต์ธรรมดา 1", [image.Id]);
         await owner.AddPostAsync(ws, plain.Id, "โพสต์ธรรมดา 2");
 
-        var instagram = await owner.AccountOfAsync(ws, Platform.Ig);
+        var instagram = await factory.SeedAccountAsync(ws);
         var main = shop.Set; // the set the shop made becomes the main one (renamed below)
         var alpha = await owner.AddLinkAsync(ws, main.Id, Alpha, "A1", "อัลฟา", dailyMax: 2);
         var beta = await owner.AddLinkAsync(ws, main.Id, Beta, "B1", "เบต้า");

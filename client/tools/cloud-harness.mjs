@@ -51,9 +51,14 @@ const page = {
   text: '',
   attached: [], // media records content.js would have loaded from storage
   posted: [],   // { text, files }
+  postUrl: 'https://www.facebook.com/groups/plantlovers/posts/555000111/', // where the new post "is" (the bump opens it)
+  canSwitch: false, // a Page you manage opened in your own profile: Facebook offers "Switch now"
+  switched: 0,      // times the extension acted as the Page
+  commentOpen: false,
+  commented: [],    // { text, files, url }: the comments (bumps) made
 };
 const contentHandlers = {
-  check: () => ({ ok: true, title: `${GROUP.name} | Facebook`, login: !page.loggedIn, checkpoint: false }),
+  check: () => ({ ok: true, title: `${GROUP.name} | Facebook`, login: !page.loggedIn, checkpoint: false, canSwitch: page.canSwitch }),
   blockCheck: () => ({ ok: true, blocked: false }),
   scroll: () => ({ ok: true }),
   scrollTop: () => ({ ok: true }),
@@ -77,6 +82,17 @@ const contentHandlers = {
     return { ok: true };
   },
   discard: () => ((page.open = false), { ok: true }),
+  switchProfile: () => ((page.switched += 1), (page.canSwitch = false), { ok: true, switched: true }),
+  postUrl: () => ({ ok: true, url: page.postUrl }),
+  openCommentBox: () => ((page.commentOpen = true), (page.text = ''), (page.attached = []), { ok: true }),
+  commentState: () => ({ ok: true, open: page.commentOpen, empty: page.text === '', uploading: false, media: page.attached.length, blocked: false }),
+  submitComment: () => {
+    page.commented.push({ text: page.text, files: page.attached.map((f) => f.name), url: tabUrls.at(-1) });
+    page.commentOpen = false;
+    page.text = '';
+    page.attached = [];
+    return { ok: true };
+  },
 };
 
 let windowId = 1;

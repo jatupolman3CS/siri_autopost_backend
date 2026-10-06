@@ -1034,13 +1034,13 @@ function textClose(actual, expected) {
   return e.length > 0 && a.slice(0, 8) === e.slice(0, 8) && Math.abs(a.length - e.length) <= Math.max(3, e.length * 0.08);
 }
 
-async function pollState(tabId, pred, timeout, check) {
+async function pollState(tabId, pred, timeout, check, cmd = 'postState') {
   const end = Date.now() + timeout;
   while (Date.now() < end) {
     if (check) check();
     let s = null;
     try {
-      s = await tabCmd(tabId, 'postState', {}, 15000);
+      s = await tabCmd(tabId, cmd, {}, 15000);
     } catch {
       s = null;
     }
@@ -1091,6 +1091,16 @@ async function postToGroup(url, post, cfg, global) {
     groupName = cleanTitle(page.title);
     if (page.login) throw new Fatal('ยังไม่ได้ล็อกอิน Facebook ใน Chrome นี้');
     if (page.checkpoint) throw new Fatal('Facebook ขอยืนยันตัวตน (checkpoint) - ให้เข้าไปยืนยันเองก่อน');
+    // A Page you manage opens as your own profile: act as the Page first (Facebook reloads the page).
+    if (post.targetKind === 'page' && page.canSwitch) {
+      await log('info', 'สลับไปโพสต์ในนามเพจ');
+      await tabCmd(tabId, 'switchProfile', {}, 30000).catch(() => null);
+      await sleep(rand(4000, 7000));
+      check();
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+      const again = await tabCmd(tabId, 'check');
+      if (again.login) throw new Fatal('ยังไม่ได้ล็อกอิน Facebook ใน Chrome นี้');
+    }
     await assertNotBlocked(tabId);
     check();
 
@@ -1186,10 +1196,18 @@ async function postToGroup(url, post, cfg, global) {
     // The new post (or the "pending approval" notice) shows near the top.
     await tabCmd(tabId, 'scrollTop').catch(() => {});
     await sleep(rand(1200, 2500));
-    return { ok: true, groupName, shot: await captureWorker(), blockedAfter: blockedAfter ? `Facebook แจ้งเตือน: ${blockedAfter}` : '' };
+    // Where the new post is, so a bump can open it later (empty when it cannot be found: nothing is bumped then).
+    let postUrl = '';
+    try {
+      const found = await tabCmd(tabId, 'postUrl', { snippet: post.text || '' }, 20000);
+      postUrl = (found && found.url) || '';
+    } catch {
+      postUrl = '';
+    }
+    return { ok: true, groupName, shot: await captureWorker(), blockedAfter: blockedAfter ? `Facebook แจ้งเตือน: ${blockedAfter}` : '', postUrl };
   } catch (err) {
     let e = err;
-    if (sent) return { ok: true, groupName, shot: null, blockedAfter: '' };
+    if (sent) return { ok: true, groupName, shot: null, blockedAfter: '', postUrl: '' };
     // Any failure may really be Facebook refusing to let us post.
     if (tabId != null && !(e instanceof Aborted) && !(e instanceof Blocked) && !(e instanceof Fatal)) {
       const text = await blockNotice(tabId);
@@ -1230,6 +1248,90 @@ async function fetchUrlMedia(urls) {
     await chrome.storage.local.set({ [key]: { name: decodeURIComponent(urls[i].split('/').pop() || `image_${i + 1}`), type, data: await dataUrlOf(blob, type) } });
   }
   return keys;
+}
+
+// A bump: opens a post made earlier and comments on it (text and/or images), the way a person would, so the post comes
+// back to the top of the group. Same care as postToGroup: a Facebook warning stops it, the tab is left as it was found.
+async function commentOnPost(url, comment, cfg, global) {
+  const check = () => {
+    if (abortFlag) throw new Aborted('ถูกหยุดโดยผู้ใช้');
+  };
+  const speed = TYPING_SPEEDS[cfg.typingSpeed] || TYPING_SPEEDS.normal;
+  let prevWindowId = null;
+  let tabId = null;
+  let urlKeys = [];
+  let sent = false;
+  try {
+    if (global.focusWindow) {
+      try {
+        prevWindowId = (await chrome.windows.getLastFocused()).id;
+      } catch {
+        prevWindowId = null;
+      }
+    }
+    tabId = await openWorkerTab(url, global.focusWindow);
+    check();
+    await sleep(rand(2500, 6000)); // look at the post
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+    const page = await tabCmd(tabId, 'check');
+    if (page.login) throw new Fatal('ยังไม่ได้ล็อกอิน Facebook ใน Chrome นี้');
+    if (page.checkpoint) throw new Fatal('Facebook ขอยืนยันตัวตน (checkpoint) - ให้เข้าไปยืนยันเองก่อน');
+    await assertNotBlocked(tabId);
+    check();
+
+    if (cfg.browseBeforePost) {
+      await tabCmd(tabId, 'scroll', { dy: randInt(120, 420) });
+      await sleep(rand(1200, 3500));
+      check();
+    }
+    await tabCmdOk(tabId, 'openCommentBox', {}, 60000);
+    await sleep(rand(800, 2200));
+    check();
+
+    if (comment.text) {
+      const len = Array.from(segmenter.segment(comment.text)).length;
+      if (cfg.maxTypeChars > 0 && len > cfg.maxTypeChars) await tabCmdOk(tabId, 'paste', { text: comment.text });
+      else await typeHuman(tabId, comment.text, speed, cfg.typos, check);
+      await sleep(rand(500, 1400));
+      const r = await tabCmd(tabId, 'getText');
+      if (!textClose(r.text, comment.text)) {
+        await tabCmdOk(tabId, 'setText', { text: comment.text });
+        await sleep(rand(600, 1300));
+      }
+    }
+    if (comment.imageIds.length) {
+      check();
+      await sleep(rand(800, 2000));
+      const r = await tabCmdOk(tabId, 'attachImages', { imageIds: comment.imageIds }, 240000);
+      await log('info', `แนบรูปในความคิดเห็น ${comment.imageIds.length} รูป (${r.method})`);
+      const ready = await pollState(tabId, (st) => st.open && !st.uploading, 600000, check, 'commentState');
+      if (!ready) throw new Error('อัปโหลดรูปในความคิดเห็นไม่เสร็จภายในเวลา');
+    }
+
+    check();
+    await sleep(rand(1200, 3500)); // re-read before sending
+    check();
+    await tabCmdOk(tabId, 'submitComment', {}, 60000);
+    sent = true; // the comment is there: later problems never turn it into a failure
+    await sleep(rand(2000, 5000));
+    const blockedAfter = await blockNotice(tabId);
+    return { ok: true, shot: await captureWorker(), blockedAfter: blockedAfter ? `Facebook แจ้งเตือน: ${blockedAfter}` : '' };
+  } catch (err) {
+    let e = err;
+    if (sent) return { ok: true, shot: null, blockedAfter: '' };
+    if (tabId != null && !(e instanceof Aborted) && !(e instanceof Blocked) && !(e instanceof Fatal)) {
+      const text = await blockNotice(tabId);
+      if (text) e = new Blocked(`Facebook แจ้งเตือน: ${text}`);
+    }
+    if (e && typeof e === 'object' && !(e instanceof Aborted) && tabId != null) e.shot = await captureWorker();
+    throw e;
+  } finally {
+    if (urlKeys.length) await chrome.storage.local.remove(urlKeys).catch(() => {});
+    if (prevWindowId != null) {
+      const st = await getState();
+      if (prevWindowId !== st.windowId) chrome.windows.update(prevWindowId, { focused: true }).catch(() => {});
+    }
+  }
 }
 
 async function testPost(cid, url, postId) {
@@ -1880,12 +1982,18 @@ async function dataUrlOf(blob, type) {
 
 // Posts one job from the web app and reports how it went.
 async function runCloudJob(c, job) {
-  const global = (await getSettings()).global;
+  if (job.kind === 'bump') return runCloudBump(c, job);
+  const stored = (await getSettings()).global;
   const ab = job.antiBan || {};
+  const adv = ab.advanced || {};
+  // The web app's anti-ban page decides: the focus window and the rest after a Facebook block come from it.
+  const global = { ...stored, focusWindow: typeof adv.focus === 'boolean' ? adv.focus : stored.focusWindow };
   const cfg = {
     ...DEFAULT_CONFIG,
-    pageTags: '',
-    typingSpeed: 'normal',
+    // The page named in the text (the shop's promo block) becomes a clickable @mention; a server that sends
+    // `pageTags` with the job decides, otherwise the extension's default page applies.
+    pageTags: typeof job.pageTags === 'string' ? job.pageTags : DEFAULT_CONFIG.pageTags,
+    typingSpeed: ['slow', 'normal', 'fast'].includes(ab.typingSpeed) ? ab.typingSpeed : 'normal',
     typos: ab.typing !== false,
     maxTypeChars: ab.typing === false ? 1 : DEFAULT_CONFIG.maxTypeChars, // typing off = paste
     browseBeforePost: ab.scroll !== false,
@@ -1905,7 +2013,7 @@ async function runCloudJob(c, job) {
       keys.push(key);
     }
     await log('info', `[เว็บ AutoPost] กำลังโพสต์ลงกลุ่ม ${job.groupName}: ${job.groupUrl}`);
-    result = await postToGroup(job.groupUrl, { text: job.content, imageIds: keys }, cfg, global);
+    result = await postToGroup(job.groupUrl, { text: job.content, imageIds: keys, targetKind: job.targetKind }, cfg, global);
   } catch (e) {
     result = {
       ok: false,
@@ -1938,6 +2046,7 @@ async function runCloudJob(c, job) {
       needsLogin: !!result.fatal,
       blocked: !!(result.blocked || result.blockedAfter),
       error: result.ok ? (result.blockedAfter || null) : result.error,
+      postUrl: result.ok ? result.postUrl || null : null,
     });
   } catch (e) {
     await log('warn', `[เว็บ AutoPost] ส่งผลการโพสต์ไม่สำเร็จ: ${e.message}`);
@@ -1946,7 +2055,7 @@ async function runCloudJob(c, job) {
   const patch = { lastJob: { at: Date.now(), group: job.groupName, ok: !!result.ok, error: result.ok ? '' : result.error } };
   if (result.blocked || result.blockedAfter) {
     // Same rest as the campaigns get after a Facebook warning.
-    patch.pausedUntil = Date.now() + rand(g.blockPauseHoursMin || 2, g.blockPauseHoursMax || 4) * 3600000;
+    patch.pausedUntil = Date.now() + rand(adv.blockMin || g.blockPauseHoursMin || 2, adv.blockMax || g.blockPauseHoursMax || 4) * 3600000;
     await log('warn', `[เว็บ AutoPost] Facebook แจ้งเตือน พักรับงานถึง ${fmtDateTime(patch.pausedUntil)}`);
   }
   await setCloud(patch);
@@ -1955,6 +2064,75 @@ async function runCloudJob(c, job) {
   } else if (!result.aborted) {
     await notify('fail', `❌ <b>โพสต์ไม่สำเร็จ (เว็บ AutoPost)</b>\n${groupLine(job.groupName, job.groupUrl)}\nสาเหตุ: ${escHtml(result.error)}`, result.shot);
   }
+  return result;
+}
+
+// A bump job from the web app: comments on a post this browser made earlier, then reports to bumps/{id}/result.
+async function runCloudBump(c, job) {
+  const stored = (await getSettings()).global;
+  const ab = job.antiBan || {};
+  const adv = ab.advanced || {};
+  const global = { ...stored, focusWindow: typeof adv.focus === 'boolean' ? adv.focus : stored.focusWindow };
+  const cfg = {
+    ...DEFAULT_CONFIG,
+    typingSpeed: ['slow', 'normal', 'fast'].includes(ab.typingSpeed) ? ab.typingSpeed : 'normal',
+    typos: ab.typing !== false,
+    maxTypeChars: ab.typing === false ? 1 : DEFAULT_CONFIG.maxTypeChars,
+    browseBeforePost: ab.scroll !== false,
+  };
+  const keys = [];
+  posting = true;
+  abortFlag = false;
+  keepAlive(true);
+  await setState({ current: { campaignId: null, url: job.groupUrl, cloud: true, bump: true } });
+  let result;
+  try {
+    for (const m of job.media || []) {
+      const blob = await cloudApi(c, 'GET', `/api/device/media/${m.id}`, undefined, { blob: true });
+      const key = CLOUD_IMG + m.id;
+      const type = m.contentType || blob.type;
+      await chrome.storage.local.set({ [key]: { name: m.name, type, data: await dataUrlOf(blob, type) } });
+      keys.push(key);
+    }
+    await log('info', `[เว็บ AutoPost] กำลังดันโพสต์ใน ${job.groupName}: ${job.groupUrl}`);
+    result = await commentOnPost(job.groupUrl, { text: job.content || '', imageIds: keys }, cfg, global);
+  } catch (e) {
+    result = {
+      ok: false,
+      error: e?.message || String(e),
+      aborted: e instanceof Aborted,
+      fatal: e instanceof Fatal,
+      blocked: e instanceof Blocked,
+      shot: e?.shot || null,
+    };
+  } finally {
+    posting = false;
+    keepAlive(false);
+    if (keys.length) await chrome.storage.local.remove(keys);
+    await setState({ current: null });
+  }
+  if (result.ok) {
+    await setState({ lastPostAt: Date.now() });
+    await log('success', `[เว็บ AutoPost] ดันโพสต์สำเร็จ: ${job.groupName} ${job.groupUrl}`);
+  } else {
+    await log('error', `[เว็บ AutoPost] ดันโพสต์ไม่สำเร็จ: ${job.groupName} - ${result.error}`);
+  }
+  try {
+    await cloudApi(c, 'POST', `/api/device/bumps/${job.postId}/result`, {
+      ok: !!result.ok,
+      needsLogin: !!result.fatal,
+      blocked: !!(result.blocked || result.blockedAfter),
+      error: result.ok ? (result.blockedAfter || null) : result.error,
+    });
+  } catch (e) {
+    await log('warn', `[เว็บ AutoPost] ส่งผลการดันโพสต์ไม่สำเร็จ: ${e.message}`);
+  }
+  const patch = { lastJob: { at: Date.now(), group: `ดันโพสต์ · ${job.groupName}`, ok: !!result.ok, error: result.ok ? '' : result.error } };
+  if (result.blocked || result.blockedAfter) {
+    patch.pausedUntil = Date.now() + rand(adv.blockMin || stored.blockPauseHoursMin || 2, adv.blockMax || stored.blockPauseHoursMax || 4) * 3600000;
+    await log('warn', `[เว็บ AutoPost] Facebook แจ้งเตือน พักรับงานถึง ${fmtDateTime(patch.pausedUntil)}`);
+  }
+  await setCloud(patch);
   return result;
 }
 

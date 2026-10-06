@@ -32,6 +32,18 @@ public class WorkspaceTests
         var ws = Workspace.Create(Guid.NewGuid(), "Shop", Now);
         var s = new AntiBanSettings { Limits = new PlatformLimits { Fb = 0 } };
         Assert.Throws<DomainException>(() => ws.UpdateAntiBan(s, true));
+        Assert.Throws<DomainException>(() => ws.UpdateAntiBan(new AntiBanSettings { Limits = new PlatformLimits { Fb = 501 } }, true));
+    }
+
+    [Fact]
+    public void A_daily_limit_can_be_high_enough_for_seventy_two_groups_three_times_a_day()
+    {
+        var ws = Workspace.Create(Guid.NewGuid(), "Shop", Now);
+
+        ws.UpdateAntiBan(new AntiBanSettings { Limits = new PlatformLimits { Fb = 216 } }, true);
+        Assert.Equal(216, ws.AntiBan.Limits.Fb);
+        ws.UpdateAntiBan(new AntiBanSettings { Limits = new PlatformLimits { Fb = AntiBanSettings.MaxDailyLimit } }, true);
+        Assert.Equal(500, ws.AntiBan.Limits.Fb);
     }
 
     [Fact]

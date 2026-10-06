@@ -97,6 +97,19 @@ public sealed class CreateTestPostCommandValidator : AbstractValidator<CreateTes
         RuleFor(x => x.Text).MaximumLength(Post.MaxContentLength).WithMessage($"ข้อความโพสต์ยาวเกิน {Post.MaxContentLength} ตัวอักษร");
 }
 
+public sealed class CreateManualTestPostCommandValidator : AbstractValidator<CreateManualTestPostCommand>
+{
+    public CreateManualTestPostCommandValidator()
+    {
+        RuleFor(x => x.Url).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ใส่ลิงก์กลุ่มหรือเพจ Facebook ที่จะทดสอบ")
+            .MaximumLength(SetLink.MaxUrlLength).WithMessage($"ลิงก์ยาวเกิน {SetLink.MaxUrlLength} ตัวอักษร");
+        RuleFor(x => x.Text).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ใส่ข้อความที่ต้องการทดสอบ")
+            .MaximumLength(Post.MaxContentLength).WithMessage($"ข้อความโพสต์ยาวเกิน {Post.MaxContentLength} ตัวอักษร");
+    }
+}
+
 public sealed class RestoreBackupCommandValidator : AbstractValidator<RestoreBackupCommand>
 {
     public RestoreBackupCommandValidator() =>

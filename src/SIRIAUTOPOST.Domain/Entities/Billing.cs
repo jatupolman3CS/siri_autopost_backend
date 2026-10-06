@@ -15,36 +15,121 @@ public class PlanSetting
     public int? Devices { get; private set; }
     /// <summary>People in a workspace, owner included.</summary>
     public int? Seats { get; private set; }
+    /// <summary>Facebook groups and pages (links of the link sets), all workspaces of the owner together.</summary>
+    public int? Groups { get; private set; }
+    /// <summary>Files in the image library, all workspaces of the owner together.</summary>
+    public int? Images { get; private set; }
+    /// <summary>Posts in the post library, all workspaces of the owner together.</summary>
+    public int? LibraryPosts { get; private set; }
 
     /// <summary>Stripe cannot charge less than 10 baht, so a paid plan costs at least that a month.</summary>
     public const int MinPaidPrice = 10;
 
     private PlanSetting() { } // EF Core
 
-    public static PlanSetting Create(PlanKey key, int price, int? accounts, int? posts, int? devices, int? seats) =>
-        new() { Key = key, Price = price, Accounts = accounts, Posts = posts, Devices = devices, Seats = seats };
+    public static PlanSetting Create(
+        PlanKey key, int price, int? accounts, int? posts, int? devices, int? seats, int? groups = null, int? images = null, int? libraryPosts = null) =>
+        new()
+        {
+            Key = key, Price = price, Accounts = accounts, Posts = posts, Devices = devices, Seats = seats,
+            Groups = groups, Images = images, LibraryPosts = libraryPosts,
+        };
 
-    /// <summary>The design's pricing page.</summary>
+    /// <summary>
+    /// The packages (the platform admin edits the numbers; which features each one includes is fixed by
+    /// <see cref="PlanFeatures"/>). Free is for trying it out, Basic for one shop, Pro for a seller with several
+    /// browsers, Agency (shown as Premium) for agencies and heavy users: nothing is capped but the seats.
+    /// </summary>
     public static IReadOnlyList<PlanSetting> Defaults =>
     [
-        Create(PlanKey.Free, 0, 1, 10, 1, 1),
-        Create(PlanKey.Basic, 290, 2, 30, 1, 1),
-        Create(PlanKey.Pro, 790, 10, null, 3, 1),
+        Create(PlanKey.Free, 0, 1, 10, 1, 1, groups: 10, images: 20, libraryPosts: 20),
+        Create(PlanKey.Basic, 290, 2, 50, 1, 1, groups: 50, images: 200, libraryPosts: 200),
+        Create(PlanKey.Pro, 790, 10, 300, 3, 3, groups: 300, images: 1000, libraryPosts: 1000),
         Create(PlanKey.Agency, 1990, null, null, null, 10),
     ];
 
-    public void Update(int price, int? accounts, int? posts, int? devices, int? seats)
+    public void Update(int price, int? accounts, int? posts, int? devices, int? seats, int? groups = null, int? images = null, int? libraryPosts = null)
     {
         if (price < 0 || price > 1_000_000) throw new DomainException("ราคาไม่ถูกต้อง");
         if (Key == PlanKey.Free && price != 0) throw new DomainException("แผน Free ต้องไม่มีค่าใช้จ่าย");
         if (Key != PlanKey.Free && price < MinPaidPrice) throw new DomainException($"แผนที่เสียเงินต้องมีราคาอย่างน้อย {MinPaidPrice} บาท (ขั้นต่ำที่ Stripe เรียกเก็บได้)");
-        if (new[] { accounts, posts, devices, seats }.Any(v => v is < 1)) throw new DomainException("ขีดจำกัดต้องมากกว่า 0 หรือเว้นว่างเพื่อไม่จำกัด");
+        if (new[] { accounts, posts, devices, seats, groups, images, libraryPosts }.Any(v => v is < 1)) throw new DomainException("ขีดจำกัดต้องมากกว่า 0 หรือเว้นว่างเพื่อไม่จำกัด");
         Price = price;
         Accounts = accounts;
         Posts = posts;
         Devices = devices;
         Seats = seats;
+        Groups = groups;
+        Images = images;
+        LibraryPosts = libraryPosts;
     }
+}
+
+/// <summary>
+/// What each package includes besides its numbers. Fixed in code (the numbers are the admin's to edit): a feature
+/// that costs the platform money (AI) or is the reason for a higher price (bump, client reports) is not a setting.
+/// </summary>
+public static class PlanFeatures
+{
+    public const string AdvancedAntiBan = "advanced_anti_ban";
+    public const string Notifications = "notifications";
+    public const string AutoReply = "auto_reply";
+    public const string Ai = "ai";
+    public const string Bump = "bump";
+    public const string ClientReports = "client_reports";
+
+    /// <summary>Every feature key, in the order the plan cards list them.</summary>
+    public static readonly IReadOnlyList<string> All = [AdvancedAntiBan, Notifications, AutoReply, Ai, Bump, ClientReports];
+
+    public static IReadOnlyList<string> For(PlanKey plan) => plan switch
+    {
+        PlanKey.Free or PlanKey.Basic => [],
+        PlanKey.Pro => [AdvancedAntiBan, Notifications, AutoReply, Ai],
+        _ => All,
+    };
+
+    public static bool Has(PlanKey plan, string feature) => For(plan).Contains(feature);
+}
+
+/// <summary>
+/// The platform admin's switch for testing a real payment (one row). While it is on, Stripe Checkout and a plan change
+/// of the listed customers charge <see cref="Amount"/> baht for the billing period instead of the plan's price, so a
+/// real card or PromptPay transfer can be tried for a few baht. The plan the customer gets still follows what they
+/// chose: only the money differs. Nobody outside <see cref="Emails"/> is touched, so real customers keep paying real prices.
+/// </summary>
+public class PaymentOverride
+{
+    public const int MaxEmails = 20;
+    public const int MaxAmount = 1_000_000;
+
+    /// <summary>Always 1: there is one setting for the platform.</summary>
+    public int Id { get; private set; } = 1;
+    public bool Enabled { get; private set; }
+    /// <summary>Baht charged per billing period (a yearly plan pays this once a year); at least what Stripe can charge.</summary>
+    public int Amount { get; private set; } = PlanSetting.MinPaidPrice;
+    /// <summary>Normalised e-mail addresses of the customers it applies to.</summary>
+    public List<string> Emails { get; private set; } = [];
+    public DateTimeOffset UpdatedAt { get; private set; }
+
+    private PaymentOverride() { } // EF Core
+
+    public static PaymentOverride CreateDefault() => new();
+
+    public void Update(bool enabled, int amount, IEnumerable<string> emails, DateTimeOffset now)
+    {
+        if (amount < PlanSetting.MinPaidPrice || amount > MaxAmount)
+            throw new DomainException($"ยอดทดสอบต้องอยู่ระหว่าง {PlanSetting.MinPaidPrice} ถึง {MaxAmount:N0} บาท (ขั้นต่ำที่ Stripe เรียกเก็บได้ {PlanSetting.MinPaidPrice} บาท)");
+        var list = emails.Select(User.NormalizeEmail).Where(e => e.Length > 0).Distinct().ToList();
+        if (list.Count > MaxEmails) throw new DomainException($"ระบุอีเมลได้ไม่เกิน {MaxEmails} บัญชี");
+        if (enabled && list.Count == 0) throw new DomainException("ต้องระบุอีเมลลูกค้าอย่างน้อย 1 บัญชีที่จะใช้ยอดทดสอบ (กันไม่ให้ลูกค้าจริงโดนเรียกเก็บยอดนี้)");
+        Enabled = enabled;
+        Amount = amount;
+        Emails = list;
+        UpdatedAt = now;
+    }
+
+    /// <summary>The baht to charge this customer for a billing period instead of the plan's price; null = the normal price.</summary>
+    public int? ChargeFor(string email) => Enabled && Emails.Contains(User.NormalizeEmail(email)) ? Amount : null;
 }
 
 /// <summary>The Stripe objects behind a ledger row (all optional: rows older than Stripe have none).</summary>

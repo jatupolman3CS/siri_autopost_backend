@@ -17,7 +17,10 @@ public class Schedule : Entity
     public const string NowSlot = "now";
     /// <summary>Posts are queued this many local days ahead (today and the 13 days after).</summary>
     public const int HorizonDays = 14;
-    /// <summary>One materialising run refuses to create more posts than this.</summary>
+    /// <summary>
+    /// One materialising run creates at most this many posts, whole days at a time: the days that do not fit are made by
+    /// the next run. A single day with more posts than this is refused.
+    /// </summary>
     public const int MaxPostsPerRun = 2000;
     /// <summary>
     /// A workspace holds at most this many queued posts that are still in the future (every source counted). A run that
@@ -29,7 +32,8 @@ public class Schedule : Entity
     /// <summary>...and this many days after it (a year ahead, leap year included).</summary>
     public const int StartDateDaysAhead = 366;
     public const int MaxTimes = 48;
-    public static readonly int[] BumpOptions = [0, 6, 12, 24];
+    /// <summary>Hours after a post goes out that it is bumped (0 = off).</summary>
+    public static readonly int[] BumpOptions = [0, 1, 2, 3, 6, 12, 24];
     public static readonly int[] AutoDeleteOptions = [0, 3, 7, 14];
 
     public Guid WorkspaceId { get; private set; }
@@ -53,8 +57,14 @@ public class Schedule : Entity
     public string DripFrom { get; private set; } = "09:00";
     public string DripTo { get; private set; } = "21:00";
     public int DripCount { get; private set; } = 3;
-    /// <summary>Stored only: the extension cannot bump posts yet (0, 6, 12 or 24 hours).</summary>
+    /// <summary>
+    /// Bump the posts of this schedule this many hours after they go out (0 = off; see <see cref="BumpOptions"/>): the
+    /// extension opens the post and comments on it so it comes back to the top of the group. What it comments with and how
+    /// often is in <see cref="Bump"/>. A top-plan feature: a workspace whose owner is not on it never bumps.
+    /// </summary>
     public int BumpHours { get; private set; }
+    /// <summary>What a bump says and how many times it is made (only used while <see cref="BumpHours"/> is not 0).</summary>
+    public BumpPlan Bump { get; private set; } = new();
     /// <summary>Stored only: the extension cannot delete posts yet (0, 3, 7 or 14 days).</summary>
     public int AutoDeleteDays { get; private set; }
     /// <summary>
@@ -88,7 +98,7 @@ public class Schedule : Entity
         Guid workspaceId, string name, Guid collectionId, Guid linkSetId, ScheduleMode mode, IEnumerable<string>? times,
         int everyHours, string? firstTime, DateOnly startDate, string? onceTime, PostOrder order, string? dripFrom, string? dripTo,
         int dripCount, int bumpHours, int autoDeleteDays, IReadOnlyDictionary<string, IReadOnlyList<string>>? overrides,
-        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false, PostRepeat repeat = PostRepeat.Recent)
+        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false, PostRepeat repeat = PostRepeat.Recent, BumpPlan? bump = null)
     {
         var n = (name ?? "").Trim();
         if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อตาราง");
@@ -101,6 +111,7 @@ public class Schedule : Entity
         if (startNow) startDate = LocalDayOf(now, utcOffsetMinutes);
         EnsureStartDate(startDate, now, utcOffsetMinutes);
         if (!BumpOptions.Contains(bumpHours)) throw new DomainException("ตัวเลือกดันโพสต์ไม่ถูกต้อง");
+        var bumpPlan = (bump ?? new BumpPlan()).Cleaned();
         if (!AutoDeleteOptions.Contains(autoDeleteDays)) throw new DomainException("ตัวเลือกลบโพสต์อัตโนมัติไม่ถูกต้อง");
 
         // Fields that belong to another mode are not checked: they fall back to their defaults when they do not make sense.
@@ -141,6 +152,7 @@ public class Schedule : Entity
             DripTo = to,
             DripCount = dripCount,
             BumpHours = bumpHours,
+            Bump = bumpPlan,
             AutoDeleteDays = autoDeleteDays,
             Overrides = CleanOverrides(overrides),
             UtcOffsetMinutes = utcOffsetMinutes,
@@ -329,5 +341,39 @@ public class Schedule : Entity
         if (k.StartsWith(account, StringComparison.OrdinalIgnoreCase) && Guid.TryParse(k[account.Length..], out var a)) return AccountKey(a);
         if (Guid.TryParse(k, out var l)) return LinkKey(l);
         throw new DomainException("ชื่อเวลาเฉพาะกลุ่มไม่ถูกต้อง");
+    }
+}
+
+/// <summary>
+/// What a bump is made of: how many times a post is bumped (each one the schedule's bump hours after the last), the text
+/// of the comment (spintax allowed; blank = a short default) and the images it carries, picked at random from the chosen
+/// library files. A bump is a comment, so it needs a text or images; with neither the default text is used.
+/// </summary>
+public sealed class BumpPlan
+{
+    public const int MaxRounds = 3;
+    public const int MaxImagesEach = 5;
+    public const int MaxPool = 20;
+    public const int MaxTextLength = 1000;
+    /// <summary>Said when the schedule gives no text and no images.</summary>
+    public const string DefaultText = "{ขึ้นๆ ค่ะ|ดันหน่อยค่ะ|ยังมีของพร้อมส่งนะคะ|สนใจทักแชทได้เลยค่ะ}";
+
+    public int Rounds { get; set; } = 1;
+    public string Text { get; set; } = "";
+    /// <summary>Library files to pick the images from.</summary>
+    public List<Guid> MediaIds { get; set; } = [];
+    /// <summary>Images in each bump (0 = a text only), drawn from <see cref="MediaIds"/>.</summary>
+    public int ImagesEach { get; set; }
+
+    /// <summary>The plan checked and tidied; throws a Thai reason when a value is out of range.</summary>
+    public BumpPlan Cleaned()
+    {
+        if (Rounds is < 1 or > MaxRounds) throw new DomainException($"จำนวนครั้งที่ดันต้องอยู่ระหว่าง 1–{MaxRounds}");
+        var text = (Text ?? "").Trim();
+        if (text.Length > MaxTextLength) throw new DomainException($"ข้อความดันโพสต์ยาวเกิน {MaxTextLength} ตัวอักษร");
+        var pool = (MediaIds ?? []).Distinct().ToList();
+        if (pool.Count > MaxPool) throw new DomainException($"เลือกรูปสำหรับดันโพสต์ได้ไม่เกิน {MaxPool} รูป");
+        if (ImagesEach is < 0 or > MaxImagesEach) throw new DomainException($"จำนวนรูปต่อการดันต้องอยู่ระหว่าง 0–{MaxImagesEach}");
+        return new BumpPlan { Rounds = Rounds, Text = text, MediaIds = pool, ImagesEach = pool.Count == 0 ? 0 : Math.Min(ImagesEach, pool.Count) };
     }
 }

@@ -285,7 +285,7 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
     [Fact]
     public async Task A_set_holds_at_most_200_links()
     {
-        var (client, _, ws) = await factory.SignUpAsync();
+        var (client, _, ws) = await factory.SignUpAsync("agency");
         var set = await client.CreateLinkSetAsync(ws);
         var lines = (int from, int count) => string.Join("\n", Enumerable.Range(from, count).Select(i => $"facebook.com/groups/g{i}"));
 
@@ -399,9 +399,9 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
     public async Task A_set_names_the_account_that_posts_it_and_other_accounts()
     {
         var (client, _, ws) = await factory.SignUpAsync();
-        var page = await client.AccountOfAsync(ws, Platform.Fb);
-        var ig = await client.AccountOfAsync(ws, Platform.Ig);
-        var x = await client.AccountOfAsync(ws, Platform.X);
+        var page = await factory.SeedAccountAsync(ws, "เพจ", "เพจ");
+        var ig = await factory.SeedAccountAsync(ws);
+        var x = await factory.SeedAccountAsync(ws, "@shop_x", "ไทม์ไลน์");
 
         var set = await client.CreateLinkSetAsync(ws, "ชุดเพจ", page.Id);
         Assert.Equal(page.Id, set.PostAsAccountId);
@@ -415,8 +415,7 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
             .ReadAsync<LinkSetDto>();
         Assert.Equal((null, 0), (cleared.PostAsAccountId, cleared.AccountIds.Count));
 
-        // The posting account must be a Facebook account of this workspace; the others must belong to it too.
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await client.PostAsJsonAsync(Sets(ws), new { name = "x", postAsAccountId = ig.Id }, Json)).StatusCode);
+        // The posting account must be an account of this workspace; the others must belong to it too.
         Assert.Equal(HttpStatusCode.UnprocessableEntity, (await client.PostAsJsonAsync(Sets(ws), new { name = "x", postAsAccountId = Guid.NewGuid() }, Json)).StatusCode);
         Assert.Equal(HttpStatusCode.UnprocessableEntity,
             (await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}", new { name = "x", accountIds = new[] { Guid.NewGuid() } }, Json)).StatusCode);

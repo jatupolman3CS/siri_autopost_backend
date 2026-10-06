@@ -89,7 +89,7 @@ public class TestPostEndpointsTests(ApiFactory factory)
         Assert.True(post.IsTest);
 
         // A demo account has no browser: nobody could send it, so it is refused.
-        var ig = await shop.Owner.AccountOfAsync(shop.Ws, Platform.Ig);
+        var ig = await factory.SeedAccountAsync(shop.Ws);
         var refused = await SendAsync(shop, new { linkSetId = shop.Set.Id, accountId = ig.Id, collectionId = shop.Collection.Id });
         Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
         Assert.Contains("ยังไม่ได้เชื่อมกับเครื่อง", await TitleAsync(refused));
@@ -155,13 +155,13 @@ public class TestPostEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task A_text_that_is_too_long_once_composed_is_refused_with_the_part_to_shorten()
+    public async Task A_post_text_fits_with_the_largest_footer_and_a_text_over_5000_is_a_400()
     {
-        using var shop = await factory.ShopAsync(links: 1, posts: 1, footer: new string('ข', 100));
+        using var shop = await factory.ShopAsync(links: 1, posts: 1, footer: new string('ข', 1000));
 
-        var res = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 4950) });
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, res.StatusCode);
-        Assert.Contains("5000", await TitleAsync(res));
+        // A full-size text, the largest footer and the group code still fit what a composed post may hold (7,000).
+        var res = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 5000) });
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
 
         var tooLong = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 5001) });
         Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);

@@ -99,6 +99,16 @@ public class PostComposerTests
         Assert.Equal("ใช้  วันนี้", PostComposer.Compose("ใช้ {{code}} วันนี้", ""));
     }
 
+    [Fact]
+    public void A_tag_alone_on_its_line_leaves_no_blank_line_without_a_code()
+    {
+        Assert.Equal("โปรวันนี้\nอีกบรรทัด", PostComposer.Compose("{{code}}\nโปรวันนี้\nอีกบรรทัด", ""));
+        Assert.Equal("โปรวันนี้", PostComposer.Compose("  {{ รหัส }}  \r\nโปรวันนี้", "  "));
+        Assert.Equal("#K1\nโปรวันนี้", PostComposer.Compose("{{code}}\nโปรวันนี้", " #K1 "));
+        // A tag inside a sentence is still just replaced.
+        Assert.Equal("ใช้  วันนี้", PostComposer.Compose("ใช้ {{code}} วันนี้", ""));
+    }
+
     private static CollectionSettings Settings(string footer = "", string hashtags = "", FooterPosition pos = FooterPosition.End) =>
         new() { Footer = footer, Hashtags = hashtags, FooterPos = pos };
 
@@ -108,6 +118,19 @@ public class PostComposerTests
         var text = PostComposer.ComposeFull("{ขาย|โปร} ของดี", "AB12", Settings("ทักแชท", "#บ้าน #สวน"), Always(0.0));
 
         Assert.Equal("AB12\nขาย ของดี\n\nทักแชท\n#บ้าน #สวน", text);
+    }
+
+    [Fact]
+    public void A_promo_block_after_the_code_tag_follows_the_group_code_and_starts_the_post_without_one()
+    {
+        const string post = "{{code}}\nสั่งรูปออนไลน์ได้ด้วยตัวเอง : https://www.siristudiophoto.com\nLine Official : @siristudiophoto\n\n{🎓 ฉลองความสำเร็จ|🎓 เรียนจบทั้งที} เนื้อหา";
+        var settings = Settings();
+        Assert.Equal(
+            "#KRU2DAY261003\nสั่งรูปออนไลน์ได้ด้วยตัวเอง : https://www.siristudiophoto.com\nLine Official : @siristudiophoto\n\n🎓 ฉลองความสำเร็จ เนื้อหา",
+            PostComposer.ComposeFull(post, "#KRU2DAY261003", settings, Always(0.0)));
+        Assert.Equal(
+            "สั่งรูปออนไลน์ได้ด้วยตัวเอง : https://www.siristudiophoto.com\nLine Official : @siristudiophoto\n\n🎓 เรียนจบทั้งที เนื้อหา",
+            PostComposer.ComposeFull(post, "", settings, Always(0.9)));
     }
 
     [Fact]

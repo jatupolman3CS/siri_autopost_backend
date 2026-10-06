@@ -2,6 +2,7 @@ using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
+using SIRIAUTOPOST.Domain.Exceptions;
 using Stripe;
 
 namespace SIRIAUTOPOST.Infrastructure.Payments;
@@ -10,7 +11,7 @@ namespace SIRIAUTOPOST.Infrastructure.Payments;
 internal static class StripeMapping
 {
     /// <summary>Our keys in Stripe metadata (subscription, session, customer, coupon).</summary>
-    public const string UserKey = "user_id", PlanKey = "plan", CycleKey = "cycle", PromoKey = "promo";
+    public const string UserKey = "user_id", PlanKey = "plan", CycleKey = "cycle", PromoKey = "promo", KindKey = "kind", PrepaidKind = "prepaid";
 
     public static DateTimeOffset At(DateTime stripeTime) => new(DateTime.SpecifyKind(stripeTime, DateTimeKind.Utc));
 
@@ -76,6 +77,46 @@ internal static class StripeMapping
             i.Id, i.CustomerId, details?.SubscriptionId, Money.FromSatang(paid ? i.AmountPaid : i.AmountDue), At(i.Created),
             i.HostedInvoiceUrl, first, plan, cycle, promo);
     }
+
+    /// <summary>The PaymentIntent id inside its client secret ("pi_xxx_secret_yyy").</summary>
+    public static string IntentIdOf(string clientSecret)
+    {
+        var at = clientSecret.IndexOf("_secret_", StringComparison.Ordinal);
+        return at > 0 ? clientSecret[..at] : throw new PaymentGatewayException("Stripe ส่งข้อมูลชำระเงินที่อ่านไม่ได้กลับมา");
+    }
+
+    /// <summary>
+    /// A PaymentIntent as the checkout cares about it. A paid or processing one is "succeeded" or pending; one that
+    /// came back to requires_payment_method with an error was declined (the customer may try again on it), a cancelled
+    /// one is over. A fresh one nobody has tried is simply pending.
+    /// </summary>
+    public static PaymentIntentSnapshot PaymentIntent(PaymentIntent pi)
+    {
+        var state = pi.Status switch
+        {
+            "succeeded" => PaymentIntentState.Succeeded,
+            "canceled" => PaymentIntentState.Failed,
+            "requires_payment_method" when pi.LastPaymentError is not null => PaymentIntentState.Failed,
+            _ => PaymentIntentState.Pending,
+        };
+        var message = state != PaymentIntentState.Failed ? null : pi.LastPaymentError?.Message ?? pi.CancellationReason;
+        var charge = pi.LatestCharge;
+        return new PaymentIntentSnapshot(pi.Id, state, Money.FromSatang(pi.Amount), MethodOf(charge?.PaymentMethodDetails), message, charge?.ReceiptUrl);
+    }
+
+    /// <summary>The way a charge was really paid: a card paid through a wallet is Apple Pay or Google Pay.</summary>
+    private static PaymentMethodKind? MethodOf(ChargePaymentMethodDetails? details) => details?.Type switch
+    {
+        "promptpay" => PaymentMethodKind.Promptpay,
+        "link" => PaymentMethodKind.Link,
+        "card" => details.Card?.Wallet?.Type switch
+        {
+            "apple_pay" => PaymentMethodKind.ApplePay,
+            "google_pay" => PaymentMethodKind.GooglePay,
+            _ => PaymentMethodKind.Card,
+        },
+        _ => null,
+    };
 
     public static RefundSnapshot Refund(Refund r) =>
         new(r.Id, r.PaymentIntentId, Money.FromSatang(r.Amount), r.Status is "succeeded" or "pending", At(r.Created));

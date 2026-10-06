@@ -195,7 +195,7 @@ public partial class ReportsEndpointsTests(ApiFactory factory)
     [Fact]
     public async Task Only_the_top_twenty_posts_are_listed_and_deleted_ones_are_skipped()
     {
-        var (client, _, ws) = await factory.SignUpAsync();
+        var (client, _, ws) = await factory.SignUpAsync("agency");
         var (_, pair) = await factory.PairDeviceAsync(client, ws);
         var collection = await client.CreateCollectionAsync(ws);
         var posts = new List<CollectionPostDto>();

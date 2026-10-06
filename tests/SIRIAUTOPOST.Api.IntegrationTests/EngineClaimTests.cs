@@ -231,9 +231,11 @@ public class EngineClaimTests(ApiFactory factory)
     [Fact]
     public async Task A_workspace_that_hit_its_daily_limit_does_not_halt_itself_for_the_posts_the_limit_refused()
     {
-        // Free: 10 posts a day. 20 groups are due at once: 10 go out and the other 10 are refused by the limit, which says
-        // nothing about how posting is going, so they must not count as failures of the last day.
-        using var shop = await factory.ShopAsync("free", links: 20, posts: 1);
+        // 10 posts a day (a Pro customer the admin limited: the Free package has no room for 20 groups). 20 groups are due at
+        // once: 10 go out and the other 10 are refused by the limit, which says nothing about how posting is going, so they
+        // must not count as failures of the last day.
+        using var shop = await factory.ShopAsync("pro", links: 20, posts: 1);
+        (await (await factory.AdminAsync()).PutAsJsonAsync($"/api/admin/customers/{shop.Auth.User.Id}/limits", new { posts = 10 }, Json)).EnsureSuccessStatusCode();
         (await shop.Owner.PutAsJsonAsync($"{shop.Api}/engine/offline", new { policy = "queue", window = "day", line = true, email = true, push = false }, Json)).EnsureSuccessStatusCode();
         var created = await shop.CreateScheduleAsync(new ScheduleSpec(Mode: "once", StartDate: ToLocalDay(shop.Now.AddDays(1), 0), OnceTime: "10:00", Offset: 0));
         Assert.Equal(20, created.Created);

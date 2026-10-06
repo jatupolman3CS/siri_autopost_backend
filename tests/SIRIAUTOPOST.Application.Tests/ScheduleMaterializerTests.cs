@@ -1,4 +1,4 @@
-﻿using NSubstitute;
+using NSubstitute;
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
@@ -584,7 +584,7 @@ public class ScheduleMaterializerTests
 
         Assert.Equal(2, w.Added.Count);
         var other = w.Added.Single(p => p.AccountId == ig.Id);
-        Assert.Equal(("ฟีด", Platform.Ig, null, null, null, $"account:{ig.Id:N}"), (other.Target, other.Platform, other.TargetUrl, other.Code, other.LinkId, other.TargetKey));
+        Assert.Equal(("ฟีด", Platform.Fb, null, null, null, $"account:{ig.Id:N}"), (other.Target, other.Platform, other.TargetUrl, other.Code, other.LinkId, other.TargetKey));
         Assert.Equal("โพสต์ 1", other.Content);
         Assert.Equal(w.Page.Id, w.Added.Single(p => p.LinkId == w.Links[0].Id).AccountId);
         Assert.Equal(TimeSpan.FromMinutes(7.5), other.ScheduledAt - w.Added[0].ScheduledAt); // after the link in the same slot
@@ -694,17 +694,82 @@ public class ScheduleMaterializerTests
     }
 
     [Fact]
-    public async Task A_run_of_more_than_two_thousand_posts_is_refused_and_leaves_nothing_behind()
+    public async Task A_run_makes_the_whole_days_that_fit_in_two_thousand_posts_and_the_next_run_makes_the_rest()
     {
         var w = new SchedulingWorld(links: 0, posts: 1);
         for (var i = 0; i < 150; i++) w.AddLink($"g{i}");
         var s = w.NewSchedule(); // 150 links x 14 days = 2,100
 
+        var first = await w.RunAsync(s, Today.AddDays(1), Today.AddDays(14));
+
+        Assert.Equal(13 * 150, first.Created); // 13 whole days; the 14th would go over 2,000
+        Assert.True(first.Advanced);
+        Assert.Equal(Today.AddDays(13), s.GeneratedThrough);
+        Assert.Equal("2026-10-16T18:00", w.Added.Select(p => p.SlotKey!).Order(StringComparer.Ordinal).Last());
+
+        w.ExistingKeys.AddRange(w.Added.Select(p => (p.TargetKey!, p.SlotKey!)));
+        w.Added.Clear();
+        var second = await w.RunAsync(s, Today.AddDays(14), Today.AddDays(14));
+
+        Assert.Equal(150, second.Created);
+        Assert.Equal(Today.AddDays(14), s.GeneratedThrough);
+    }
+
+    [Fact]
+    public async Task One_day_of_more_than_two_thousand_posts_is_refused_and_leaves_nothing_behind()
+    {
+        var w = new SchedulingWorld(links: 0, posts: 1);
+        for (var i = 0; i < 150; i++) w.AddLink($"g{i}");
+        // 150 links x 14 times = 2,100 posts every day: no run can ever make one day of it.
+        var s = w.NewSchedule(times: Enumerable.Range(8, 14).Select(h => $"{h:00}:00").ToArray());
+
         var ex = await Assert.ThrowsAsync<DomainException>(() => w.RunAsync(s, Today.AddDays(1), Today.AddDays(14)));
 
         Assert.Contains("2,000", ex.Message);
+        Assert.Contains("วันเดียว", ex.Message);
         Assert.Empty(w.Added);
         Assert.Null(s.GeneratedThrough);
+    }
+
+    [Fact]
+    public async Task Seventy_two_groups_three_times_a_day_from_a_thousand_posts_starting_now_fill_the_fortnight_in_two_runs()
+    {
+        // The case of 2026-10-05: 216 tasks a day (72 groups x 3 times), 1,035 posts, 3-12 minutes between groups, start now.
+        var w = new SchedulingWorld(links: 0, posts: 0);
+        for (var i = 0; i < 1035; i++) w.AddPost($"โพสต์ {i}");
+        for (var i = 0; i < 72; i++) w.AddLink($"g{i}", $"C{i}");
+        w.SetDelay(3, 12);
+        var s = w.NewSchedule(times: ["09:00", "13:00", "18:00"], order: PostOrder.Shuffle, startNow: true);
+
+        var runs = new List<int>();
+        while (ScheduleTopUp.Window(s, Now) is { } window)
+        {
+            var before = w.Added.Count;
+            var result = await w.RunAsync(s, window.From, window.To, new SeededRandom(7 + runs.Count));
+            Assert.True(result.Advanced);
+            runs.Add(result.Created);
+            w.ExistingKeys.AddRange(w.Added.Skip(before).Select(p => (p.TargetKey!, p.SlotKey!)));
+            Assert.True(runs.Count < 5, "the top-up never catches up");
+        }
+
+        Assert.Equal(2, runs.Count);
+        Assert.All(runs, n => Assert.InRange(n, 1, Schedule.MaxPostsPerRun));
+        Assert.Equal(Last, s.GeneratedThrough);
+        Assert.Equal(w.Added.Count, w.Added.Select(p => (p.TargetKey, p.SlotKey)).Distinct().Count()); // never twice
+        Assert.Equal(72, w.Added.Count(p => p.SlotKey!.EndsWith("Tnow")));
+        // Every later day: 216 posts, each group once per time, the groups of a time 3-12 minutes apart.
+        for (var day = Today.AddDays(1); day <= Last; day = day.AddDays(1))
+        {
+            var key = $"{day:yyyy-MM-dd}T";
+            var ofDay = w.Added.Where(p => p.SlotKey!.StartsWith(key)).ToList();
+            Assert.Equal(216, ofDay.Count);
+            foreach (var slot in ofDay.GroupBy(p => p.SlotKey))
+            {
+                Assert.Equal(72, slot.Select(p => p.LinkId).Distinct().Count());
+                var times = slot.Select(p => p.ScheduledAt).Order().ToList();
+                for (var i = 1; i < times.Count; i++) Assert.InRange((times[i] - times[i - 1]).TotalMinutes, 3, 12);
+            }
+        }
     }
 
     [Fact]

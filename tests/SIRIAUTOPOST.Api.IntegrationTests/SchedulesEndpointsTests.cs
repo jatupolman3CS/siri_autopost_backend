@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
@@ -132,7 +133,7 @@ public class SchedulesEndpointsTests(ApiFactory factory)
     public async Task Other_accounts_of_the_set_post_to_their_default_target()
     {
         using var shop = await factory.ShopAsync(links: 1);
-        var ig = await shop.Owner.AccountOfAsync(shop.Ws, Platform.Ig);
+        var ig = await factory.SeedAccountAsync(shop.Ws);
         (await shop.Owner.PutAsJsonAsync($"{shop.Api}/link-sets/{shop.Set.Id}",
             new { name = shop.Set.Name, postAsAccountId = shop.Pair.AccountId, accountIds = new[] { ig.Id } }, Json)).EnsureSuccessStatusCode();
         var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
@@ -142,7 +143,7 @@ public class SchedulesEndpointsTests(ApiFactory factory)
         Assert.Equal((2, 2), (created.Schedule.TargetCount, created.Schedule.PerDay));
         var other = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.AccountId == ig.Id).ToList();
         Assert.NotEmpty(other);
-        Assert.All(other, p => Assert.Equal((ig.DefaultTarget, Platform.Ig, null, null, null), (p.Target, p.Platform, p.TargetUrl, p.Code, p.LinkId)));
+        Assert.All(other, p => Assert.Equal((ig.DefaultTarget, Platform.Fb, null, null, null), (p.Target, p.Platform, p.TargetUrl, p.Code, p.LinkId)));
         Assert.All(other, p => Assert.Equal(shop.Posts.Single(c => c.Id == p.CollectionPostId).Text, p.Content));
     }
 
@@ -263,14 +264,28 @@ public class SchedulesEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task The_stored_only_settings_come_back()
+    public async Task The_bump_and_auto_delete_settings_come_back()
     {
-        using var shop = await factory.ShopAsync();
+        using var shop = await factory.ShopAsync("agency");
         var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
 
         var created = await shop.CreateScheduleAsync(Daily(slot) with { BumpHours = 12, AutoDeleteDays = 7 });
 
         Assert.Equal((12, 7), (created.Schedule.BumpHours, created.Schedule.AutoDeleteDays));
+    }
+
+    [Fact]
+    public async Task Bumping_is_a_top_plan_feature()
+    {
+        using var shop = await factory.ShopAsync(); // Pro
+        var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
+
+        var refused = await shop.TryCreateScheduleAsync(Daily(slot) with { BumpHours = 2 });
+        Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
+        Assert.Contains("Premium", await TitleAsync(refused));
+
+        // No bump asked: no plan check.
+        Assert.Equal(HttpStatusCode.OK, (await shop.TryCreateScheduleAsync(Daily(slot) with { BumpHours = 0 })).StatusCode);
     }
 
     // ---- refusals ----
@@ -314,7 +329,7 @@ public class SchedulesEndpointsTests(ApiFactory factory)
         Assert.Contains("ผูกเครื่อง", await TitleAsync(noDevice));
 
         // A set that names an account that is not connected (the demo page) is no better.
-        var demoPage = await client.AccountOfAsync(ws, Platform.Fb);
+        var demoPage = await factory.SeedAccountAsync(ws, "เพจ", "เพจ");
         var named = await client.CreateLinkSetAsync(ws, "ชื่อบัญชี", demoPage.Id);
         await client.AddLinkAsync(ws, named.Id, "https://www.facebook.com/groups/plants");
         var demo = await client.PostAsJsonAsync($"/api/workspaces/{ws}/schedules", new { collectionId = collection.Id, linkSetId = named.Id, mode = "daily", times = new[] { "10:00" }, order = "rotate", utcOffsetMinutes = Bangkok }, Json);
@@ -414,6 +429,7 @@ public class SchedulesEndpointsTests(ApiFactory factory)
     public async Task Pausing_drops_the_queued_future_posts_and_resuming_makes_them_again_without_touching_the_history()
     {
         using var shop = await factory.ShopAsync(links: 2);
+        await shop.SetAntiBanAsync(a => a with { Shuffle = false }); // a fixed order: the second group's time is a few minutes after the first
         var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
         var created = await shop.CreateScheduleAsync(Daily(slot));
         var id = created.Schedule.Id;
@@ -552,6 +568,36 @@ public class SchedulesEndpointsTests(ApiFactory factory)
         var added = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.ScheduledAt > created.LastAt).ToList();
         Assert.Equal(3 * 2, added.Count);
         Assert.Equal(6, added.Select(p => (p.LinkId, LocalDay(p.ScheduledAt))).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task Seventy_two_groups_three_times_a_day_starting_now_are_made_two_thousand_at_most_at_a_time_and_a_claim_makes_the_rest()
+    {
+        // 216 tasks a day for a fortnight is more than one run makes (2,000): creating makes the days that fit.
+        using var shop = await factory.ShopAsync(links: 72);
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["09:00", "13:00", "18:00"], Order: "shuffle", Offset: Bangkok, StartNow: true));
+
+        Assert.Equal((72, 216), (created.Schedule.TargetCount, created.Schedule.PerDay));
+        Assert.InRange(created.Created, 72 + 216, Schedule.MaxPostsPerRun);
+        Assert.Equal(created.Created, (await shop.PostsAsync(created.Schedule.Id)).Count);
+
+        // The browser's next claim tops the schedule up with the days that did not fit.
+        await shop.ClaimAsync();
+
+        var slots = await factory.WithDbAsync(db => db.Posts.Where(p => p.ScheduleId == created.Schedule.Id)
+            .GroupBy(p => p.SlotKey!).Select(g => new { Slot = g.Key, Count = g.Count(), Groups = g.Select(p => p.LinkId).Distinct().Count() })
+            .ToListAsync());
+        var today = DateOnly.ParseExact(LocalDay(shop.Now), "yyyy-MM-dd");
+        Assert.Equal((72, 72), slots.Where(s => s.Slot.EndsWith("Tnow")).Select(s => (s.Count, s.Groups)).Single());
+        for (var day = today.AddDays(1); day <= today.AddDays(Schedule.HorizonDays - 1); day = day.AddDays(1))
+            foreach (var time in new[] { "09:00", "13:00", "18:00" })
+                Assert.Equal((72, 72), slots.Where(s => s.Slot == Schedule.SlotKey(day, time)).Select(s => (s.Count, s.Groups)).Single());
+        Assert.True(slots.Sum(s => s.Count) > Schedule.MaxPostsPerRun);
+
+        // Nothing is left to make: another claim adds nothing.
+        var total = slots.Sum(s => s.Count);
+        await shop.ClaimAsync();
+        Assert.Equal(total, await factory.WithDbAsync(db => db.Posts.CountAsync(p => p.ScheduleId == created.Schedule.Id)));
     }
 
     [Fact]

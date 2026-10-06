@@ -1,6 +1,7 @@
 using FluentValidation;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.Admin;
+using SIRIAUTOPOST.Application.Features.Ai;
 using SIRIAUTOPOST.Application.Features.Auth;
 using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.Collections;
@@ -71,6 +72,24 @@ public sealed class ChangePlanCommandValidator : AbstractValidator<ChangePlanCom
     }
 }
 
+public sealed class StartPaymentCommandValidator : AbstractValidator<StartPaymentCommand>
+{
+    public StartPaymentCommandValidator()
+    {
+        RuleFor(x => x.Plan).IsInEnum().WithMessage("แผนไม่ถูกต้อง");
+        RuleFor(x => x.Cycle).IsInEnum().WithMessage("รอบบิลไม่ถูกต้อง");
+        RuleFor(x => x.Method).IsInEnum().WithMessage("ช่องทางชำระเงินไม่ถูกต้อง");
+        RuleFor(x => x.PromoCode).MaximumLength(30).WithMessage("โค้ดส่วนลดยาวเกิน 30 ตัวอักษร");
+    }
+}
+
+public sealed class ConfirmPaymentCommandValidator : AbstractValidator<ConfirmPaymentCommand>
+{
+    public ConfirmPaymentCommandValidator() =>
+        RuleFor(x => x.IntentId).NotEmpty().MaximumLength(100).Must(id => id.StartsWith("pi_", StringComparison.Ordinal))
+            .WithMessage("รหัสการชำระเงินไม่ถูกต้อง");
+}
+
 public sealed class ConfirmCheckoutCommandValidator : AbstractValidator<ConfirmCheckoutCommand>
 {
     public ConfirmCheckoutCommandValidator() =>
@@ -108,6 +127,9 @@ public sealed class SetCustomerLimitsCommandValidator : AbstractValidator<SetCus
         RuleFor(x => x.Posts).GreaterThanOrEqualTo(0).WithMessage("ขีดจำกัดต้องไม่ติดลบ");
         RuleFor(x => x.Devices).GreaterThanOrEqualTo(0).WithMessage("ขีดจำกัดต้องไม่ติดลบ");
         RuleFor(x => x.Seats).GreaterThanOrEqualTo(0).WithMessage("ขีดจำกัดต้องไม่ติดลบ");
+        RuleFor(x => x.Groups).GreaterThanOrEqualTo(0).WithMessage("ขีดจำกัดต้องไม่ติดลบ");
+        RuleFor(x => x.Images).GreaterThanOrEqualTo(0).WithMessage("ขีดจำกัดต้องไม่ติดลบ");
+        RuleFor(x => x.LibraryPosts).GreaterThanOrEqualTo(0).WithMessage("ขีดจำกัดต้องไม่ติดลบ");
     }
 }
 
@@ -127,6 +149,19 @@ public sealed class UpdatePlanCommandValidator : AbstractValidator<UpdatePlanCom
     {
         RuleFor(x => x.Key).IsInEnum().WithMessage("แผนไม่ถูกต้อง");
         RuleFor(x => x.Price).GreaterThanOrEqualTo(0).WithMessage("ราคาไม่ถูกต้อง");
+    }
+}
+
+public sealed class SetPaymentOverrideCommandValidator : AbstractValidator<SetPaymentOverrideCommand>
+{
+    public SetPaymentOverrideCommandValidator()
+    {
+        RuleFor(x => x.Emails.Count).LessThanOrEqualTo(PaymentOverride.MaxEmails)
+            .WithMessage($"ระบุอีเมลได้ไม่เกิน {PaymentOverride.MaxEmails} บัญชี");
+        RuleForEach(x => x.Emails).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage(Messages.BadEmail)
+            .EmailAddress().WithMessage(Messages.BadEmail)
+            .MaximumLength(254).WithMessage("อีเมลยาวเกิน 254 ตัวอักษร");
     }
 }
 
@@ -246,6 +281,22 @@ public sealed class CreateCollectionCommandValidator : AbstractValidator<CreateC
             .MaximumLength(PostCollection.MaxNameLength).WithMessage($"ชื่อชุดโพสต์ยาวเกิน {PostCollection.MaxNameLength} ตัวอักษร");
         RuleFor(x => x.Description).MaximumLength(PostCollection.MaxDescriptionLength)
             .WithMessage($"คำอธิบายยาวเกิน {PostCollection.MaxDescriptionLength} ตัวอักษร");
+    }
+}
+
+public sealed class WriteAiPostsCommandValidator : AbstractValidator<WriteAiPostsCommand>
+{
+    public WriteAiPostsCommandValidator()
+    {
+        RuleFor(x => x.Topic).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("กรุณาบอก AI ว่าจะให้เขียนโพสต์เรื่องอะไร")
+            .MaximumLength(WriteAiPostsCommandHandler.MaxTopicLength).WithMessage($"หัวข้อยาวเกิน {WriteAiPostsCommandHandler.MaxTopicLength} ตัวอักษร");
+        RuleFor(x => x.Points!.Count).LessThanOrEqualTo(WriteAiPostsCommandHandler.MaxPoints)
+            .When(x => x.Points is not null).WithMessage($"ใส่จุดขายได้ไม่เกิน {WriteAiPostsCommandHandler.MaxPoints} ข้อ");
+        RuleForEach(x => x.Points).MaximumLength(WriteAiPostsCommandHandler.MaxPointLength)
+            .WithMessage($"จุดขายแต่ละข้อยาวเกิน {WriteAiPostsCommandHandler.MaxPointLength} ตัวอักษร");
+        RuleFor(x => x.Count).InclusiveBetween(1, WriteAiPostsCommandHandler.MaxCount)
+            .WithMessage($"จำนวนที่ให้ AI เขียนต้องอยู่ระหว่าง 1–{WriteAiPostsCommandHandler.MaxCount}");
     }
 }
 

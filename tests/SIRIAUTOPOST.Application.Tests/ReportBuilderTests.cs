@@ -92,24 +92,23 @@ public class ReportBuilderTests
     }
 
     [Fact]
-    public void Posts_without_a_link_are_grouped_by_what_they_were_called_and_the_platform()
+    public void Posts_without_a_link_are_grouped_by_what_they_were_called()
     {
         var outcomes = new[]
         {
             Outcome(PostStatus.Success, target: "กลุ่มเก่า", url: "https://www.facebook.com/groups/old", hoursAgo: 5),
             Outcome(PostStatus.Success, target: "กลุ่มเก่า", url: "https://www.facebook.com/groups/old-new", hoursAgo: 2), // the newest address wins
             Outcome(PostStatus.Failed, target: "กลุ่มเก่า"),
-            Outcome(PostStatus.Success, target: "Feed", platform: Platform.Ig),
-            Outcome(PostStatus.Success, target: "Feed", platform: Platform.Fb), // same name, other platform: its own row
+            Outcome(PostStatus.Success, target: "Feed", platform: Platform.Fb),
         };
 
         var report = Build(outcomes, Links());
 
-        Assert.Equal(3, report.Groups.Count);
+        Assert.Equal(2, report.Groups.Count);
         var old = report.Groups.Single(g => g.Name == "กลุ่มเก่า");
         Assert.Equal((null, "https://www.facebook.com/groups/old-new", Platform.Fb, 2, 1, 67, true, LinkHealth.Ok),
             (old.LinkId, old.Url, old.Platform, old.Posted, old.Failed, old.Rate, old.Enabled, old.Health));
-        Assert.Equal([Platform.Fb, Platform.Ig], report.Groups.Where(g => g.Name == "Feed").Select(g => g.Platform).Order());
+        Assert.Equal([Platform.Fb], report.Groups.Where(g => g.Name == "Feed").Select(g => g.Platform).Order());
         Assert.All(report.Groups.Where(g => g.Name == "Feed"), g => Assert.Null(g.Url));
     }
 

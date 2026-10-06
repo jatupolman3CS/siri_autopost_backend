@@ -25,7 +25,9 @@ public sealed class DeviceApiController : ControllerBase
 {
     public sealed record HeartbeatRequest(string? Version);
     public sealed record GroupsRequest(IReadOnlyList<GroupLinkDto> Groups);
-    public sealed record ResultRequest(bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error);
+    /// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it (a bump opens it).</param>
+    public sealed record ResultRequest(bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null);
+    public sealed record BumpResultRequest(bool Ok, bool NeedsLogin, bool Blocked, string? Error);
     /// <param name="Wait">With takeCommands: hold the call (up to 25 s) until the web app sends a command.</param>
     public sealed record SyncRequest(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands, bool Wait = false);
     public sealed record ConfigRequest(JsonElement Settings, int? BaseRevision);
@@ -64,7 +66,17 @@ public sealed class DeviceApiController : ControllerBase
     [HttpPost("jobs/{postId:guid}/result")]
     public Task<PostDto> Result(
         Guid postId, ResultRequest r, [FromServices] ICommandHandler<ReportJobResultCommand, PostDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new ReportJobResultCommand(postId, r.Ok, r.AwaitingApproval, r.NeedsLogin, r.Blocked, r.Error), ct);
+        handler.HandleAsync(new ReportJobResultCommand(postId, r.Ok, r.AwaitingApproval, r.NeedsLogin, r.Blocked, r.Error, r.PostUrl), ct);
+
+    /// <summary>The result of a bump job (<c>kind: "bump"</c> from jobs/claim): the comment was made, or why not.</summary>
+    [HttpPost("bumps/{bumpId:guid}/result")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> BumpResult(
+        Guid bumpId, BumpResultRequest r, [FromServices] ICommandHandler<ReportBumpResultCommand, Unit> handler, CancellationToken ct)
+    {
+        await handler.HandleAsync(new ReportBumpResultCommand(bumpId, r.Ok, r.NeedsLogin, r.Blocked, r.Error), ct);
+        return NoContent();
+    }
 
     [HttpGet("media/{mediaId:guid}")]
     [Produces("application/octet-stream")]

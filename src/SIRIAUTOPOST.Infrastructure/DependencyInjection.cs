@@ -1,7 +1,11 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using SIRIAUTOPOST.Application.Features.Ai;
 using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Infrastructure.Ai;
 using SIRIAUTOPOST.Domain.Interfaces;
 using SIRIAUTOPOST.Infrastructure.Auth;
 using SIRIAUTOPOST.Infrastructure.Data;
@@ -30,6 +34,7 @@ public static class DependencyInjection
         services.AddScoped<IWorkspaceRepository, WorkspaceRepository>();
         services.AddScoped<IAccountRepository, AccountRepository>();
         services.AddScoped<IPostRepository, PostRepository>();
+        services.AddScoped<IPostBumpRepository, PostBumpRepository>();
         services.AddScoped<IMediaRepository, MediaRepository>();
         services.AddScoped<IMediaFolderRepository, MediaFolderRepository>();
         services.AddSingleton<IObjectStorage, R2ObjectStorage>();
@@ -46,7 +51,9 @@ public static class DependencyInjection
         services.AddScoped<IAuditRepository, AuditRepository>();
         services.AddScoped<IDatabaseProbe, DatabaseProbe>();
         services.AddScoped<IPromoRepository, PromoRepository>();
+        services.AddScoped<IPaymentOverrideRepository, PaymentOverrideRepository>();
         services.AddScoped<IPaymentEventRepository, PaymentEventRepository>();
+        services.AddScoped<IPaymentAttemptRepository, PaymentAttemptRepository>();
         services.AddScoped<IWorkspaceSeeder, DemoWorkspaceSeeder>();
         services.AddScoped<ICollectionRepository, CollectionRepository>();
         services.AddScoped<ICollectionPostRepository, CollectionPostRepository>();
@@ -60,9 +67,25 @@ public static class DependencyInjection
         services.AddSingleton<IGoogleTokenVerifier>(sp => new GoogleTokenVerifier(new HttpClient { Timeout = TimeSpan.FromSeconds(10) }, sp.GetRequiredService<IConfiguration>()));
         services.Configure<StripeOptions>(config.GetSection(StripeOptions.Section));
         services.AddSingleton<IPaymentGateway, StripePaymentGateway>();
+        services.AddSingleton<IPaymentConfig, StripePaymentConfig>();
+        services.AddHostedService<PrepaidExpiryWorker>();
         services.AddSingleton<IPasswordHasher, PasswordHasher>();
         services.AddSingleton<IRandomSource, RandomSource>();
         services.AddSingleton<IDeviceSecrets, DeviceSecrets>();
+
+        // AI post drafts: the platform's key (Ai__ApiKey); without one the writer reports Enabled = false
+        services.Configure<AiOptions>(config.GetSection(AiOptions.Section));
+        services.AddSingleton<IAiWriter>(sp =>
+        {
+            var options = sp.GetRequiredService<IOptions<AiOptions>>();
+            // No IHttpClientFactory: its request logging would put the provider's address (and errors) in the log.
+            var http = new HttpClient(new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) })
+            {
+                Timeout = options.Value.Timeout + TimeSpan.FromSeconds(5),
+            };
+            return new AnthropicAiWriter(http, options, sp.GetRequiredService<ILogger<AnthropicAiWriter>>());
+        });
+        services.AddSingleton(sp => new AiLimits(sp.GetRequiredService<IOptions<AiOptions>>().Value.DailyLimit));
 
         // Notifications (Telegram / LINE): gateway, queue and background worker
         services.AddNotifications(config);

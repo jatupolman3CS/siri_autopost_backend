@@ -56,6 +56,7 @@ own namespace (`<app>-prd` / `<app>-dev`, like the other systems), own `api-env`
    | `Admin__Email`, `Admin__Password` | creates the platform admin on first start. Optional for the pod, but without it nobody can reach the admin area (customers, refunds, plans) |
    | `Stripe__SecretKey` | the Stripe secret key (`sk_live_...`; DEV `sk_test_...`). Without it online payment is off: the dashboard says so and paid plans cannot be bought |
    | `Stripe__WebhookSecret` | the signing secret (`whsec_...`) of the webhook endpoint below. Without it Stripe's calls are rejected, so a paid plan would never be applied or renewed |
+   | `Ai__ApiKey` | optional, the platform's Anthropic key for the AI post writer (Pro and above). Without it the AI buttons are disabled; `Ai__Model` and `Ai__DailyLimit` (drafts per workspace per day, default 50) are optional |
    | `Google__ClientId` | optional, enables "Sign in with Google" (add each site origin as an Authorized JavaScript origin on that OAuth client) |
 
    `Cors__AllowedOrigins__0` and `Stripe__ReturnBaseUrl` are pinned to the environment's public address in `deploy/k8s/overlays/<env>`
@@ -70,9 +71,15 @@ own namespace (`<app>-prd` / `<app>-dev`, like the other systems), own `api-env`
    `https://siriautopost-dev.siristudiophoto.com/api/webhooks/stripe`, card `4242 4242 4242 4242`). PRD, live mode:
    - Developers → Webhooks → add the endpoint `https://siriautopost.siristudiophoto.com/api/webhooks/stripe` with the events
      `checkout.session.completed`, `customer.subscription.created`, `customer.subscription.updated`,
-     `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `refund.created`, `refund.updated`;
-     copy its signing secret into `Stripe__WebhookSecret`. The dashboard's nginx passes `/api/` through, so the endpoint
+     `customer.subscription.deleted`, `invoice.paid`, `invoice.payment_failed`, `refund.created`, `refund.updated`, and for the
+     in-app payment window `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.processing`,
+     `payment_intent.canceled`; copy its signing secret into `Stripe__WebhookSecret`. The dashboard's nginx passes `/api/` through, so the endpoint
      needs no tunnel route of its own.
+   - In-app payment window (card, Apple Pay, Google Pay, Link, PromptPay; `docs/payment-checkout.md`): put the account's publishable key
+     in `Stripe__PublishableKey` (DEV `pk_test_...`; empty = customers are sent to Stripe's own Checkout page). Settings → Payment methods:
+     switch on Cards, Link and PromptPay (a Thai account, THB), and register the site's HTTPS domain for Apple Pay. If the account cannot use
+     Link, set `Stripe__SubscriptionPaymentMethods=card`. PromptPay is a single payment for one period (Stripe cannot renew it), so a plan paid
+     that way ends by itself.
    - Settings → Billing → Subscriptions and emails: keep "retry failed payments" on (a failed card then shows as past due and
      Stripe retries it; the dashboard says so), and the customer emails you want Stripe to send (receipts, failed payment).
    - Settings → Billing → Customer portal: switch it on (payment methods and invoices; plan changes are made in the

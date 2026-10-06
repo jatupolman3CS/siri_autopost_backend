@@ -58,6 +58,12 @@ public sealed class StripeWebhookParser
                 return new InvoiceFailedEvent(e.Id, StripeMapping.Invoice(failed, paid: false));
             case EventTypes.RefundCreated or EventTypes.RefundUpdated when e.Data.Object is Refund refund:
                 return new RefundEvent(e.Id, StripeMapping.Refund(refund));
+            // The in-app checkout: paid, declined, still processing (a PromptPay QR scanned) or cancelled. Only the id is
+            // taken; the handler reads the PaymentIntent again, so the order the events arrive in does not matter.
+            case EventTypes.PaymentIntentSucceeded or EventTypes.PaymentIntentPaymentFailed
+                or EventTypes.PaymentIntentProcessing or EventTypes.PaymentIntentCanceled
+                when e.Data.Object is PaymentIntent intent:
+                return new PaymentIntentEvent(e.Id, intent.Id);
             default:
                 return null;
         }

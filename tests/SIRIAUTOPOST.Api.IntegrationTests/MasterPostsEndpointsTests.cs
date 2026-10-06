@@ -298,7 +298,7 @@ public class MasterPostsEndpointsTests(ApiFactory factory)
     [Fact]
     public async Task A_workspace_holds_at_most_5000_posts_in_the_library()
     {
-        var (client, _, ws) = await factory.SignUpAsync();
+        var (client, _, ws) = await factory.SignUpAsync("agency");
         var now = DateTimeOffset.UtcNow;
         await factory.WithDbAsync(async db =>
         {

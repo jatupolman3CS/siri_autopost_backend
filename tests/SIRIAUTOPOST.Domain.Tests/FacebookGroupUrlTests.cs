@@ -22,13 +22,19 @@ public class FacebookGroupUrlTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    [InlineData("https://www.facebook.com/baandee")]
+    [InlineData("https://www.facebook.com/")]
     [InlineData("https://www.facebook.com/groups/")]
-    [InlineData("https://www.facebook.com/groupsbaandee")]
+    [InlineData("https://www.facebook.com/groups")]
+    [InlineData("https://www.facebook.com/abc")]
+    [InlineData("https://www.facebook.com/watch/")]
+    [InlineData("https://www.facebook.com/marketplace/item/123")]
+    [InlineData("https://www.facebook.com/login.php")]
+    [InlineData("https://www.facebook.com/12345678")]
     [InlineData("https://example.com/groups/baandee")]
     [InlineData("https://notfacebook.com/groups/baandee")]
+    [InlineData("https://notfacebook.com/baandee.shop")]
     [InlineData("baandee")]
-    public void Anything_else_is_not_a_group(string? raw)
+    public void Anything_else_is_neither_a_group_nor_a_page(string? raw)
     {
         Assert.Null(FacebookGroupUrl.Normalize(raw));
         Assert.False(FacebookGroupUrl.IsValid(raw));
@@ -55,6 +61,31 @@ public class FacebookGroupUrlTests
     [InlineData("https://www.facebook.com/groups/..a", "..a")]
     [InlineData("https://www.facebook.com/groups/_9-", "_9-")]
     public void One_letter_or_digit_is_enough(string raw, string slug) => Assert.Equal(slug, FacebookGroupUrl.Slug(raw));
+
+    [Theory]
+    [InlineData("https://www.facebook.com/baandee.shop", "https://www.facebook.com/baandee.shop", "baandee.shop")]
+    [InlineData("facebook.com/KHRUSIRI/", "https://www.facebook.com/KHRUSIRI", "KHRUSIRI")]
+    [InlineData("https://m.facebook.com/KHRUSIRI?ref=page_internal", "https://www.facebook.com/KHRUSIRI", "KHRUSIRI")]
+    [InlineData("https://web.facebook.com/profile.php?id=100012345678901", "https://www.facebook.com/profile.php?id=100012345678901", "100012345678901")]
+    [InlineData("https://www.facebook.com/profile.php?ref=x&id=100012345678901", "https://www.facebook.com/profile.php?id=100012345678901", "100012345678901")]
+    [InlineData("https://www.facebook.com/pages/Baan-Dee/123456789", "https://www.facebook.com/pages/Baan-Dee/123456789", "Baan-Dee")]
+    [InlineData("https://www.facebook.com/p/Baan-Dee-100012345678901/", "https://www.facebook.com/p/Baan-Dee-100012345678901", "Baan-Dee-100012345678901")]
+    public void Every_spelling_of_a_page_becomes_the_same_address(string raw, string expected, string slug)
+    {
+        Assert.Equal(expected, FacebookGroupUrl.Normalize(raw));
+        Assert.Equal(slug, FacebookGroupUrl.Slug(raw));
+        Assert.Equal(FacebookTargetKind.Page, FacebookGroupUrl.KindOf(raw));
+        Assert.True(FacebookGroupUrl.IsValid(raw));
+    }
+
+    [Fact]
+    public void A_group_is_a_group_and_a_page_is_a_page()
+    {
+        Assert.Equal(FacebookTargetKind.Group, FacebookGroupUrl.KindOf("https://www.facebook.com/groups/baandee"));
+        Assert.Equal(FacebookTargetKind.Page, FacebookGroupUrl.KindOf("https://www.facebook.com/baandee"));
+        Assert.Null(FacebookGroupUrl.KindOf("https://www.facebook.com/groups/."));
+        Assert.Null(FacebookGroupUrl.KindOf("https://www.example.com/baandee"));
+    }
 
     [Fact]
     public void Addresses_are_compared_without_regard_to_case_but_keep_the_case_they_were_typed_in()

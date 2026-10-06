@@ -26,7 +26,20 @@ public sealed class UserRepository(AppDbContext db) : IUserRepository
         return await db.Users.Where(x => list.Contains(x.Id)).ToListAsync(ct);
     }
 
+    public async Task<IReadOnlyList<User>> ListPrepaidEndedAsync(DateTimeOffset now, CancellationToken ct = default) =>
+        await db.Users
+            .Where(x => x.StripeSubscriptionId == null && x.Plan != PlanKey.Free && x.PlanRenewsAt != null && x.PlanRenewsAt <= now)
+            .ToListAsync(ct);
+
     public void Add(User user) => db.Users.Add(user);
+}
+
+public sealed class PaymentAttemptRepository(AppDbContext db) : IPaymentAttemptRepository
+{
+    public Task<PaymentAttempt?> GetByIntentAsync(string paymentIntentId, CancellationToken ct = default) =>
+        db.PaymentAttempts.FirstOrDefaultAsync(x => x.StripePaymentIntentId == paymentIntentId, ct);
+
+    public void Add(PaymentAttempt attempt) => db.PaymentAttempts.Add(attempt);
 }
 
 public sealed class WorkspaceRepository(AppDbContext db) : IWorkspaceRepository
@@ -393,6 +406,38 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     }
 }
 
+public sealed class PostBumpRepository(AppDbContext db) : IPostBumpRepository
+{
+    public void Add(PostBump bump) => db.PostBumps.Add(bump);
+
+    public void AddRange(IEnumerable<PostBump> bumps) => db.PostBumps.AddRange(bumps);
+
+    public async Task<IReadOnlyList<PostBump>> ListByPostAsync(Guid postId, CancellationToken ct = default) =>
+        await db.PostBumps.AsNoTracking().Where(x => x.PostId == postId).OrderBy(x => x.Round).ToListAsync(ct);
+
+    public Task<PostBump?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.PostBumps.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public async Task<IReadOnlyList<PostBump>> ListClaimedByAsync(Guid deviceId, CancellationToken ct = default) =>
+        await db.PostBumps.Where(x => x.ClaimedByDeviceId == deviceId && x.Status == BumpStatus.Posting).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<PostBump>> ListDueAsync(Guid accountId, DateTimeOffset now, CancellationToken ct = default) =>
+        await db.PostBumps.Where(x => x.AccountId == accountId && x.Status == BumpStatus.Queued && x.DueAt <= now)
+            .OrderBy(x => x.DueAt).Take(20).ToListAsync(ct);
+
+    public async Task<IReadOnlyList<PostBump>> ListOpenByAccountAsync(Guid accountId, CancellationToken ct = default) =>
+        await db.PostBumps.Where(x => x.AccountId == accountId && (x.Status == BumpStatus.Queued || x.Status == BumpStatus.Posting)).ToListAsync(ct);
+
+    public async Task<DateTimeOffset?> LastDoneAtAsync(Guid accountId, CancellationToken ct = default) =>
+        await db.PostBumps.Where(x => x.AccountId == accountId && x.Status == BumpStatus.Done).MaxAsync(x => (DateTimeOffset?)x.DoneAt, ct);
+
+    public Task<int> CountQueuedAsync(Guid workspaceId, CancellationToken ct = default) =>
+        db.PostBumps.CountAsync(x => x.WorkspaceId == workspaceId && x.Status == BumpStatus.Queued, ct);
+
+    public async Task<IReadOnlyList<PostBump>> ListQueuedByScheduleAsync(Guid scheduleId, CancellationToken ct = default) =>
+        await db.PostBumps.Where(x => x.ScheduleId == scheduleId && x.Status == BumpStatus.Queued).ToListAsync(ct);
+}
+
 public sealed class MediaRepository(AppDbContext db) : IMediaRepository
 {
     // The list never loads file bytes.
@@ -405,6 +450,12 @@ public sealed class MediaRepository(AppDbContext db) : IMediaRepository
 
     public Task<MediaFile?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
         db.Media.AsNoTracking().FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
+    {
+        var ids = workspaceIds.ToList();
+        return db.Media.CountAsync(x => ids.Contains(x.WorkspaceId), ct);
+    }
 
     public Task<int> CountExistingAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
     {
@@ -483,6 +534,9 @@ public sealed class DeviceRepository(AppDbContext db) : IDeviceRepository
 
     public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
         db.Devices.CountAsync(x => x.WorkspaceId == workspaceId, ct);
+
+    public async Task<IReadOnlyList<string>> ListNamesAsync(Guid workspaceId, Guid? exceptId = null, CancellationToken ct = default) =>
+        await db.Devices.Where(x => x.WorkspaceId == workspaceId && x.Id != exceptId).Select(x => x.Name).ToListAsync(ct);
 
     public async Task<IReadOnlyList<Device>> ListByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
     {
@@ -678,6 +732,13 @@ public sealed class PromoRepository(AppDbContext db) : IPromoRepository
     public void Add(Promo promo) => db.Promos.Add(promo);
 }
 
+public sealed class PaymentOverrideRepository(AppDbContext db) : IPaymentOverrideRepository
+{
+    public Task<PaymentOverride?> GetAsync(CancellationToken ct = default) => db.PaymentOverrides.FirstOrDefaultAsync(ct);
+
+    public void Add(PaymentOverride setting) => db.PaymentOverrides.Add(setting);
+}
+
 public sealed class DeviceEventRepository(AppDbContext db) : IDeviceEventRepository
 {
     public async Task<IReadOnlyList<DeviceEvent>> ListAfterAsync(Guid workspaceId, long afterSeq, int take, CancellationToken ct = default) =>
@@ -762,6 +823,12 @@ public sealed class CollectionPostRepository(AppDbContext db) : ICollectionPostR
     public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
         db.CollectionPosts.CountAsync(x => x.WorkspaceId == workspaceId, ct);
 
+    public Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
+    {
+        var ids = workspaceIds.ToList();
+        return db.CollectionPosts.CountAsync(x => ids.Contains(x.WorkspaceId), ct);
+    }
+
     public void Add(CollectionPost post) => db.CollectionPosts.Add(post);
 
     public void AddRange(IEnumerable<CollectionPost> posts) => db.CollectionPosts.AddRange(posts);
@@ -815,6 +882,12 @@ public sealed class SetLinkRepository(AppDbContext db) : ISetLinkRepository
 
     public Task<int> CountBySetAsync(Guid linkSetId, CancellationToken ct = default) =>
         db.SetLinks.CountAsync(x => x.LinkSetId == linkSetId, ct);
+
+    public Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
+    {
+        var ids = workspaceIds.ToList();
+        return db.SetLinks.CountAsync(x => ids.Contains(x.WorkspaceId), ct);
+    }
 
     public async Task<int> MaxSortOrderAsync(Guid linkSetId, CancellationToken ct = default) =>
         await db.SetLinks.Where(x => x.LinkSetId == linkSetId).MaxAsync(x => (int?)x.SortOrder, ct) ?? -1;

@@ -2,14 +2,13 @@ namespace SIRIAUTOPOST.Domain.Enums;
 
 // Serialized as snake_case strings (fb, pending_approval, ...), the same keys the web app uses.
 
+/// <summary>
+/// Where a post goes. Facebook (groups and pages) is the only platform for now; the other networks come in a later
+/// phase. The value stays so the API keeps saying <c>fb</c> and a second platform can be added without a contract change.
+/// </summary>
 public enum Platform
 {
     Fb,
-    X,
-    Ig,
-    Tt,
-    Line,
-    Th,
 }
 
 public enum PostStatus
@@ -125,6 +124,23 @@ public enum AuditAction
     PromoCreated,
     PromoToggled,
     Impersonated,
+    /// <summary>The admin changed the test amount that replaces the plan price for the listed customers.</summary>
+    PaymentOverrideChanged,
+    /// <summary>A customer's Checkout or plan change was charged the test amount instead of the plan price.</summary>
+    PaymentOverrideUsed,
+}
+
+/// <summary>Where a bump (a comment that brings an old post back to the top) is.</summary>
+public enum BumpStatus
+{
+    /// <summary>Waiting for its time and for the browser.</summary>
+    Queued,
+    /// <summary>The browser took it and is commenting now.</summary>
+    Posting,
+    Done,
+    Failed,
+    /// <summary>Left out: too late, or the post or the browser is gone.</summary>
+    Skipped,
 }
 
 /// <summary>Where a <c>DeviceCommand</c> from the web app is.</summary>

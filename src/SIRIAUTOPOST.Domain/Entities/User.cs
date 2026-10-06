@@ -108,6 +108,35 @@ public class User : Entity
     {
         if (HasSubscription) throw new DomainException("ยกเลิกการสมัครสมาชิกก่อนจึงจะย้ายไปแผน Free ได้");
         Plan = PlanKey.Free;
+        PlanRenewsAt = null;
+    }
+
+    /// <summary>
+    /// A paid plan that is not a subscription: bought for one period up front (PromptPay), so it has an end date
+    /// and nothing renews it. A plan the admin granted has no end date.
+    /// </summary>
+    public bool IsPrepaid => !HasSubscription && Plan != PlanKey.Free && PlanRenewsAt is not null;
+
+    /// <summary>The prepaid period has run out: the customer is due to go back to Free.</summary>
+    public bool PrepaidEnded(DateTimeOffset now) => IsPrepaid && PlanRenewsAt <= now;
+
+    /// <summary>One payment for one period came in: the plan runs until <paramref name="until"/>, and nothing renews it.</summary>
+    public void ApplyPrepaid(PlanKey plan, BillingCycle cycle, DateTimeOffset until)
+    {
+        if (HasSubscription) throw new DomainException("ลูกค้านี้มีการสมัครสมาชิกอยู่แล้ว ใช้การเปลี่ยนแผนแทน");
+        Plan = plan;
+        Cycle = cycle;
+        PlanRenewsAt = until;
+        CancelAtPeriodEnd = false;
+        if (!IsBlocked && Status is CustomerStatus.Trial or CustomerStatus.PastDue) Status = CustomerStatus.Active;
+    }
+
+    /// <summary>The prepaid period is over: back to Free.</summary>
+    public void EndPrepaid()
+    {
+        if (HasSubscription) return;
+        Plan = PlanKey.Free;
+        PlanRenewsAt = null;
     }
 
     /// <summary>
@@ -118,6 +147,7 @@ public class User : Entity
     {
         if (HasSubscription) throw new DomainException("ลูกค้านี้จ่ายผ่าน Stripe อยู่ ให้ลูกค้าเปลี่ยนแผนเอง หรือยกเลิกการสมัครก่อน");
         Plan = plan;
+        PlanRenewsAt = null; // a granted plan has no end date (a prepaid one had)
         Limits = new LimitOverrides();
     }
 
@@ -136,20 +166,28 @@ public class User : Entity
 
     public void SetLimits(LimitOverrides limits)
     {
-        if (new[] { limits.Accounts, limits.Posts, limits.Devices, limits.Seats }.Any(v => v is < 0))
+        if (new[] { limits.Accounts, limits.Posts, limits.Devices, limits.Seats, limits.Groups, limits.Images, limits.LibraryPosts }.Any(v => v is < 0))
             throw new DomainException("ขีดจำกัดต้องไม่ติดลบ");
         Limits = limits;
     }
 
-    /// <summary>Advanced anti-ban needs Pro or above.</summary>
-    public bool HasAdvancedAntiBan => Plan is PlanKey.Pro or PlanKey.Agency;
+    // The features of a package are in PlanFeatures (Pro and above, bump and client reports only on the top plan).
 
-    /// <summary>Telegram and LINE notifications need Pro or above.</summary>
-    public bool HasNotifications => Plan is PlanKey.Pro or PlanKey.Agency;
+    /// <summary>Advanced anti-ban needs Pro or above.</summary>
+    public bool HasAdvancedAntiBan => PlanFeatures.Has(Plan, PlanFeatures.AdvancedAntiBan);
+
+    /// <summary>Telegram notifications need Pro or above.</summary>
+    public bool HasNotifications => PlanFeatures.Has(Plan, PlanFeatures.Notifications);
 
     /// <summary>Auto-reply rules need Pro or above.</summary>
-    public bool HasAutoReply => Plan is PlanKey.Pro or PlanKey.Agency;
+    public bool HasAutoReply => PlanFeatures.Has(Plan, PlanFeatures.AutoReply);
 
-    /// <summary>Shareable client reports are an Agency feature.</summary>
-    public bool HasClientReports => Plan is PlanKey.Agency;
+    /// <summary>Shareable client reports are a top-plan (Agency, shown as Premium) feature.</summary>
+    public bool HasClientReports => PlanFeatures.Has(Plan, PlanFeatures.ClientReports);
+
+    /// <summary>AI post drafts need Pro or above (and an AI key on the server).</summary>
+    public bool HasAi => PlanFeatures.Has(Plan, PlanFeatures.Ai);
+
+    /// <summary>Bumping posts (commenting on them again later) is a top-plan feature.</summary>
+    public bool HasBump => PlanFeatures.Has(Plan, PlanFeatures.Bump);
 }

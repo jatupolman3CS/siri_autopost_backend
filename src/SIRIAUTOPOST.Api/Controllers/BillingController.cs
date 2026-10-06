@@ -54,6 +54,36 @@ public sealed class BillingController : ControllerBase
         ConfirmCheckoutRequest request, [FromServices] ICommandHandler<ConfirmCheckoutCommand, UserDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new ConfirmCheckoutCommand(request.SessionId), ct);
 
+    /// <summary>The publishable key the in-app payment window starts Stripe.js with (null key: use Stripe's own page).</summary>
+    [HttpGet("billing/payment-config")]
+    public Task<PaymentConfigDto> PaymentConfig(
+        [FromServices] IQueryHandler<GetPaymentConfigQuery, PaymentConfigDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new GetPaymentConfigQuery(), ct);
+
+    /// <param name="Method">The row picked in the payment window; promptpay pays one period up front, the others a subscription.</param>
+    /// <param name="PromoCode">Takes its discount off this first payment.</param>
+    public sealed record StartPaymentRequest(PlanKey Plan, BillingCycle? Cycle, string? PromoCode, PaymentMethodKind Method);
+
+    /// <summary>
+    /// Starts paying for a plan in the in-app window: answers with the Stripe PaymentIntent's client secret, which the
+    /// browser confirms with Stripe.js. Nothing changes until Stripe says the payment went through.
+    /// </summary>
+    [HttpPost("billing/payments")]
+    [ProducesResponseType<PaymentIntentDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
+    public Task<PaymentIntentDto> StartPayment(
+        StartPaymentRequest request, [FromServices] ICommandHandler<StartPaymentCommand, PaymentIntentDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new StartPaymentCommand(request.Plan, request.Cycle, request.PromoCode, request.Method), ct);
+
+    /// <summary>
+    /// Stripe.js finished, or the window asks again while a PromptPay payment is pending: reads the PaymentIntent from
+    /// Stripe, applies it (the webhook does the same) and answers pending, succeeded or failed with the customer's new plan.
+    /// </summary>
+    [HttpPost("billing/payments/{id}/confirm")]
+    public Task<PaymentStatusDto> ConfirmPayment(
+        string id, [FromServices] ICommandHandler<ConfirmPaymentCommand, PaymentStatusDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new ConfirmPaymentCommand(id), ct);
+
     /// <summary>The Stripe Billing Portal address: update the card, see invoices, cancel.</summary>
     [HttpPost("billing/portal")]
     public Task<UrlDto> Portal([FromServices] ICommandHandler<CreatePortalSessionCommand, UrlDto> handler, CancellationToken ct) =>

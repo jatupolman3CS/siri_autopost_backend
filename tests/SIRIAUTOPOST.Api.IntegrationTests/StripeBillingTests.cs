@@ -59,18 +59,18 @@ public class StripeBillingTests(ApiFactory factory)
         var admin = await factory.AdminAsync();
         var (client, auth, ws) = await factory.SignUpAsync();
 
-        // A new workspace is full of sample accounts and posts: none of them is usage.
+        // A new workspace is empty: nothing is usage yet.
         var billing = await BillingAsync(client);
-        Assert.Equal(new LimitsDto(1, 10, 1, 1), billing.Limits);
-        Assert.Equal(new UsageDto(0, 0, 0), billing.Usage);
+        Assert.Equal(new LimitsDto(1, 10, 1, 1, 10, 20, 20), billing.Limits);
+        Assert.Equal(new UsageDto(0, 0, 0, 0, 0, 0), billing.Usage);
 
         // The platform admin's per-customer override is what the customer sees, and a paired device counts.
         await admin.PutAsJsonAsync($"/api/admin/customers/{auth.User.Id}/limits", new { devices = 3, posts = 0 }, Json);
         var code = (await (await client.PostAsync($"/api/workspaces/{ws}/devices/pairing", null)).Content.ReadFromJsonAsync<PairingCodeDto>(Json))!.Code;
         (await factory.CreateClient().PostAsJsonAsync("/api/device/pair", new { code, name = "PC" })).EnsureSuccessStatusCode();
         billing = await BillingAsync(client);
-        Assert.Equal(new LimitsDto(1, null, 3, 1), billing.Limits); // posts 0 = unlimited
-        Assert.Equal(new UsageDto(1, 0, 1), billing.Usage);
+        Assert.Equal(new LimitsDto(1, null, 3, 1, 10, 20, 20), billing.Limits); // posts 0 = unlimited
+        Assert.Equal(new UsageDto(1, 0, 1, 0, 0, 0), billing.Usage);
     }
 
     [Fact]
@@ -126,7 +126,7 @@ public class StripeBillingTests(ApiFactory factory)
         var up = await ChoosePlanAsync(client, new { plan = "agency", cycle = "year" });
         Assert.Null(up.CheckoutUrl);
         Assert.Equal((PlanKey.Agency, BillingCycle.Year), (up.User.Plan, up.User.Cycle));
-        Assert.Contains(factory.Payments.Changes, c => c == (sub, PlanKey.Agency, BillingCycle.Year, 1990));
+        Assert.Contains(factory.Payments.Changes, c => c == (sub, PlanKey.Agency, BillingCycle.Year, 1990, null));
 
         var bad = await client.PutAsJsonAsync("/api/billing/plan", new { plan = "pro", promoCode = "ANY" }, Json); // a code is for the first invoice only
         Assert.Equal(HttpStatusCode.UnprocessableEntity, bad.StatusCode);

@@ -25,7 +25,8 @@ public sealed record BackupLinkSetDto(string Name, Guid? PostAsAccountId, IReadO
 public sealed record BackupScheduleDto(
     string Name, string Collection, string LinkSet, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
-    IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, PostRepeat Repeat = PostRepeat.Recent);
+    IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, PostRepeat Repeat = PostRepeat.Recent,
+    BumpPlanDto? Bump = null);
 
 /// <param name="Url">The group's address inside its set.</param>
 public sealed record BackupGroupNotifyRuleDto(string Url, NotifyChannel Channel, NotifyEventsDto? Events);

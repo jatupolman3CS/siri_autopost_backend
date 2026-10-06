@@ -149,7 +149,7 @@ public class WorkflowFoundationTests(ApiFactory factory)
         (await client.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", new
         {
             content = "จากตัวเขียนเดิม", startAt = DateTimeOffset.UtcNow.AddHours(2), repeat = "none",
-            targets = new[] { new { accountId = accounts.First(a => a.Platform == Platform.Ig).Id } },
+            targets = new[] { new { accountId = (await factory.SeedAccountAsync(ws)).Id } },
         }, Json)).EnsureSuccessStatusCode();
         var legacy = (await client.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{ws}/posts?from={from}&to={to}", Json))!.Single(p => p.Content == "จากตัวเขียนเดิม");
         Assert.Equal((false, null, null, null), (legacy.IsTest, (Guid?)legacy.ScheduleId, (Guid?)legacy.LinkId, legacy.Code));

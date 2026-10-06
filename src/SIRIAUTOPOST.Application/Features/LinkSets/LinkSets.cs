@@ -162,8 +162,8 @@ public sealed class DeleteLinkSetCommandHandler(
 public sealed record AddLinkCommand(Guid WorkspaceId, Guid LinkSetId, string? Name, string? Url, string? Code, int? DailyMax) : ICommand<SetLinkDto>;
 
 public sealed class AddLinkCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, ICurrentUser current,
-    IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, PlanQuotas quotas,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AddLinkCommand, SetLinkDto>
 {
     public async Task<SetLinkDto> HandleAsync(AddLinkCommand c, CancellationToken ct = default)
@@ -172,6 +172,7 @@ public sealed class AddLinkCommandHandler(
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var existing = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
         LinkSetLookups.EnsureRoomForLinks(existing.Count, 1);
+        await quotas.EnsureGroupsAsync(c.WorkspaceId, 1, ct);
         var link = SetLink.Create(c.WorkspaceId, set.Id, c.Name, c.Url, c.Code, c.DailyMax ?? 0, clock.GetUtcNow(),
             existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1);
         links.Add(link);
@@ -262,7 +263,7 @@ public sealed record BulkAddLinksCommand(Guid WorkspaceId, Guid LinkSetId, strin
 
 public sealed class BulkAddLinksCommandHandler(
     IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IScheduleRepository schedules, ScheduleSync sync,
-    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    PlanQuotas quotas, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<BulkAddLinksCommand, BulkLinksResultDto>
 {
     public async Task<BulkLinksResultDto> HandleAsync(BulkAddLinksCommand c, CancellationToken ct = default)
@@ -303,6 +304,7 @@ public sealed class BulkAddLinksCommandHandler(
             added++;
         }
         LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
+        await quotas.EnsureGroupsAsync(c.WorkspaceId, created.Count, ct);
         links.AddRange(created);
         // A link with a new code posts differently from now on; new links are posted to at the next top-up.
         if (recodedLinks.Count > 0) await sync.LinksChangedAsync(c.WorkspaceId, set.Id, recodedLinks, now, ct);
@@ -331,7 +333,7 @@ public sealed record ImportAccountGroupsCommand(Guid WorkspaceId, Guid LinkSetId
 
 public sealed class ImportAccountGroupsCommandHandler(
     IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, IAccountRepository accounts,
-    IScheduleRepository schedules, ScheduleSync sync, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IScheduleRepository schedules, ScheduleSync sync, PlanQuotas quotas, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ImportAccountGroupsCommand, LinkSetDto>
 {
     public async Task<LinkSetDto> HandleAsync(ImportAccountGroupsCommand c, CancellationToken ct = default)
@@ -356,6 +358,7 @@ public sealed class ImportAccountGroupsCommandHandler(
             created.Add(SetLink.Create(c.WorkspaceId, set.Id, name, pick, null, 0, now, order++));
         }
         LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
+        await quotas.EnsureGroupsAsync(c.WorkspaceId, created.Count, ct);
         links.AddRange(created);
         if (created.Count > 0) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
         await uow.SaveChangesAsync(ct);
@@ -367,8 +370,8 @@ public sealed class ImportAccountGroupsCommandHandler(
 public sealed record ImportLinksCsvCommand(Guid WorkspaceId, IReadOnlyList<CsvLinkRow> Rows) : ICommand<CsvImportResultDto>;
 
 public sealed class ImportLinksCsvCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, ICurrentUser current,
-    IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, ISetLinkRepository links, ScheduleSync sync, PlanQuotas quotas,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<ImportLinksCsvCommand, CsvImportResultDto>
 {
     public const int MaxRows = 5000;
@@ -415,6 +418,7 @@ public sealed class ImportLinksCsvCommandHandler(
             throw new DomainException($"สร้างชุดลิงก์ได้ไม่เกิน {LinkSet.MaxPerWorkspace} ชุดต่อเวิร์กสเปซ");
         foreach (var g in newLinks.GroupBy(l => l.LinkSetId))
             LinkSetLookups.EnsureRoomForLinks(urlsOf[g.Key].Count - g.Count(), g.Count());
+        await quotas.EnsureGroupsAsync(c.WorkspaceId, newLinks.Count, ct);
         links.AddRange(newLinks);
         foreach (var setId in newLinks.Select(l => l.LinkSetId).Distinct()) await sync.LinksAddedAsync(c.WorkspaceId, setId, ct);
         await uow.SaveChangesAsync(ct);

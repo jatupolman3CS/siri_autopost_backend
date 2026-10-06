@@ -92,7 +92,7 @@ internal sealed class SchedulingWorld
     /// <summary>An account of the workspace that is not connected to a browser, like the demo accounts.</summary>
     public SocialAccount AddOtherAccount()
     {
-        var account = SocialAccount.Create(Ws.Id, Platform.Ig, "@shop", "", "ฟีด");
+        var account = SocialAccount.Create(Ws.Id, Platform.Fb, "@shop", "", "ฟีด");
         Accounts.Add(account);
         Set.Update(Set.Name, Set.PostAsAccountId, [.. Set.AccountIds, account.Id]);
         return account;

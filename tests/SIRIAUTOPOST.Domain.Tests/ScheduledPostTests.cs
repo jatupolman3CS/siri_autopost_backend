@@ -42,7 +42,7 @@ public class ScheduledPostTests
     [Fact]
     public void An_account_member_has_no_link_url_or_code()
     {
-        var other = SocialAccount.Create(Ws, Platform.Ig, "@shop", "", "ฟีด");
+        var other = SocialAccount.Create(Ws, Platform.Fb, "@shop", "", "ฟีด");
         var p = Post.FromSchedule(Ws, other, other.DefaultTarget, "text", [], Now.AddHours(1), Now, Guid.NewGuid(), Guid.NewGuid(), null,
             Post.AccountTargetKey(other.Id), "2026-10-04T09:00", null, null);
 

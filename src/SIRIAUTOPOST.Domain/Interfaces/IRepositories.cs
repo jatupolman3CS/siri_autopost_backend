@@ -10,6 +10,8 @@ public interface IUserRepository
     Task<User?> GetByStripeCustomerAsync(string customerId, CancellationToken ct = default);
     Task<IReadOnlyList<User>> ListAsync(CancellationToken ct = default);
     Task<IReadOnlyList<User>> ListByIdsAsync(IEnumerable<Guid> ids, CancellationToken ct = default);
+    /// <summary>Customers whose prepaid plan (no subscription, an end date) ended at or before <paramref name="now"/>.</summary>
+    Task<IReadOnlyList<User>> ListPrepaidEndedAsync(DateTimeOffset now, CancellationToken ct = default);
     void Add(User user);
 }
 
@@ -74,6 +76,13 @@ public interface IPromoRepository
     Task<IReadOnlyList<Promo>> ListAsync(CancellationToken ct = default);
     Task<Promo?> GetByCodeAsync(string code, CancellationToken ct = default);
     void Add(Promo promo);
+}
+
+public interface IPaymentOverrideRepository
+{
+    /// <summary>The platform's single setting; null until an admin saves it the first time.</summary>
+    Task<PaymentOverride?> GetAsync(CancellationToken ct = default);
+    void Add(PaymentOverride setting);
 }
 
 public interface IAccountRepository
@@ -215,11 +224,34 @@ public sealed record PostOutcome(
 /// <summary>A library entry without its bytes.</summary>
 public sealed record MediaSummary(Guid Id, string Name, string ContentType, MediaKind Kind, long Size, int UsedCount, DateTimeOffset CreatedAt, Guid? FolderId, bool Active = true);
 
+public interface IPostBumpRepository
+{
+    void Add(PostBump bump);
+    void AddRange(IEnumerable<PostBump> bumps);
+    /// <summary>The bumps of a post that were made already (any state), by round: a re-reported result never makes them twice.</summary>
+    Task<IReadOnlyList<PostBump>> ListByPostAsync(Guid postId, CancellationToken ct = default);
+    Task<PostBump?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    /// <summary>The bumps this device took and has not reported yet (one at a time per device).</summary>
+    Task<IReadOnlyList<PostBump>> ListClaimedByAsync(Guid deviceId, CancellationToken ct = default);
+    /// <summary>Queued bumps of the account that are due, oldest first.</summary>
+    Task<IReadOnlyList<PostBump>> ListDueAsync(Guid accountId, DateTimeOffset now, CancellationToken ct = default);
+    /// <summary>Queued and claimed bumps of the account (its browser was unbound).</summary>
+    Task<IReadOnlyList<PostBump>> ListOpenByAccountAsync(Guid accountId, CancellationToken ct = default);
+    /// <summary>When the account last finished a bump, for the anti-ban gap.</summary>
+    Task<DateTimeOffset?> LastDoneAtAsync(Guid accountId, CancellationToken ct = default);
+    /// <summary>Bumps of the workspace that are still to come (queued).</summary>
+    Task<int> CountQueuedAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>The queued bumps of a schedule (it was paused or deleted).</summary>
+    Task<IReadOnlyList<PostBump>> ListQueuedByScheduleAsync(Guid scheduleId, CancellationToken ct = default);
+}
+
 public interface IMediaRepository
 {
     Task<IReadOnlyList<MediaSummary>> ListAsync(Guid workspaceId, CancellationToken ct = default);
     Task<MediaFile?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     Task<int> CountExistingAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    /// <summary>Files in the libraries of all the given workspaces (the plan's image limit).</summary>
+    Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     /// <summary>Counts one more use (a post scheduled with it) for each file.</summary>
     Task RecordUseAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     void Add(MediaFile file);
@@ -248,6 +280,8 @@ public interface IDeviceRepository
     Task<Device?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<Device?> GetByKeyHashAsync(string keyHash, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>The names of the workspace's devices, optionally leaving one out (the one being renamed).</summary>
+    Task<IReadOnlyList<string>> ListNamesAsync(Guid workspaceId, Guid? exceptId = null, CancellationToken ct = default);
     Task<IReadOnlyList<Device>> ListByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     void Add(Device device);
     void Remove(Device device);
@@ -351,6 +385,8 @@ public interface ICollectionPostRepository
     /// <summary>Every post of the workspace, tracked (library files are being taken out of them).</summary>
     Task<IReadOnlyList<CollectionPost>> ListForUpdateAsync(Guid workspaceId, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    /// <summary>Posts in the libraries of all the given workspaces (the plan's post-library limit).</summary>
+    Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     void Add(CollectionPost post);
     void AddRange(IEnumerable<CollectionPost> posts);
     void Remove(CollectionPost post);
@@ -379,6 +415,8 @@ public interface ISetLinkRepository
     Task<SetLink?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
     Task<IReadOnlyList<SetLink>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     Task<int> CountBySetAsync(Guid linkSetId, CancellationToken ct = default);
+    /// <summary>Links (groups and pages) of all the given workspaces (the plan's group limit).</summary>
+    Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
     Task<int> MaxSortOrderAsync(Guid linkSetId, CancellationToken ct = default);
     void Add(SetLink link);
     void AddRange(IEnumerable<SetLink> links);

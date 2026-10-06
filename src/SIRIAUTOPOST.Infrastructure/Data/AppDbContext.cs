@@ -13,6 +13,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<Workspace> Workspaces => Set<Workspace>();
     public DbSet<SocialAccount> Accounts => Set<SocialAccount>();
     public DbSet<Post> Posts => Set<Post>();
+    public DbSet<PostBump> PostBumps => Set<PostBump>();
     public DbSet<MediaFile> Media => Set<MediaFile>();
     public DbSet<MediaFolder> MediaFolders => Set<MediaFolder>();
     public DbSet<Snippet> Snippets => Set<Snippet>();
@@ -23,6 +24,8 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<PlanSetting> Plans => Set<PlanSetting>();
     public DbSet<Transaction> Transactions => Set<Transaction>();
     public DbSet<Promo> Promos => Set<Promo>();
+    public DbSet<PaymentOverride> PaymentOverrides => Set<PaymentOverride>();
+    public DbSet<PaymentAttempt> PaymentAttempts => Set<PaymentAttempt>();
     public DbSet<ProcessedPaymentEvent> PaymentEvents => Set<ProcessedPaymentEvent>();
     public DbSet<AuditEntry> Audit => Set<AuditEntry>();
     public DbSet<ExtensionConfig> ExtensionConfigs => Set<ExtensionConfig>();

@@ -49,6 +49,7 @@ public class Workspace : Entity
             settings.Shuffle = AntiBan.Shuffle;
             settings.AutoPause = AntiBan.AutoPause;
             settings.Warmup = AntiBan.Warmup;
+            settings.TypingSpeed = AntiBan.TypingSpeed;
             settings.Advanced = AntiBan.Advanced.Clone(); // a copy: the old settings object is being replaced
         }
         settings.Validate();

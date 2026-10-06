@@ -41,6 +41,29 @@ public class Device : Entity
         };
     }
 
+    /// <summary>Two names are the same device name when they match after trimming, whatever their case.</summary>
+    public static bool SameName(string? a, string? b) =>
+        string.Equals((a ?? "").Trim(), (b ?? "").Trim(), StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A name no other device of the workspace has: <paramref name="desired"/> itself, else "name (2)", "name (3)"...
+    /// (kept within <see cref="MaxNameLength"/>). Used when a browser pairs, where refusing would only block it.
+    /// </summary>
+    public static string UniqueName(string? desired, IEnumerable<string> taken)
+    {
+        var name = (desired ?? "").Trim();
+        if (name.Length == 0) name = "เครื่องไม่มีชื่อ";
+        if (name.Length > MaxNameLength) name = name[..MaxNameLength];
+        var used = taken.Select(n => n.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (!used.Contains(name)) return name;
+        for (var i = 2; ; i++)
+        {
+            var suffix = $" ({i})";
+            var candidate = (name.Length + suffix.Length > MaxNameLength ? name[..(MaxNameLength - suffix.Length)] : name) + suffix;
+            if (!used.Contains(candidate)) return candidate;
+        }
+    }
+
     public bool IsOnline(DateTimeOffset now) => LastSeenAt is { } seen && now - seen <= OnlineWindow;
 
     /// <summary>Records a call from the device. Returns true when it was offline until now.</summary>

@@ -9,6 +9,7 @@ publish/
 # Environment & Secrets
 .env
 .env.*
+.env_*
 !.env.example
 appsettings.*.local.json
 

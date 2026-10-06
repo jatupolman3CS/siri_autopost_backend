@@ -52,7 +52,7 @@ public sealed record CreateMasterPostCommand(
 
 public sealed class CreateMasterPostCommandHandler(
     IWorkspaceRepository workspaces, ICollectionRepository collections, ICollectionPostRepository posts, IMediaRepository media,
-    CollectionPostViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    CollectionPostViews views, PlanQuotas quotas, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreateMasterPostCommand, CollectionPostDto>
 {
     public async Task<CollectionPostDto> HandleAsync(CreateMasterPostCommand c, CancellationToken ct = default)
@@ -65,6 +65,7 @@ public sealed class CreateMasterPostCommandHandler(
         post.SetActive(c.Active, now);
         await CollectionLookups.EnsureMediaExistAsync(media, c.WorkspaceId, post.MediaIds, ct);
         await CollectionLookups.EnsureRoomForPostsAsync(posts, c.WorkspaceId, 1, ct);
+        await quotas.EnsureLibraryPostsAsync(c.WorkspaceId, 1, ct);
         posts.Add(post);
         posts.AddMembers(into.Select(x => CollectionMember.Create(c.WorkspaceId, x.Id, post.Id, now)));
         await uow.SaveChangesAsync(ct);

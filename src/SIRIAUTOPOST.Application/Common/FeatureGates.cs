@@ -12,6 +12,7 @@ public static class FeatureGates
 {
     public const string ProRequired = "ต้องใช้แผน Pro ขึ้นไป";
     public const string AgencyRequired = "ต้องใช้แผน Agency";
+    public const string PremiumRequired = "การดันโพสต์ต้องใช้แผน Premium (Agency)";
 
     public static async Task RequireNotificationsAsync(this IUserRepository users, Workspace ws, CancellationToken ct)
     {

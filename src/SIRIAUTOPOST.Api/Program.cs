@@ -35,6 +35,8 @@ static void LoadDotEnv()
 
                 if (key.Equals("STRIPE_SECRET_KEY", StringComparison.OrdinalIgnoreCase) && Environment.GetEnvironmentVariable("Stripe__SecretKey") is null)
                     Environment.SetEnvironmentVariable("Stripe__SecretKey", value);
+                else if (key.Equals("STRIPE_PUBLISHABLE_KEY", StringComparison.OrdinalIgnoreCase) && Environment.GetEnvironmentVariable("Stripe__PublishableKey") is null)
+                    Environment.SetEnvironmentVariable("Stripe__PublishableKey", value);
                 else if (key.Equals("STRIPE_WEBHOOK_SECRET", StringComparison.OrdinalIgnoreCase) && Environment.GetEnvironmentVariable("Stripe__WebhookSecret") is null)
                     Environment.SetEnvironmentVariable("Stripe__WebhookSecret", value);
                 else if (key.Equals("STRIPE_RETURN_BASE_URL", StringComparison.OrdinalIgnoreCase) && Environment.GetEnvironmentVariable("Stripe__ReturnBaseUrl") is null)

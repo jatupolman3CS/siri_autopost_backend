@@ -98,13 +98,16 @@ public sealed record CollectionPostInput(string Text, IReadOnlyList<Guid>? Media
 
 // ---------- link sets ----------
 
-/// <param name="Valid">A real Facebook group address (links that are not valid are never posted to).</param>
+/// <param name="Valid">A real Facebook group or page address (links that are not valid are never posted to).</param>
 /// <param name="Duplicate">Another link of the same set has the same address (the later one is flagged).</param>
+/// <param name="Kind">"group" or "page" (from the address; "group" while the address is not valid).</param>
 public sealed record SetLinkDto(
-    Guid Id, string Name, string Url, string Code, int DailyMax, bool Enabled, LinkHealth Health, int FailStreak, bool Valid, bool Duplicate)
+    Guid Id, string Name, string Url, string Code, int DailyMax, bool Enabled, LinkHealth Health, int FailStreak, bool Valid, bool Duplicate,
+    string Kind = "group")
 {
     public static SetLinkDto From(SetLink l, bool duplicate) =>
-        new(l.Id, l.Name, l.Url, l.Code, l.DailyMax, l.Enabled, l.Health, l.FailStreak, l.IsValid, duplicate);
+        new(l.Id, l.Name, l.Url, l.Code, l.DailyMax, l.Enabled, l.Health, l.FailStreak, l.IsValid, duplicate,
+            FacebookGroupUrl.KindOf(l.Url) == FacebookTargetKind.Page ? "page" : "group");
 }
 
 /// <param name="PostAsAccountId">The Facebook account whose browser posts the links; null = the first connected one.</param>
@@ -141,7 +144,19 @@ public sealed record ScheduleDto(
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, IReadOnlyList<string> Slots,
     int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false,
-    PostRepeat Repeat = PostRepeat.Recent);
+    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null);
+
+/// <summary>What a bump says and how often (see <see cref="BumpPlan"/>); only used while the schedule's bump hours are not 0.</summary>
+/// <param name="Rounds">Times a post is bumped, each the schedule's bump hours after the last (1-3).</param>
+/// <param name="Text">The comment, spintax allowed; blank = a short default.</param>
+/// <param name="MediaIds">Library images to take the bump's images from.</param>
+/// <param name="ImagesEach">Images in each bump, drawn from <paramref name="MediaIds"/> (0-5).</param>
+public sealed record BumpPlanDto(int Rounds, string Text, IReadOnlyList<Guid> MediaIds, int ImagesEach)
+{
+    public static BumpPlanDto From(BumpPlan b) => new(b.Rounds, b.Text, b.MediaIds, b.ImagesEach);
+
+    public BumpPlan ToPlan() => new() { Rounds = Rounds, Text = Text ?? "", MediaIds = (MediaIds ?? []).ToList(), ImagesEach = ImagesEach };
+}
 
 /// <param name="StartDate">"yyyy-MM-dd" in the schedule's local calendar; empty = today.</param>
 /// <param name="Overrides">Own times per link (its id, 32 hex digits) or "account:&lt;id&gt;"; empty list = follow the schedule.</param>
@@ -158,7 +173,7 @@ public sealed record SaveScheduleRequest(
     string? Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string>? Times, int EveryHours, string? FirstTime,
     string? StartDate, string? OnceTime, PostOrder Order, string? DripFrom, string? DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false,
-    PostRepeat Repeat = PostRepeat.Recent);
+    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null);
 
 public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateTimeOffset? FirstAt, DateTimeOffset? LastAt);
 

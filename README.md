@@ -59,7 +59,10 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 - Connection string ตอนพัฒนาอยู่ที่ `src/SIRIAUTOPOST.Api/appsettings.Development.json` (`localhost:5432` ฐาน `siriautopost`) ระบบรัน migration ให้เองตอนเริ่มใน Development
 - **บัญชีผู้ดูแล:** ตอนเริ่มระบบจะสร้างผู้ดูแลแพลตฟอร์มจาก `Admin:Email`/`Admin:Password` (ใน Development คือ `admin@autopost.local` / `admin1234`) ถ้าไม่ตั้งค่าไว้จะไม่สร้าง
 - **JWT:** ตั้ง `Jwt:Key` (อย่างน้อย 32 ตัวอักษร) ทุก environment นอก Development ไม่อย่างนั้นระบบจะไม่ยอมเริ่ม เช่น `Jwt__Key=...`
-- เวิร์กสเปซใหม่ทุกอันจะมี **ข้อมูลตัวอย่าง** จากดีไซน์: บัญชีโซเชียล 7 บัญชี (เพจ Facebook พร้อม 20 กลุ่ม), ข้อความสำเร็จรูป 4 อัน, ประวัติโพสต์ 1 สัปดาห์ คิวโพสต์ล่วงหน้า 1 สัปดาห์ และรายงานข้อผิดพลาด 5 รายการ (บัญชีตัวอย่างไม่มีเครื่องผูกอยู่ โพสต์ของบัญชีเหล่านี้จึงไม่ถูกส่งจริง บัญชีจริงได้มาจากการจับคู่ส่วนขยาย)
+- เวิร์กสเปซใหม่เริ่มต้น **ว่าง** ไม่มีบัญชีหรือข้อความตัวอย่าง (เดิมมีบัญชีโซเชียล 7 บัญชีจากดีไซน์ ซึ่งเป็นข้อมูลปลอม ถูกตัดออกแล้ว) ระบบรองรับ **กลุ่มและเพจ Facebook** เท่านั้นในตอนนี้ แพลตฟอร์มอื่น (Instagram, X, TikTok, LINE, Threads) จะทำใน phase ถัดไป บัญชีจริงได้มาจากการจับคู่ส่วนขยายแต่ละเครื่อง (ชื่อส่วนขยายในเวิร์กสเปซเดียวกันห้ามซ้ำ)
+- **แพ็กเกจ**: นอกจากจำนวนบัญชี โพสต์ต่อวัน อุปกรณ์ และที่นั่งแล้ว แต่ละแพ็กเกจจำกัดจำนวน **กลุ่ม/เพจ คลังรูป และคลังโพสต์** และกำหนดฟังก์ชันที่ใช้ได้: Pro = anti-ban ขั้นสูง แจ้งเตือน ตอบกลับอัตโนมัติ **AI ร่างโพสต์**; Premium (key `agency`) = ทั้งหมด + **ดันโพสต์** + รายงานลูกค้า (ดู CLAUDE.md หัวข้อ Packages)
+- **AI ร่างโพสต์** ใช้คีย์ของแพลตฟอร์ม (`Ai__ApiKey`) ยังไม่ใส่คีย์ ปุ่ม AI ในหน้าเขียนโพสต์จะถูกปิดและบอกเหตุผล
+- **ดันโพสต์** (Premium): หลังโพสต์ลงกลุ่มไปแล้ว N ชั่วโมง ส่วนขยายจะเปิดลิงก์โพสต์นั้นแล้วคอมเมนต์ (ข้อความ/รูปจากคลัง ตามที่ตั้งในตารางโพสต์) เพื่อดันโพสต์ขึ้นมา
 - Integration test ใช้ฐาน `siriautopost_test` (ลบแล้วสร้างใหม่ทุกครั้ง) เปลี่ยนได้ด้วย environment variable `SIRIAUTOPOST_TEST_DB`
 - เพิ่ม migration: `dotnet ef migrations add <ชื่อ> -p src/SIRIAUTOPOST.Infrastructure -s src/SIRIAUTOPOST.Api -o Data/Migrations`
 - เพิ่มฟีเจอร์ใหม่: Entity ใน Domain → Command/Query + Handler ใน `Application/Features/<ฟีเจอร์>/<ฟีเจอร์>.cs` → ลงทะเบียนใน `Application/DependencyInjection.cs` → Repository + Configuration ใน Infrastructure → Controller ใน Api
@@ -100,12 +103,14 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 | คีย์ | |
 |---|---|
 | `Stripe__SecretKey` | secret key (`sk_test_...` / `sk_live_...`) ว่าง = ปิดการชำระเงิน: แผนเสียเงินซื้อไม่ได้ และหน้าเว็บบอกอย่างนั้น |
+| `Stripe__PublishableKey` | publishable key (`pk_test_...` / `pk_live_...`) ของบัญชีเดียวกัน ใช้เริ่ม Stripe.js ในหน้าต่างชำระเงินของแอป ว่าง = พาลูกค้าไปหน้า Stripe Checkout แทน |
+| `Stripe__SubscriptionPaymentMethods` | ชนิดการชำระเงินของ subscription ที่จ่ายในหน้าต่างของแอป ค่าเริ่มต้น `card,link` (Apple Pay / Google Pay เป็น wallet ของบัตร) ถ้าบัญชีใช้ Link ไม่ได้ให้เอา `link` ออก |
 | `Stripe__WebhookSecret` | signing secret (`whsec_...`) ของ webhook endpoint `<โดเมน>/api/webhooks/stripe` |
 | `Stripe__ReturnBaseUrl` | ที่อยู่หน้าเว็บที่ Stripe พาลูกค้ากลับ ว่าง = ใช้ origin ของเบราว์เซอร์ที่เรียก (ถูกต้องเมื่อหน้าเว็บกับ API อยู่ไซต์เดียวกัน) |
 | `Stripe__Currency` | สกุลเงิน (ค่าเริ่มต้น `thb`; ราคาแผนเป็นบาทเต็มหน่วย) |
 | `Stripe__PortalConfigurationId` | ไม่บังคับ: ใช้ Billing Portal configuration ที่ระบุแทนค่าเริ่มต้นของบัญชี |
 
-Webhook ต้องรับ event: `checkout.session.completed`, `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`, `refund.created|updated` ทดสอบในเครื่องด้วย `stripe listen --forward-to localhost:5100/api/webhooks/stripe`
+Webhook ต้องรับ event: `checkout.session.completed`, `customer.subscription.created|updated|deleted`, `invoice.paid`, `invoice.payment_failed`, `refund.created|updated` และสำหรับหน้าต่างชำระเงินในแอป `payment_intent.succeeded|payment_failed|processing|canceled` ทดสอบในเครื่องด้วย `stripe listen --forward-to localhost:5100/api/webhooks/stripe`
 
 วิธีทำงาน:
 - **ซื้อแผน:** `PUT /api/billing/plan` สร้าง Checkout Session (ราคาส่งแบบ inline, สินค้า `autopost_<แผน>` ต่อแผน, โค้ดส่วนลดเป็น coupon ลดครั้งเดียวของใบแจ้งหนี้แรก, รายปีลด 20%) แล้วตอบ `checkoutUrl` หน้าเว็บพาไปจ่าย
@@ -113,6 +118,8 @@ Webhook ต้องรับ event: `checkout.session.completed`, `customer.sub
 - **สถานะจาก Stripe:** `invoice.paid` → ใช้งานปกติ + บันทึก `TRANSACTIONS` (พร้อม `receiptUrl`), `invoice.payment_failed` → `past_due`, `customer.subscription.deleted` → กลับแผน Free ระบบอ่านสถานะจริงจาก Stripe ใหม่ทุกครั้ง จึงไม่เพี้ยนแม้ event มาสลับลำดับ และกันซ้ำด้วยตาราง `PAYMENT_EVENTS`
 - **แอดมิน:** คืนเงินผ่าน Stripe (`POST /api/admin/transactions/{id}/refund`), ลองเก็บเงินใบแจ้งหนี้ที่ค้างใหม่ (`.../retry`), ลูกค้าที่ถูกระงับ/แบนจะถูก `pause_collection` (Stripe ไม่ตัดเงินระหว่างนั้น และกลับมาตัดเมื่อคืนสถานะ ถ้าติดต่อ Stripe ไม่ได้สถานะจะไม่เปลี่ยน) ตั้งแผนให้ลูกค้าเองได้เฉพาะรายที่ไม่มีการสมัครอยู่ใน Stripe
 - ลูกค้าที่สมัครแผนเสียเงินก่อนมี Stripe (สถานะ `trial` เดิม) ไม่ถูกแตะ แอดมินปรับสถานะหรือแผนให้ได้
+
+- **หน้าต่างชำระเงินในแอป (5 ช่องทาง):** บัตร, Apple Pay, Google Pay, Link, PromptPay ที่หน้า `/app/billing` (`POST /api/billing/payments` → Stripe.js ยืนยัน → `POST /api/billing/payments/{id}/confirm` + webhook `payment_intent.*`) บัตร/Apple Pay/Google Pay/Link จ่าย subscription ที่ต่ออายุอัตโนมัติ ส่วน PromptPay Stripe ตัดซ้ำเองไม่ได้ จึงจ่ายล่วงหน้า 1 เดือน/1 ปีแล้วแผนหมดอายุเอง อธิบายเต็มใน [`docs/payment-checkout.md`](docs/payment-checkout.md)
 
 **หมายเหตุ:** โค้ดนี้ทดสอบกับ gateway จำลองและ event ตัวอย่างที่เซ็นลายเซ็นจริงเท่านั้น (ดู `tests/SIRIAUTOPOST.Api.IntegrationTests/Payments`) ยังไม่เคยรันกับ Stripe จริง ลองด้วย test key และ webhook ทดสอบก่อนใส่ live key
 

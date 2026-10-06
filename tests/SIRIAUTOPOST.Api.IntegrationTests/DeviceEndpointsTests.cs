@@ -422,7 +422,7 @@ public class DeviceEndpointsTests(ApiFactory factory)
         form.Add(bytes, "file", "a.jpg");
         var media = (await (await owner.PostAsync($"/api/workspaces/{ws}/media", form)).Content.ReadFromJsonAsync<MediaDto>(Json))!;
         var accounts = (await owner.GetFromJsonAsync<List<AccountDto>>($"/api/workspaces/{ws}/accounts", Json))!;
-        var ig = accounts.First(a => a.Platform == Platform.Ig).Id;
+        var ig = (await factory.SeedAccountAsync(ws)).Id;
         (await owner.PostAsJsonAsync($"/api/workspaces/{ws}/posts/schedule", new
         {
             content = "สามวัน", mediaIds = new[] { media.Id }, startAt = DateTimeOffset.UtcNow.AddDays(1), useDelay = false, repeat = "daily",
@@ -434,6 +434,6 @@ public class DeviceEndpointsTests(ApiFactory factory)
         // The member's own plan is Free, the workspace's owner is on Agency: the workspace says what applies there.
         var mine = (await member.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", Json))!.Single(w => w.Id == ws);
         Assert.Equal((WorkspaceRole.Admin, true), (mine.Role, mine.AdvancedAntiBan));
-        Assert.Equal(new LimitsDto(null, null, null, 10), mine.Limits);
+        Assert.Equal(new LimitsDto(null, null, null, 10, null, null, null), mine.Limits);
     }
 }

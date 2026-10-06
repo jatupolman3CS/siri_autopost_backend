@@ -7,6 +7,8 @@ const $ = (sel) => document.querySelector(sel);
 const CAPTURE_PERM = { origins: ['<all_urls>'] };
 
 let data = { settings: migrateSettings(null), state: {}, logs: [], cloud: {}, online: {} };
+// Set when this page has just paired the browser: the page then says "connected" and nothing else.
+let justPaired = false;
 
 function bg(cmd, extra = {}) {
   return chrome.runtime.sendMessage({ target: 'fbap-bg', cmd, ...extra });
@@ -72,15 +74,21 @@ $('#btnAllow').addEventListener('click', async () => {
   } catch {
     /* refused: notices go without screenshots */
   }
-  pairMessage('กำลังเชื่อมต่อและส่งชุดโพสต์ขึ้นเว็บ...');
+  pairMessage('กำลังเชื่อมต่อ...');
   const r = await bg('cloudPair', { apiUrl: req.apiUrl, code: req.code, name: req.name });
   if (r?.ok) {
-    pairMessage('เชื่อมต่อแล้ว กำลังกลับไปที่หน้าเว็บ...');
-    setTimeout(() => location.replace(`${req.apiUrl}/app/campaigns`), 800);
+    // No redirect to the web app: this browser may not be signed in there, or as another person. Just say it worked.
+    justPaired = true;
+    history.replaceState(null, '', location.pathname);
+    renderAll();
   } else {
     pairMessage(`เชื่อมต่อไม่สำเร็จ: ${r?.error || 'ไม่ทราบสาเหตุ'} (สร้างรหัสใหม่จากหน้าเว็บแล้วกดเชื่อมต่ออีกครั้ง)`);
     $('#btnDeny').disabled = false;
   }
+});
+
+$('#btnCloseTab').addEventListener('click', () => {
+  window.close();
 });
 
 $('#btnDeny').addEventListener('click', () => {
@@ -100,7 +108,7 @@ function renderLink() {
   show($('#unpairedCard'), !paired && !pairRequest());
   show($('#linkCard'), paired);
   if (!paired) return;
-  $('#openWeb').href = `${c.apiUrl}/app/campaigns`;
+  $('#openWeb').href = `${c.apiUrl}/app/overview`;
   const job = c.lastJob;
   const resting = c.pausedUntil > Date.now();
   facts($('#linkFacts'), [
@@ -279,6 +287,16 @@ function renderLegacy() {
 }
 
 function renderAll() {
+  // Right after pairing the page shows the success card and nothing else.
+  if (justPaired && data.cloud.enabled) {
+    for (const id of ['#pairCard', '#unpairedCard', '#linkCard', '#runCard', '#logCard', '#legacyNote']) show($(id), false);
+    show($('#pairDone'), true);
+    const badge = $('#linkBadge');
+    badge.className = 'badge on';
+    badge.textContent = 'เชื่อมต่อแล้ว';
+    return;
+  }
+  show($('#pairDone'), false);
   renderPair();
   renderLink();
   renderRun();
@@ -305,6 +323,7 @@ chrome.storage.onChanged.addListener((changes, area) => {
 });
 window.addEventListener('hashchange', renderAll);
 setInterval(() => {
+  if (justPaired) return;
   renderRun();
   renderLink();
 }, 1000);

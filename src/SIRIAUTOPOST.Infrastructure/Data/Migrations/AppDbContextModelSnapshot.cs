@@ -217,8 +217,9 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .IsUnique()
                         .HasDatabaseName("ix_devices_key_hash");
 
-                    b.HasIndex("WorkspaceId")
-                        .HasDatabaseName("ix_devices_workspace_id");
+                    b.HasIndex("WorkspaceId", "Name")
+                        .IsUnique()
+                        .HasDatabaseName("ix_devices_workspace_id_name");
 
                     b.ToTable("DEVICES", (string)null);
                 });
@@ -733,6 +734,132 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.ToTable("MEDIA_FOLDERS", (string)null);
                 });
 
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PaymentAttempt", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<decimal>("Amount")
+                        .HasPrecision(12, 2)
+                        .HasColumnType("numeric(12,2)")
+                        .HasColumnName("amount");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Cycle")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("cycle");
+
+                    b.Property<string>("FailureMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("failure_message");
+
+                    b.Property<string>("Flow")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("flow");
+
+                    b.Property<string>("PaidMethod")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("paid_method");
+
+                    b.Property<string>("Plan")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("plan");
+
+                    b.Property<string>("PromoCode")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("promo_code");
+
+                    b.Property<string>("RequestedMethod")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("requested_method");
+
+                    b.Property<DateTimeOffset?>("SettledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("settled_at");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("state");
+
+                    b.Property<string>("StripePaymentIntentId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("stripe_payment_intent_id");
+
+                    b.Property<string>("StripeSubscriptionId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("stripe_subscription_id");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("user_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_payment_attempts");
+
+                    b.HasIndex("StripePaymentIntentId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_payment_attempts_stripe_payment_intent_id");
+
+                    b.HasIndex("UserId", "CreatedAt")
+                        .HasDatabaseName("ix_payment_attempts_user_id_created_at");
+
+                    b.ToTable("PAYMENT_ATTEMPTS", (string)null);
+                });
+
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PaymentOverride", b =>
+                {
+                    b.Property<int>("Id")
+                        .HasColumnType("integer")
+                        .HasColumnName("id");
+
+                    b.Property<int>("Amount")
+                        .HasColumnType("integer")
+                        .HasColumnName("amount");
+
+                    b.PrimitiveCollection<List<string>>("Emails")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("emails");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("enabled");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id")
+                        .HasName("pk_payment_overrides");
+
+                    b.ToTable("PAYMENT_OVERRIDES", (string)null);
+                });
+
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PlanSetting", b =>
                 {
                     b.Property<string>("Key")
@@ -747,6 +874,18 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Property<int?>("Devices")
                         .HasColumnType("integer")
                         .HasColumnName("devices");
+
+                    b.Property<int?>("Groups")
+                        .HasColumnType("integer")
+                        .HasColumnName("groups");
+
+                    b.Property<int?>("Images")
+                        .HasColumnType("integer")
+                        .HasColumnName("images");
+
+                    b.Property<int?>("LibraryPosts")
+                        .HasColumnType("integer")
+                        .HasColumnName("library_posts");
 
                     b.Property<int?>("Posts")
                         .HasColumnType("integer")
@@ -771,6 +910,9 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                             Key = "Free",
                             Accounts = 1,
                             Devices = 1,
+                            Groups = 10,
+                            Images = 20,
+                            LibraryPosts = 20,
                             Posts = 10,
                             Price = 0,
                             Seats = 1
@@ -780,7 +922,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                             Key = "Basic",
                             Accounts = 2,
                             Devices = 1,
-                            Posts = 30,
+                            Groups = 50,
+                            Images = 200,
+                            LibraryPosts = 200,
+                            Posts = 50,
                             Price = 290,
                             Seats = 1
                         },
@@ -789,8 +934,12 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                             Key = "Pro",
                             Accounts = 10,
                             Devices = 3,
+                            Groups = 300,
+                            Images = 1000,
+                            LibraryPosts = 1000,
+                            Posts = 300,
                             Price = 790,
-                            Seats = 1
+                            Seats = 3
                         },
                         new
                         {
@@ -870,6 +1019,11 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
                         .HasColumnName("platform");
+
+                    b.Property<string>("PostUrl")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("post_url");
 
                     b.Property<DateTimeOffset?>("PublishedAt")
                         .HasColumnType("timestamp with time zone")
@@ -953,6 +1107,110 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasFilter("schedule_id IS NOT NULL");
 
                     b.ToTable("POSTS", (string)null);
+                });
+
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PostBump", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("account_id");
+
+                    b.Property<DateTimeOffset?>("ClaimedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("claimed_at");
+
+                    b.Property<Guid?>("ClaimedByDeviceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("claimed_by_device_id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTimeOffset?>("DoneAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("done_at");
+
+                    b.Property<DateTimeOffset>("DueAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("due_at");
+
+                    b.Property<string>("FailureDetail")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("failure_detail");
+
+                    b.PrimitiveCollection<List<Guid>>("MediaIds")
+                        .IsRequired()
+                        .HasColumnType("uuid[]")
+                        .HasColumnName("media_ids");
+
+                    b.Property<Guid>("PostId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("post_id");
+
+                    b.Property<int>("Round")
+                        .HasColumnType("integer")
+                        .HasColumnName("round");
+
+                    b.Property<Guid?>("ScheduleId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("schedule_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("Target")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("target");
+
+                    b.Property<string>("Text")
+                        .IsRequired()
+                        .HasMaxLength(1200)
+                        .HasColumnType("character varying(1200)")
+                        .HasColumnName("text");
+
+                    b.Property<string>("Url")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("url");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workspace_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_post_bumps");
+
+                    b.HasIndex("ClaimedByDeviceId")
+                        .HasDatabaseName("ix_post_bumps_claimed_by_device_id");
+
+                    b.HasIndex("ScheduleId")
+                        .HasDatabaseName("ix_post_bumps_schedule_id")
+                        .HasFilter("schedule_id IS NOT NULL");
+
+                    b.HasIndex("WorkspaceId")
+                        .HasDatabaseName("ix_post_bumps_workspace_id");
+
+                    b.HasIndex("PostId", "Round")
+                        .IsUnique()
+                        .HasDatabaseName("ix_post_bumps_post_id_round");
+
+                    b.HasIndex("AccountId", "Status", "DueAt")
+                        .HasDatabaseName("ix_post_bumps_account_id_status_due_at");
+
+                    b.ToTable("POST_BUMPS", (string)null);
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PostCollection", b =>
@@ -1148,6 +1406,11 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Property<int>("AutoDeleteDays")
                         .HasColumnType("integer")
                         .HasColumnName("auto_delete_days");
+
+                    b.Property<string>("Bump")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("bump_plan");
 
                     b.Property<int>("BumpHours")
                         .HasColumnType("integer")
@@ -1923,6 +2186,16 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasConstraintName("fk_media_folders_workspaces_workspace_id");
                 });
 
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PaymentAttempt", b =>
+                {
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.User", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_payment_attempts_users_user_id");
+                });
+
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.Post", b =>
                 {
                     b.HasOne("SIRIAUTOPOST.Domain.Entities.SocialAccount", null)
@@ -1944,6 +2217,36 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_posts_workspaces_workspace_id");
+                });
+
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PostBump", b =>
+                {
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.SocialAccount", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_post_bumps_accounts_account_id");
+
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.Device", null)
+                        .WithMany()
+                        .HasForeignKey("ClaimedByDeviceId")
+                        .OnDelete(DeleteBehavior.SetNull)
+                        .HasConstraintName("fk_post_bumps_devices_claimed_by_device_id");
+
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.Post", null)
+                        .WithMany()
+                        .HasForeignKey("PostId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_post_bumps_posts_post_id");
+
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.Workspace", null)
+                        .WithMany()
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_post_bumps_workspaces_workspace_id");
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.PostCollection", b =>
@@ -2125,6 +2428,12 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
                             b1.Property<int?>("Devices");
 
+                            b1.Property<int?>("Groups");
+
+                            b1.Property<int?>("Images");
+
+                            b1.Property<int?>("LibraryPosts");
+
                             b1.Property<int?>("Posts");
 
                             b1.Property<int?>("Seats");
@@ -2170,6 +2479,9 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                             b1.Property<bool>("Shuffle");
 
                             b1.Property<bool>("Typing");
+
+                            b1.Property<string>("TypingSpeed")
+                                .IsRequired();
 
                             b1.Property<bool>("Warmup");
 
@@ -2224,16 +2536,6 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                                     b2.Property<Guid>("AntiBanSettingsWorkspaceId");
 
                                     b2.Property<int>("Fb");
-
-                                    b2.Property<int>("Ig");
-
-                                    b2.Property<int>("Line");
-
-                                    b2.Property<int>("Th");
-
-                                    b2.Property<int>("Tt");
-
-                                    b2.Property<int>("X");
 
                                     b2.HasKey("AntiBanSettingsWorkspaceId")
                                         .HasName("pk_workspaces");

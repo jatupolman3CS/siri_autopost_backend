@@ -21,6 +21,10 @@ public static partial class PostComposer
     [GeneratedRegex(@"\{([^{}]*\|[^{}]*)\}", RegexOptions.CultureInvariant)]
     private static partial Regex SpinGroup();
 
+    // A line that holds nothing but the tag (so the group code can sit on its own first line).
+    [GeneratedRegex(@"^[ \t]*\{\{\s*(?:code|รหัส)\s*\}\}[ \t]*(?:\r?\n|$)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant | RegexOptions.Multiline)]
+    private static partial Regex CodeTagLine();
+
     public static bool HasCodeTag(string? text) => CodeTag().IsMatch(text ?? "");
 
     public static bool HasSpin(string? text) => SpinGroup().IsMatch(text ?? "");
@@ -46,12 +50,19 @@ public static partial class PostComposer
         return s;
     }
 
-    /// <summary>The group's code replaces every {{code}} tag; without a tag it becomes the first line.</summary>
+    /// <summary>
+    /// The group's code replaces every {{code}} tag; without a tag it becomes the first line. A tag alone on its line
+    /// disappears with the line when the group has no code, so a post that starts with the tag does not start blank.
+    /// </summary>
     public static string Compose(string? text, string? code)
     {
         var tx = text ?? "";
         var c = (code ?? "").Trim();
-        if (CodeTag().IsMatch(tx)) return CodeTag().Replace(tx, _ => c);
+        if (CodeTag().IsMatch(tx))
+        {
+            if (c.Length == 0) tx = CodeTagLine().Replace(tx, "");
+            return CodeTag().Replace(tx, _ => c);
+        }
         if (c.Length == 0) return tx;
         return tx.Length > 0 ? c + "\n" + tx : c;
     }

@@ -194,7 +194,9 @@ public sealed class SetCustomerPlanCommandHandler(IUserRepository users, AdminCu
 }
 
 /// <summary>Per-customer limits: null keeps the plan's value, 0 = unlimited.</summary>
-public sealed record SetCustomerLimitsCommand(Guid CustomerId, int? Accounts, int? Posts, int? Devices, int? Seats) : ICommand<CustomerDto>;
+public sealed record SetCustomerLimitsCommand(
+    Guid CustomerId, int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups = null, int? Images = null, int? LibraryPosts = null)
+    : ICommand<CustomerDto>;
 
 public sealed class SetCustomerLimitsCommandHandler(IUserRepository users, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow)
     : ICommandHandler<SetCustomerLimitsCommand, CustomerDto>
@@ -202,7 +204,11 @@ public sealed class SetCustomerLimitsCommandHandler(IUserRepository users, Admin
     public async Task<CustomerDto> HandleAsync(SetCustomerLimitsCommand c, CancellationToken ct = default)
     {
         var user = await AdminCustomers.RequireAsync(users, c.CustomerId, ct);
-        user.SetLimits(new LimitOverrides { Accounts = c.Accounts, Posts = c.Posts, Devices = c.Devices, Seats = c.Seats });
+        user.SetLimits(new LimitOverrides
+        {
+            Accounts = c.Accounts, Posts = c.Posts, Devices = c.Devices, Seats = c.Seats,
+            Groups = c.Groups, Images = c.Images, LibraryPosts = c.LibraryPosts,
+        });
         audit.Record(AuditAction.LimitsChanged, user.Id, to: AdminAudit.Limits(user.Limits));
         await uow.SaveChangesAsync(ct);
         return await customers.GetAsync(user.Id, ct);
@@ -229,7 +235,8 @@ public sealed record AdminRevokeDeviceCommand(Guid CustomerId, Guid DeviceId) : 
 
 public sealed class AdminRevokeDeviceCommandHandler(
     IUserRepository users, IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts,
-    IPostRepository posts, IDeviceEventRepository events, AdminCustomers customers, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
+    IPostRepository posts, IPostBumpRepository bumps, IDeviceEventRepository events, AdminCustomers customers, AdminAudit audit,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AdminRevokeDeviceCommand, CustomerDto>
 {
     public async Task<CustomerDto> HandleAsync(AdminRevokeDeviceCommand c, CancellationToken ct = default)
@@ -238,7 +245,7 @@ public sealed class AdminRevokeDeviceCommandHandler(
         var device = await devices.GetByIdAsync(c.DeviceId, ct);
         var ws = device is null ? null : await workspaces.GetByIdAsync(device.WorkspaceId, ct);
         if (device is null || ws?.OwnerId != user.Id) throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        await DeviceRevocation.RevokeAsync(device, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, devices, events, clock.GetUtcNow(), ct);
+        await DeviceRevocation.RevokeAsync(device, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct);
         audit.Record(AuditAction.DeviceRevoked, user.Id, to: AdminAudit.Clip(device.Name));
         await uow.SaveChangesAsync(ct);
         await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);
@@ -343,7 +350,9 @@ public sealed class RetryPaymentCommandHandler(
     }
 }
 
-public sealed record UpdatePlanCommand(PlanKey Key, int Price, int? Accounts, int? Posts, int? Devices, int? Seats) : ICommand<PlanDto>;
+public sealed record UpdatePlanCommand(
+    PlanKey Key, int Price, int? Accounts, int? Posts, int? Devices, int? Seats, int? Groups = null, int? Images = null, int? LibraryPosts = null)
+    : ICommand<PlanDto>;
 
 public sealed class UpdatePlanCommandHandler(IPlanRepository plans, AdminAudit audit, IUnitOfWork uow) : ICommandHandler<UpdatePlanCommand, PlanDto>
 {
@@ -351,7 +360,7 @@ public sealed class UpdatePlanCommandHandler(IPlanRepository plans, AdminAudit a
     {
         var plan = await plans.GetAsync(c.Key, ct);
         var from = AdminAudit.Plan(plan);
-        plan.Update(c.Price, c.Accounts, c.Posts, c.Devices, c.Seats);
+        plan.Update(c.Price, c.Accounts, c.Posts, c.Devices, c.Seats, c.Groups, c.Images, c.LibraryPosts);
         audit.Record(AuditAction.PlanSettingsChanged, null, from, AdminAudit.Plan(plan));
         await uow.SaveChangesAsync(ct);
         return PlanDto.From(plan);
@@ -397,6 +406,41 @@ public sealed class SetPromoActiveCommandHandler(IPromoRepository promos, AdminA
         audit.Record(AuditAction.PromoToggled, null, promo.Code, c.Active ? "active" : "inactive");
         await uow.SaveChangesAsync(ct);
         return PromoDto.From(promo);
+    }
+}
+
+public sealed record GetPaymentOverrideQuery : IQuery<PaymentOverrideDto>;
+
+public sealed class GetPaymentOverrideQueryHandler(IPaymentOverrideRepository overrides, IPaymentGateway gateway)
+    : IQueryHandler<GetPaymentOverrideQuery, PaymentOverrideDto>
+{
+    public async Task<PaymentOverrideDto> HandleAsync(GetPaymentOverrideQuery q, CancellationToken ct = default) =>
+        PaymentOverrideDto.From(await overrides.GetAsync(ct), gateway.Enabled);
+}
+
+/// <summary>
+/// Turns the payment test on or off. While it is on, the listed customers pay <paramref name="Amount"/> baht for a billing
+/// period instead of the plan's price (Checkout and plan changes), so a real transfer can be tested for a few baht.
+/// </summary>
+public sealed record SetPaymentOverrideCommand(bool Enabled, int Amount, IReadOnlyList<string> Emails) : ICommand<PaymentOverrideDto>;
+
+public sealed class SetPaymentOverrideCommandHandler(
+    IPaymentOverrideRepository overrides, IPaymentGateway gateway, AdminAudit audit, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SetPaymentOverrideCommand, PaymentOverrideDto>
+{
+    public async Task<PaymentOverrideDto> HandleAsync(SetPaymentOverrideCommand c, CancellationToken ct = default)
+    {
+        var row = await overrides.GetAsync(ct);
+        var from = row is null ? null : AdminAudit.Override(row);
+        if (row is null)
+        {
+            row = PaymentOverride.CreateDefault();
+            overrides.Add(row);
+        }
+        row.Update(c.Enabled, c.Amount, c.Emails, clock.GetUtcNow());
+        audit.Record(AuditAction.PaymentOverrideChanged, null, from, AdminAudit.Override(row));
+        await uow.SaveChangesAsync(ct);
+        return PaymentOverrideDto.From(row, gateway.Enabled);
     }
 }
 
@@ -451,12 +495,15 @@ public sealed class AdminAudit(IAuditRepository audit, ICurrentUser current, Tim
 
     public static string Key<T>(T value) where T : struct, Enum => System.Text.Json.JsonNamingPolicy.SnakeCaseLower.ConvertName(value.ToString());
 
-    /// <summary>"accounts=5 posts=- devices=0 seats=-": "-" keeps the plan's value, 0 = unlimited.</summary>
+    /// <summary>"accounts=5 posts=- devices=0 seats=- groups=- images=- library=-": "-" keeps the plan's value, 0 = unlimited.</summary>
     public static string Limits(LimitOverrides l) =>
-        $"accounts={N(l.Accounts)} posts={N(l.Posts)} devices={N(l.Devices)} seats={N(l.Seats)}";
+        $"accounts={N(l.Accounts)} posts={N(l.Posts)} devices={N(l.Devices)} seats={N(l.Seats)} groups={N(l.Groups)} images={N(l.Images)} library={N(l.LibraryPosts)}";
 
     public static string Plan(PlanSetting p) =>
-        $"{AuditEntry.Key(p.Key)} price={p.Price} accounts={N(p.Accounts)} posts={N(p.Posts)} devices={N(p.Devices)} seats={N(p.Seats)}";
+        $"{AuditEntry.Key(p.Key)} price={p.Price} accounts={N(p.Accounts)} posts={N(p.Posts)} devices={N(p.Devices)} seats={N(p.Seats)} groups={N(p.Groups)} images={N(p.Images)} library={N(p.LibraryPosts)}";
+
+    /// <summary>"on amount=20 emails=1" (the addresses stay out of the log).</summary>
+    public static string Override(PaymentOverride p) => $"{(p.Enabled ? "on" : "off")} amount={p.Amount} emails={p.Emails.Count}";
 
     public static string? Clip(string? text) => text is { Length: > 200 } ? text[..200] : text;
 
@@ -502,7 +549,7 @@ public sealed class AdminCustomers(
                 new CustomerJobsDto(Count(PostStatus.Success) + Count(PostStatus.Pending), Count(PostStatus.Failed), Count(PostStatus.Queued), Count(PostStatus.Posting)),
                 myDevices.Select(d => new CustomerDeviceDto(d.Id, d.Name, d.Browser, d.LastSeenAt, d.IsOnline(now))).ToList(),
                 u.Note, mine.Count,
-                new LimitOverridesDto(u.Limits.Accounts, u.Limits.Posts, u.Limits.Devices, u.Limits.Seats),
+                new LimitOverridesDto(u.Limits.Accounts, u.Limits.Posts, u.Limits.Devices, u.Limits.Seats, u.Limits.Groups, u.Limits.Images, u.Limits.LibraryPosts),
                 u.HasSubscription, u.PlanRenewsAt, u.CancelAtPeriodEnd);
         }).ToList();
     }

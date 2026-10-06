@@ -126,11 +126,14 @@ public sealed record PostDto(
     Guid? LinkId,
     string? Code,
     string? TargetUrl,
-    bool IsTest)
+    bool IsTest,
+    bool Rushed = false)
 {
+    /// <summary><c>Rushed</c>: asked to post now and still waiting for its browser to take it.</summary>
     public static PostDto From(Post p) =>
         new(p.Id, p.AccountId, p.Platform, p.Target, p.Content, p.MediaIds, p.ScheduledAt, p.Status, p.FailureCode,
-            p.FailureDetail, p.PublishedAt, p.ScheduleId, p.CollectionPostId, p.LinkId, p.Code, p.TargetUrl, p.IsTest);
+            p.FailureDetail, p.PublishedAt, p.ScheduleId, p.CollectionPostId, p.LinkId, p.Code, p.TargetUrl, p.IsTest,
+            p.RushedAt is not null && p.Status == PostStatus.Queued);
 }
 
 public sealed record ScheduleResultDto(int Created, DateTimeOffset FirstAt, DateTimeOffset LastAt);

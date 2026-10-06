@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication;
@@ -102,6 +103,14 @@ public static class ServiceCollectionExtensions
                             if (user is null || admin is not { Role: UserRole.Admin }) ctx.Fail("impersonation no longer allowed");
                         }
                         else if (user is null || user.IsBlocked) ctx.Fail("account blocked or deleted");
+                        // The role is the database's, not the one the token was issued with: a customer who became the
+                        // platform admin (Admin:Email at startup, a hand-run UPDATE) would otherwise get 403 on every
+                        // admin page until the token expires, while /auth/me already says admin.
+                        if (user is not null && ctx.Principal?.Identity is ClaimsIdentity identity)
+                        {
+                            foreach (var stale in identity.FindAll("role").ToList()) identity.RemoveClaim(stale);
+                            identity.AddClaim(new Claim("role", user.Role.ToString().ToLowerInvariant()));
+                        }
                     },
                 };
             });

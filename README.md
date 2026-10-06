@@ -75,7 +75,7 @@ cd src/SIRIAUTOPOST.Api && dotnet run # http://localhost:5100  (OpenAPI: /openap
 | ทีม | `GET/POST /api/workspaces/{ws}/members`, `PUT/DELETE .../members/{memberId}` |
 | เจ้าของแพลตฟอร์ม (`role=admin`) | `GET /api/admin/summary\|health\|audit`, `GET /api/admin/customers`, `GET /api/admin/jobs?customerId&take`, `POST /api/admin/customers/{id}/status\|pause\|retry-failed\|refund\|impersonate`, `PUT .../customers/{id}/plan\|limits\|note`, `DELETE .../customers/{id}/devices/{deviceId}`, `GET /api/admin/transactions`, `POST .../transactions/{id}/refund\|retry`, `PUT /api/admin/plans/{key}`, `GET/POST /api/admin/promos`, `PUT .../promos/{code}/active` |
 | เวิร์กสเปซ | `GET/POST /api/workspaces`, `GET /api/workspaces/{ws}/accounts`, `POST .../accounts/{id}/reconnect` |
-| โพสต์ | `GET .../posts?from&to`, `POST .../posts/schedule`, `DELETE .../posts/{id}`, `POST .../posts/{id}/retry`, `POST .../posts/{id}/dismiss`, `GET .../errors` |
+| โพสต์ | `GET .../posts?from&to`, `POST .../posts/schedule`, `DELETE .../posts/{id}`, `POST .../posts/{id}/retry`, `POST .../posts/retry` (ลองใหม่เป็นชุด ≤500 โพสต์), `POST .../posts/{id}/run-now` (โพสต์เดี๋ยวนี้ ลัดคิว: ย้ายโพสต์จากรอบเดิมมาเป็นตอนนี้ ใช้รันโพสต์ที่ล้มเหลวซ้ำทันทีด้วย), `POST .../posts/{id}/dismiss`, `GET .../errors` |
 | คลัง | `GET/POST .../media` (multipart field `file`), `GET .../media/{id}/content`, `GET/POST .../snippets` |
 | ระบบโพสต์ | `GET .../engine`, `PUT .../engine/anti-ban`, `PUT .../engine/offline`, `POST .../engine/extension`, `POST .../engine/waiting/skip` |
 | อุปกรณ์ (เจ้าของ) | `GET .../devices`, `POST .../devices/pairing` (รหัสจับคู่ 10 นาที), `PUT .../devices/{id}` (`name`, `jobsPaused`), `DELETE .../devices/{id}` |

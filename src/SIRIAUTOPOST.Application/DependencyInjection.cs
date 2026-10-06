@@ -83,6 +83,8 @@ public static class DependencyInjection
         services.AddCommand<SchedulePostsCommand, ScheduleResultDto, SchedulePostsCommandHandler>();
         services.AddCommand<DeletePostCommand, Unit, DeletePostCommandHandler>();
         services.AddCommand<RetryPostCommand, PostDto, RetryPostCommandHandler>();
+        services.AddCommand<RetryPostsCommand, RetryPostsResultDto, RetryPostsCommandHandler>();
+        services.AddCommand<RunPostNowCommand, PostDto, RunPostNowCommandHandler>();
         services.AddCommand<DismissPostErrorCommand, PostDto, DismissPostErrorCommandHandler>();
 
         // Library

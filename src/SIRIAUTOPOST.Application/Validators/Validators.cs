@@ -196,6 +196,15 @@ public sealed class SchedulePostsCommandValidator : AbstractValidator<SchedulePo
     }
 }
 
+public sealed class RetryPostsCommandValidator : AbstractValidator<RetryPostsCommand>
+{
+    public RetryPostsCommandValidator() =>
+        RuleFor(x => x.PostIds).Cascade(CascadeMode.Stop)
+            .NotEmpty().WithMessage("ยังไม่ได้เลือกโพสต์")
+            .Must(i => i.Count <= RetryPostsCommandHandler.MaxItems)
+            .WithMessage($"เลือกโพสต์ได้ครั้งละไม่เกิน {RetryPostsCommandHandler.MaxItems} โพสต์");
+}
+
 public sealed class CreateSnippetCommandValidator : AbstractValidator<CreateSnippetCommand>
 {
     public CreateSnippetCommandValidator()

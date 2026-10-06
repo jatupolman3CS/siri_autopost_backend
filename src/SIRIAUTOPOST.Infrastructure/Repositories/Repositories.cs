@@ -100,6 +100,12 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     public Task<Post?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
         db.Posts.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
 
+    public async Task<IReadOnlyList<Post>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
+    {
+        var wanted = ids.ToList();
+        return await db.Posts.Where(x => x.WorkspaceId == workspaceId && wanted.Contains(x.Id)).ToListAsync(ct);
+    }
+
     public async Task<IReadOnlyList<Post>> ListAsync(Guid workspaceId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default) =>
         await db.Posts.AsNoTracking()
             .Where(x => x.WorkspaceId == workspaceId && x.ScheduledAt >= from && x.ScheduledAt < to)
@@ -129,7 +135,9 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     public async Task<IReadOnlyList<Post>> ListDueAsync(Guid accountId, DateTimeOffset now, CancellationToken ct = default) =>
         await db.Posts
             .Where(x => x.AccountId == accountId && x.Status == PostStatus.Queued && x.ScheduledAt <= now)
-            .OrderBy(x => x.ScheduledAt)
+            .OrderBy(x => x.RushedAt == null) // "post now" jumps the queue, the earliest ask first
+            .ThenBy(x => x.RushedAt)
+            .ThenBy(x => x.ScheduledAt)
             .ToListAsync(ct);
 
     public async Task<IReadOnlyList<Post>> ListOpenByAccountAsync(Guid accountId, CancellationToken ct = default) =>

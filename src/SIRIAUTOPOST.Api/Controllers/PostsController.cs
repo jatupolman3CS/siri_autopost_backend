@@ -46,6 +46,25 @@ public sealed class PostsController : ControllerBase
         Guid wsId, Guid postId, [FromServices] ICommandHandler<RetryPostCommand, PostDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new RetryPostCommand(wsId, postId), ct);
 
+    /// <summary>
+    /// Post now: a queued, held, failed or skipped post jumps the queue (it leaves its slot and is the browser's next
+    /// job; the anti-ban gap between two posts still applies).
+    /// </summary>
+    [HttpPost("posts/{postId:guid}/run-now")]
+    public Task<PostDto> RunNow(
+        Guid wsId, Guid postId, [FromServices] ICommandHandler<RunPostNowCommand, PostDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new RunPostNowCommand(wsId, postId), ct);
+
+    public sealed record RetryPostsRequest(IReadOnlyList<Guid> PostIds);
+
+    /// <summary>Puts up to 500 failed posts back in the queue; posts of an unbound browser are left alone.</summary>
+    [HttpPost("posts/retry")]
+    [ProducesResponseType<RetryPostsResultDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public Task<RetryPostsResultDto> RetryMany(
+        Guid wsId, RetryPostsRequest r, [FromServices] ICommandHandler<RetryPostsCommand, RetryPostsResultDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new RetryPostsCommand(wsId, r.PostIds ?? []), ct);
+
     [HttpPost("posts/{postId:guid}/dismiss")]
     public Task<PostDto> Dismiss(
         Guid wsId, Guid postId, [FromServices] ICommandHandler<DismissPostErrorCommand, PostDto> handler, CancellationToken ct) =>

@@ -38,6 +38,26 @@ public class AdminPromotionTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_token_issued_before_the_promotion_is_an_admin_token_at_once()
+    {
+        // The customer signed in before they became the admin: their token still says "user", /auth/me says "admin".
+        var (customer, auth, _) = await factory.SignUpAsync(email: $"early{Guid.NewGuid():N}@shop.co");
+        Assert.Equal(HttpStatusCode.Forbidden, (await customer.GetAsync("/api/admin/customers")).StatusCode);
+        await using (var scope = factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+            var row = await db.Users.SingleAsync(u => u.Email == auth.User.Email);
+            row.PromoteToAdmin();
+            await db.SaveChangesAsync();
+        }
+
+        // No new sign-in: the same token now opens the admin pages (the role is read from the database).
+        Assert.Equal(UserRole.Admin, (await customer.GetFromJsonAsync<UserDto>("/api/auth/me", Json))!.Role);
+        Assert.Equal(HttpStatusCode.OK, (await customer.GetAsync("/api/admin/customers")).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await customer.GetAsync("/api/admin/health")).StatusCode);
+    }
+
+    [Fact]
     public async Task Another_customer_is_not_touched_by_an_Admin_Email_that_names_someone_else()
     {
         var (_, other, _) = await factory.SignUpAsync();

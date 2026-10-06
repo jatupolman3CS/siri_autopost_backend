@@ -100,6 +100,8 @@ public interface IAccountRepository
 public interface IPostRepository
 {
     Task<Post?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    /// <summary>The posts of this workspace among these ids (tracked; ids of another workspace are ignored).</summary>
+    Task<IReadOnlyList<Post>> ListByIdsAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
     Task<IReadOnlyList<Post>> ListAsync(Guid workspaceId, DateTimeOffset from, DateTimeOffset to, CancellationToken ct = default);
     Task<IReadOnlyList<Post>> ListOpenErrorsAsync(Guid workspaceId, CancellationToken ct = default);
     Task<IReadOnlyList<Post>> ListByStatusAsync(Guid workspaceId, PostStatus status, CancellationToken ct = default);
@@ -107,7 +109,7 @@ public interface IPostRepository
     Task<IReadOnlyList<Post>> ListOpenByAccountAsync(Guid accountId, CancellationToken ct = default);
     /// <summary>Posts sent in the last 7 days, per workspace.</summary>
     Task<Dictionary<Guid, int>> CountSentSinceAsync(IEnumerable<Guid> workspaceIds, DateTimeOffset since, CancellationToken ct = default);
-    /// <summary>Queued posts of an account that are due at <paramref name="now"/>, oldest first.</summary>
+    /// <summary>Queued posts of an account that are due at <paramref name="now"/>: the ones somebody asked to post now first, then oldest first.</summary>
     Task<IReadOnlyList<Post>> ListDueAsync(Guid accountId, DateTimeOffset now, CancellationToken ct = default);
     /// <summary>Posts a device has taken and not reported on yet.</summary>
     Task<IReadOnlyList<Post>> ListClaimedByAsync(Guid deviceId, CancellationToken ct = default);

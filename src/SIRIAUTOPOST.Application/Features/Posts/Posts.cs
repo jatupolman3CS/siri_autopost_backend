@@ -1,5 +1,6 @@
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
@@ -159,6 +160,73 @@ public sealed class RetryPostCommandHandler(
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
         post.Retry(clock.GetUtcNow());
+        await uow.SaveChangesAsync(ct);
+        return PostDto.From(post);
+    }
+}
+
+/// <summary>Puts up to 500 failed posts back in the queue at once (the error page's selection bar).</summary>
+public sealed record RetryPostsCommand(Guid WorkspaceId, IReadOnlyList<Guid> PostIds) : ICommand<RetryPostsResultDto>;
+
+/// <param name="Retried">Posts put back in the queue.</param>
+/// <param name="Unbound">Failed posts left as they are: the browser they were for has been unbound, so none would ever take them.</param>
+/// <param name="NotFailed">Ids that are not failed posts of this workspace any more (already retried, skipped, waiting for approval or gone).</param>
+public sealed record RetryPostsResultDto(int Retried, int Unbound, int NotFailed);
+
+public sealed class RetryPostsCommandHandler(
+    IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts, ICurrentUser current, IUnitOfWork uow,
+    TimeProvider clock)
+    : ICommandHandler<RetryPostsCommand, RetryPostsResultDto>
+{
+    public const int MaxItems = 500;
+
+    public async Task<RetryPostsResultDto> HandleAsync(RetryPostsCommand c, CancellationToken ct = default)
+    {
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var ids = c.PostIds.Distinct().ToList();
+        var failed = (await posts.ListByIdsAsync(c.WorkspaceId, ids, ct)).Where(p => p.Status == PostStatus.Failed).ToList();
+        var connected = (await accounts.ListAsync(c.WorkspaceId, ct)).Where(a => a.IsConnected).Select(a => a.Id).ToHashSet();
+        var now = clock.GetUtcNow();
+        var retried = 0;
+        foreach (var post in failed.Where(p => connected.Contains(p.AccountId)))
+        {
+            post.Retry(now);
+            retried++;
+        }
+        if (retried > 0) await uow.SaveChangesAsync(ct);
+        return new RetryPostsResultDto(retried, failed.Count - retried, ids.Count - failed.Count);
+    }
+}
+
+/// <summary>
+/// "Post now" (the timeline, the schedules' dots, the calendar) and the manual rerun of a failed post: the post leaves
+/// its slot, is due this moment and is handed out before every other due post of its browser; the browser is told to
+/// take it now instead of at its next 30-second round. Only a browser that is paired can post it (the claim only hands
+/// a device the posts of its own account), and a customer the platform admin stopped cannot post at all.
+/// </summary>
+public sealed record RunPostNowCommand(Guid WorkspaceId, Guid PostId) : ICommand<PostDto>;
+
+public sealed class RunPostNowCommandHandler(
+    IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts, IExtensionRepository ext,
+    IDeviceEventRepository events, IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<RunPostNowCommand, PostDto>
+{
+    public async Task<PostDto> HandleAsync(RunPostNowCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
+        var account = await accounts.GetAsync(ws.Id, post.AccountId, ct);
+        if (account?.DeviceId is not { } deviceId)
+            throw new DomainException("เบราว์เซอร์ของบัญชีนี้ถูกยกเลิกการผูกแล้ว จึงไม่มีเครื่องที่จะโพสต์ ผูกเครื่องใหม่ที่หน้าทีมก่อน");
+        if (!(await users.OwnerOfAsync(ws, ct)).CanPost)
+            throw new DomainException("บัญชีเจ้าของเวิร์กสเปซถูกระงับหรือหยุดการโพสต์โดยผู้ดูแลแพลตฟอร์ม จึงสั่งให้เครื่องโพสต์ไม่ได้");
+
+        var now = clock.GetUtcNow();
+        post.RunNow(now);
+        var wake = DeviceCommand.Create(ws.Id, deviceId, "takeJobs", "{}", now);
+        ext.Add(wake);
+        events.Add(CommandEvents.Of(wake, now)); // wakes a device waiting in a long sync
+        events.Add(DeviceEvents.PostChanged(ws.Id, deviceId, post, now));
         await uow.SaveChangesAsync(ct);
         return PostDto.From(post);
     }

@@ -62,6 +62,61 @@ public class PostTests
     }
 
     [Fact]
+    public void RunNow_takes_a_queued_post_out_of_its_slot_and_marks_it_rushed()
+    {
+        var p = Queued();
+        p.RunNow(Now);
+
+        Assert.Equal(PostStatus.Queued, p.Status);
+        Assert.Equal(Now, p.ScheduledAt);
+        Assert.Equal(Now, p.RushedAt);
+    }
+
+    [Fact]
+    public void RunNow_reruns_a_failed_or_skipped_post_at_once_and_clears_the_error()
+    {
+        var failed = Failed();
+        failed.RunNow(Now);
+        Assert.Equal(PostStatus.Queued, failed.Status);
+        Assert.Null(failed.FailureCode);
+        Assert.False(failed.IsOpenError);
+        Assert.Equal(Now, failed.ScheduledAt);
+
+        var skipped = Failed();
+        skipped.DismissError(Now);
+        Assert.Equal(PostStatus.Skipped, skipped.Status);
+        skipped.RunNow(Now);
+        Assert.Equal(PostStatus.Queued, skipped.Status);
+        Assert.Equal(Now, skipped.RushedAt);
+    }
+
+    [Fact]
+    public void RunNow_refuses_a_post_that_went_out_is_being_posted_or_waits_for_approval()
+    {
+        var sent = Post.Record(Ws, Page, "A", "hi", Now.AddHours(-2), PostStatus.Success, null, Now);
+        var pending = Post.Record(Ws, Page, "A", "hi", Now.AddHours(-2), PostStatus.Pending, FailureCode.PendingApproval, Now);
+        var posting = Queued();
+        posting.Claim(Guid.NewGuid(), Now);
+
+        Assert.Throws<DomainException>(() => sent.RunNow(Now));
+        Assert.Throws<DomainException>(() => pending.RunNow(Now));
+        Assert.Throws<DomainException>(() => posting.RunNow(Now));
+    }
+
+    [Fact]
+    public void A_retry_waits_its_turn_even_after_a_post_now()
+    {
+        var p = Queued();
+        p.RunNow(Now);
+        p.Claim(Guid.NewGuid(), Now);
+        p.Fail(FailureCode.Network, "x", Now);
+        p.Retry(Now);
+
+        Assert.Null(p.RushedAt);
+        Assert.Equal(Now.AddMinutes(15), p.ScheduledAt);
+    }
+
+    [Fact]
     public void Dismissing_skips_a_failed_post_and_closes_the_report()
     {
         var p = Failed();

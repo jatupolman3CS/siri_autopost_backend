@@ -187,6 +187,148 @@ public class DeviceEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task Retrying_many_failed_posts_queues_the_failed_ones_and_says_what_it_left_alone()
+    {
+        var p = await PairAsync();
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        var failing = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(5));
+        var waiting = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(60));
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(7)))
+        {
+            await p.Device.PostAsync("/api/device/jobs/claim", null);
+            await p.Device.PostAsJsonAsync($"/api/device/jobs/{failing.Id}/result", new { ok = false, error = "Facebook ไม่ตอบสนอง" });
+        }
+        Assert.Equal(PostStatus.Failed, (await PostAsync(p, failing.Id)).Status);
+
+        var unknown = Guid.NewGuid();
+        var res = await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/retry", new { postIds = new[] { failing.Id, waiting.Id, unknown, failing.Id } }, Json);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var result = (await res.Content.ReadFromJsonAsync<RetryResult>(Json))!;
+        // One failed post retried; the queued one and the id nobody has are "not failed" (the repeated id counts once).
+        Assert.Equal((1, 0, 2), (result.Retried, result.Unbound, result.NotFailed));
+
+        var again = await PostAsync(p, failing.Id);
+        Assert.Equal(PostStatus.Queued, again.Status);
+        Assert.Null(again.FailureCode);
+        Assert.True(again.ScheduledAt > DateTimeOffset.UtcNow.AddMinutes(10));
+        var errors = (await p.Owner.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{p.Ws}/errors", Json))!;
+        Assert.DoesNotContain(errors, e => e.Id == failing.Id);
+
+        // Retrying it a second time finds nothing failed.
+        var twice = (await (await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/retry", new { postIds = new[] { failing.Id } }, Json))
+            .Content.ReadFromJsonAsync<RetryResult>(Json))!;
+        Assert.Equal((0, 0, 1), (twice.Retried, twice.Unbound, twice.NotFailed));
+    }
+
+    [Fact]
+    public async Task Retrying_many_leaves_the_posts_of_an_unbound_browser_failed_and_checks_the_ids()
+    {
+        var p = await PairAsync();
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        var one = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(5));
+        var two = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(6));
+        // Unbinding the browser fails what it still had queued; nothing would ever take those posts again.
+        Assert.Equal(HttpStatusCode.NoContent, (await p.Owner.DeleteAsync($"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}")).StatusCode);
+        Assert.Equal(PostStatus.Failed, (await PostAsync(p, one.Id)).Status);
+
+        var res = await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/retry", new { postIds = new[] { one.Id, two.Id } }, Json);
+        var result = (await res.Content.ReadFromJsonAsync<RetryResult>(Json))!;
+        Assert.Equal((0, 2, 0), (result.Retried, result.Unbound, result.NotFailed));
+        Assert.Equal(PostStatus.Failed, (await PostAsync(p, one.Id)).Status);
+        Assert.Equal(2, (await p.Owner.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{p.Ws}/errors", Json))!.Count(e => e.Id == one.Id || e.Id == two.Id));
+
+        // Nothing chosen, or more than 500 at a time, is refused.
+        Assert.Equal(HttpStatusCode.BadRequest, (await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/retry", new { postIds = Array.Empty<Guid>() }, Json)).StatusCode);
+        var tooMany = Enumerable.Range(0, 501).Select(_ => Guid.NewGuid()).ToArray();
+        Assert.Equal(HttpStatusCode.BadRequest, (await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/retry", new { postIds = tooMany }, Json)).StatusCode);
+        // Someone outside the workspace has no access to it at all.
+        var (stranger, _, _) = await factory.SignUpAsync();
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/retry", new { postIds = new[] { one.Id } }, Json)).StatusCode);
+    }
+
+    private sealed record RetryResult(int Retried, int Unbound, int NotFailed);
+
+    [Fact]
+    public async Task Post_now_takes_a_post_out_of_its_slot_and_it_goes_before_the_older_due_posts()
+    {
+        var p = await PairAsync();
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        var older = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(5));
+        var newer = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(6));
+        var later = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(300));
+
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(8)))
+        {
+            // Two posts are due; the third is hours away. "Post now" on it is the browser's next job.
+            var res = await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/posts/{later.Id}/run-now", null);
+            Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+            var rushed = (await res.Content.ReadFromJsonAsync<PostDto>(Json))!;
+            Assert.True(rushed.Rushed);
+            Assert.Equal(PostStatus.Queued, rushed.Status);
+            Assert.True(rushed.ScheduledAt < DateTimeOffset.UtcNow.AddMinutes(60), "it left its slot, 5 hours ahead");
+
+            // The browser is told to take it now, not at its next 30-second round.
+            var taken = (await (await p.Device.PostAsJsonAsync("/api/device/sync", new { version = "2.2.1", takeCommands = true }, Json)).Content
+                .ReadFromJsonAsync<DeviceSyncDto>(Json))!;
+            Assert.Contains(taken.Commands, c => c.Cmd == "takeJobs");
+
+            var job = (await (await p.Device.PostAsync("/api/device/jobs/claim", null)).Content.ReadFromJsonAsync<JobDto>(Json))!;
+            Assert.Equal(later.Id, job.PostId);
+            await p.Device.PostAsJsonAsync($"/api/device/jobs/{later.Id}/result", new { ok = true }, Json);
+        }
+
+        // Nothing is left to run at the old time, and the two others still wait their turn.
+        var sent = await PostAsync(p, later.Id);
+        Assert.Equal(PostStatus.Success, sent.Status);
+        Assert.False(sent.Rushed);
+        Assert.True(sent.ScheduledAt < DateTimeOffset.UtcNow.AddMinutes(60));
+        Assert.Equal(PostStatus.Queued, (await PostAsync(p, older.Id)).Status);
+        Assert.Equal(PostStatus.Queued, (await PostAsync(p, newer.Id)).Status);
+    }
+
+    [Fact]
+    public async Task Post_now_reruns_a_failed_post_at_once_and_refuses_what_cannot_be_sent_again()
+    {
+        var p = await PairAsync();
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        var failing = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(5));
+        var sent = await ScheduleAsync(p, "Plants", DateTimeOffset.UtcNow.AddMinutes(30));
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(7)))
+        {
+            await p.Device.PostAsync("/api/device/jobs/claim", null);
+            await p.Device.PostAsJsonAsync($"/api/device/jobs/{failing.Id}/result", new { ok = false, error = "Facebook ไม่ตอบสนอง" });
+        }
+        Assert.Equal(PostStatus.Failed, (await PostAsync(p, failing.Id)).Status);
+
+        // Not 15 minutes later, like the retry: this very moment.
+        var res = await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/posts/{failing.Id}/run-now", null);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var again = await PostAsync(p, failing.Id);
+        Assert.Equal(PostStatus.Queued, again.Status);
+        Assert.True(again.Rushed);
+        Assert.Null(again.FailureCode);
+        Assert.True(again.ScheduledAt < DateTimeOffset.UtcNow.AddMinutes(10));
+        Assert.DoesNotContain((await p.Owner.GetFromJsonAsync<List<PostDto>>($"/api/workspaces/{p.Ws}/errors", Json))!, e => e.Id == failing.Id);
+
+        // A post that is being posted, or went out, is not sent a second time.
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(40)))
+        {
+            var job = (await (await p.Device.PostAsync("/api/device/jobs/claim", null)).Content.ReadFromJsonAsync<JobDto>(Json))!;
+            Assert.Equal(failing.Id, job.PostId);
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, (await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/posts/{failing.Id}/run-now", null)).StatusCode);
+            await p.Device.PostAsJsonAsync($"/api/device/jobs/{failing.Id}/result", new { ok = true }, Json);
+            Assert.Equal(HttpStatusCode.UnprocessableEntity, (await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/posts/{failing.Id}/run-now", null)).StatusCode);
+        }
+        Assert.Equal(HttpStatusCode.NotFound, (await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/posts/{Guid.NewGuid()}/run-now", null)).StatusCode);
+
+        // A stranger has no access; a browser that was unbound cannot take the post, so it is refused rather than left queued for ever.
+        var (stranger, _, _) = await factory.SignUpAsync();
+        Assert.Equal(HttpStatusCode.NotFound, (await stranger.PostAsync($"/api/workspaces/{p.Ws}/posts/{sent.Id}/run-now", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.NoContent, (await p.Owner.DeleteAsync($"/api/workspaces/{p.Ws}/devices/{p.Pair.DeviceId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, (await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/posts/{sent.Id}/run-now", null)).StatusCode);
+    }
+
+    [Fact]
     public async Task Late_posts_follow_the_offline_policy_and_unknown_groups_fail()
     {
         var p = await PairAsync();

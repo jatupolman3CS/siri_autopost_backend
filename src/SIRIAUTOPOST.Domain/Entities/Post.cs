@@ -56,6 +56,12 @@ public class Post : Entity
 
     public const int MaxPostUrlLength = 500;
 
+    /// <summary>
+    /// When somebody asked for this post to go out now (the timeline's "post now", the manual rerun of a failed post). A
+    /// rushed post is due at that moment and the claim hands it out before every other due post of its account.
+    /// </summary>
+    public DateTimeOffset? RushedAt { get; private set; }
+
     private Post() { } // EF Core
 
     public static string LinkTargetKey(Guid linkId) => "link:" + linkId.ToString("N");
@@ -182,6 +188,26 @@ public class Post : Entity
         FailureDetail = null;
         ErrorDismissed = false;
         ScheduledAt = now.AddMinutes(15).ToUniversalTime();
+        RushedAt = null; // a retry waits its turn like any other post
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// "Post now": jumps the queue. The post leaves its slot (it is due this moment, so nothing is left to run at the old
+    /// time, and the slot key keeps the schedule from queueing another one there) and the claim hands it out before the
+    /// other due posts. The anti-ban gap between two posts of the account still applies. A post that went out, is being
+    /// posted or waits for the group's approval cannot be sent again.
+    /// </summary>
+    public void RunNow(DateTimeOffset now)
+    {
+        if (Status is not (PostStatus.Queued or PostStatus.Waiting or PostStatus.Failed or PostStatus.Skipped))
+            throw new DomainException("สั่งโพสต์เดี๋ยวนี้ได้เฉพาะโพสต์ที่รอโพสต์ ล้มเหลว หรือถูกข้าม");
+        Status = PostStatus.Queued;
+        FailureCode = null;
+        FailureDetail = null;
+        ErrorDismissed = false;
+        ScheduledAt = now.ToUniversalTime();
+        RushedAt = now.ToUniversalTime();
         UpdatedAt = now;
     }
 

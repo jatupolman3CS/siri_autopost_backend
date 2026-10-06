@@ -27,14 +27,22 @@ public sealed record SubscriptionSnapshot(
 /// <param name="Price">The plan's price per month, baht (the yearly rate is worked out from it).</param>
 /// <param name="FirstDiscount">Baht a promo code takes off the first invoice (0 = none).</param>
 /// <param name="ChargeOverride">The admin's test amount (<see cref="PaymentOverride"/>): the baht charged for a billing period instead of the plan's price; null = the plan's price.</param>
+/// <param name="PrepaidAmount">
+/// Set for PromptPay: the page is a one-off payment of this many baht (promo code or test amount already taken into account)
+/// for one period of the plan, because Stripe cannot put PromptPay on a subscription. Null = the subscription page.
+/// </param>
 public sealed record CheckoutRequest(
     Guid UserId, string CustomerId, PlanKey Plan, BillingCycle Cycle, int Price, int FirstDiscount, string? PromoCode,
-    string SuccessUrl, string CancelUrl, int? ChargeOverride = null);
+    string SuccessUrl, string CancelUrl, int? ChargeOverride = null, int? PrepaidAmount = null);
 
 /// <param name="Paid">The session is complete and its first payment went through (or nothing was due).</param>
 /// <param name="UserId">The user the session was created for (client_reference_id).</param>
+/// <param name="PaymentIntentId">The payment of a one-off (prepaid) session.</param>
+/// <param name="Prepaid">A one-off payment for one period (PromptPay) instead of a subscription.</param>
+/// <param name="Amount">Baht the one-off session charged.</param>
 public sealed record CheckoutSessionSnapshot(
-    string Id, string? CustomerId, string? SubscriptionId, bool Paid, Guid? UserId, string? PromoCode);
+    string Id, string? CustomerId, string? SubscriptionId, bool Paid, Guid? UserId, string? PromoCode,
+    string? PaymentIntentId = null, bool Prepaid = false, PlanKey? Plan = null, BillingCycle? Cycle = null, decimal Amount = 0);
 
 public sealed record CardSnapshot(string Brand, string Last4, int ExpMonth, int ExpYear);
 

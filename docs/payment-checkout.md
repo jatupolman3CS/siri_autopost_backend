@@ -38,7 +38,7 @@
   - **Apple Pay / Google Pay / Link**: `elements.create('expressCheckout', { paymentMethods: … })` ที่เปิดเฉพาะปุ่มของแถวนั้น + `stripe.confirmPayment({ elements, clientSecret, redirect: 'if_required' })` (Stripe วาดปุ่มทางการเอง; อุปกรณ์ที่ใช้ไม่ได้จะมีข้อความอธิบายแทนที่จะซ่อนแถว)
   - **PromptPay**: `stripe.confirmPromptPayPayment(clientSecret, { payment_method: { billing_details: { email } } })` Stripe แสดง QR ใน modal ของตัวเอง
 - หลัง Stripe.js ตอบ หน้าต่างเรียก `POST /payments/{id}/confirm` แล้วโพลทุก 2 วินาทีระหว่าง `pending` (`PaymentStore.settle`) แสดงผลสำเร็จ/ล้มเหลว/รอดำเนินการ
-- ไม่มี publishable key = ใช้หน้า Stripe Checkout เดิม (redirect) ไม่พังของเดิม
+- **ไม่มี publishable key ก็ยังเลือกช่องทางได้:** หน้าต่างแสดงรายการ 5 ช่องทางเหมือนเดิม (โหมด `hosted`) แต่หลังเลือกจะกดปุ่ม "ไปชำระด้วย … ที่ Stripe" แล้วเซิร์ฟเวอร์สร้างหน้าของ Stripe ให้ตามที่เลือก: PromptPay = Checkout โหมด `payment` (`allowed_payment_method_types=promptpay`, จ่ายครั้งเดียว 1 รอบ) ส่วนบัตร/Apple Pay/Google Pay/Link = Checkout โหมด `subscription` ตามเดิม (Stripe แสดงวอลเล็ตที่อุปกรณ์รองรับเอง) ส่งช่องทางที่เลือกไปกับ `PUT /api/billing/plan { method }` กลับมาที่ `/app/billing?checkout=success&session_id=…` แล้ว `/api/billing/checkout/confirm` กับ webhook `checkout.session.completed` (โหมด payment) เปิดแผนให้ผ่าน `PaymentIntentSync.ApplyCheckoutAsync`
 - ข้อมูลบัตรพิมพ์ใน iframe ของ Stripe เท่านั้น ไม่ผ่านเซิร์ฟเวอร์เรา (PCI SAQ-A)
 
 ## 4. Backend (`siri_autopost_backend`)
@@ -88,7 +88,7 @@ var pi = await new PaymentIntentService(client).CreateAsync(new PaymentIntentCre
 | ค่า | ใช้ทำอะไร |
 |---|---|
 | `Stripe__SecretKey` | `sk_test_…`/`sk_live_…` ว่าง = ปิดการชำระเงินทั้งระบบ |
-| `Stripe__PublishableKey` | `pk_…` ของบัญชีเดียวกัน ว่าง = ใช้หน้า Stripe Checkout เดิมแทนหน้าต่างในแอป |
+| `Stripe__PublishableKey` | `pk_…` ของบัญชีเดียวกัน ตั้งแล้วกรอกบัตร/สแกน QR ในหน้าต่างของแอปเอง ว่าง = ยังเลือกช่องทางในหน้าต่างได้ แต่จ่ายที่หน้า Stripe |
 | `Stripe__WebhookSecret` | `whsec_…` ของ endpoint ข้างบน |
 | `Stripe__SubscriptionPaymentMethods` | ค่าเริ่มต้น `card,link` (Apple/Google Pay เป็น wallet ของบัตร จึงไม่ต้องใส่) ถ้าบัญชีใช้ Link ไม่ได้ให้เอา `link` ออก ว่าง = ตาม Dashboard |
 

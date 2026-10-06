@@ -29,7 +29,8 @@ public static class WebApplicationExtensions
     }
 
     // Applies pending EF Core migrations when Database:MigrateOnStartup is true (on in Development),
-    // then creates the platform-admin account from Admin:Email / Admin:Password if it does not exist.
+    // then creates the platform-admin account from Admin:Email / Admin:Password if it does not exist, or makes the
+    // existing account with that address an admin.
     public static async Task PrepareDatabaseAsync(this WebApplication app)
     {
         if (app.Configuration.GetValue<bool>("Database:MigrateOnStartup"))

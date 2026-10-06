@@ -47,7 +47,9 @@ public sealed class StripeWebhookParser
 
         switch (e.Type)
         {
-            case EventTypes.CheckoutSessionCompleted when e.Data.Object is Stripe.Checkout.Session { Mode: "subscription" } session:
+            // "subscription": the card page; "payment": the one-off PromptPay page (async_payment_succeeded: paid later, same session).
+            case EventTypes.CheckoutSessionCompleted or EventTypes.CheckoutSessionAsyncPaymentSucceeded
+                when e.Data.Object is Stripe.Checkout.Session { Mode: "subscription" or "payment" } session:
                 return new CheckoutCompletedEvent(e.Id, StripeMapping.Session(session));
             case EventTypes.CustomerSubscriptionCreated or EventTypes.CustomerSubscriptionUpdated or EventTypes.CustomerSubscriptionDeleted
                 when e.Data.Object is Subscription sub:

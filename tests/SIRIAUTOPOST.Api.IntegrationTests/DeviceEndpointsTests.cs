@@ -242,6 +242,50 @@ public class DeviceEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_video_whose_index_is_at_the_end_reaches_the_device_with_the_index_first()
+    {
+        var p = await PairAsync();
+        await p.Device.PutAsJsonAsync("/api/device/groups", new { groups = new[] { new { name = "Plants", url = PlantsUrl } } });
+        byte[] Box(string type, byte[] body)
+        {
+            var b = new byte[8 + body.Length];
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(b, (uint)b.Length);
+            System.Text.Encoding.ASCII.GetBytes(type).CopyTo(b, 4);
+            body.CopyTo(b, 8);
+            return b;
+        }
+        // ftyp, mdat, moov: what an export that writes the index last leaves (the Facebook composer never finished with such a file)
+        byte[] video = [.. Box("ftyp", System.Text.Encoding.ASCII.GetBytes("isom\0\0\u0002\0isomiso2avc1mp41")), .. Box("mdat", [1, 2, 3, 4, 5, 6, 7, 8]), .. Box("moov", Box("mvhd", new byte[100]))];
+        var form = new MultipartFormDataContent();
+        var content = new ByteArrayContent(video);
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("video/mp4");
+        form.Add(content, "file", "promo.mp4");
+        var media = (await (await p.Owner.PostAsync($"/api/workspaces/{p.Ws}/media", form)).Content.ReadFromJsonAsync<MediaDto>(Json))!;
+
+        (await p.Owner.PostAsJsonAsync($"/api/workspaces/{p.Ws}/posts/schedule", new
+        {
+            content = "มีวิดีโอ", mediaIds = new[] { media.Id }, startAt = DateTimeOffset.UtcNow.AddMinutes(5), useDelay = false, repeat = "none",
+            targets = new[] { new { accountId = p.Pair.AccountId, groups = new[] { "Plants" } } },
+        }, Json)).EnsureSuccessStatusCode();
+
+        using (factory.Clock.Advance(TimeSpan.FromMinutes(6)))
+        {
+            var job = (await (await p.Device.PostAsync("/api/device/jobs/claim", null)).Content.ReadFromJsonAsync<JobDto>(Json))!;
+            var served = await p.Device.GetByteArrayAsync($"/api/device/media/{Assert.Single(job.Media).Id}");
+            var types = new List<string>();
+            for (var pos = 0; pos < served.Length;)
+            {
+                types.Add(System.Text.Encoding.ASCII.GetString(served, pos + 4, 4));
+                pos += (int)System.Buffers.Binary.BinaryPrimitives.ReadUInt32BigEndian(served.AsSpan(pos, 4));
+            }
+            Assert.Equal(new[] { "ftyp", "moov", "mdat" }, types);
+            Assert.Equal(video.Length, served.Length); // lossless: the same boxes, only reordered
+            // The library keeps the file as it was uploaded.
+            Assert.Equal(video, await p.Owner.GetByteArrayAsync($"/api/workspaces/{p.Ws}/media/{media.Id}/content"));
+        }
+    }
+
+    [Fact]
     public async Task Unbinding_a_device_locks_it_out_and_frees_the_slot()
     {
         var p = await PairAsync();

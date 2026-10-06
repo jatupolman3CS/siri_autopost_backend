@@ -62,6 +62,9 @@ public class User : Entity
 
     public void SetPasswordHash(string hash) => PasswordHash = hash;
 
+    /// <summary>Makes an existing account a platform admin (the token must be issued again to carry the role).</summary>
+    public void PromoteToAdmin() => Role = UserRole.Admin;
+
     public bool HasSubscription => StripeSubscriptionId is not null;
 
     public void LinkStripeCustomer(string customerId) => StripeCustomerId = customerId;

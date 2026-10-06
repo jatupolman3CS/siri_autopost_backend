@@ -30,11 +30,14 @@ public static class StripeEvents
         return m;
     }
 
-    public static object Session(string id, string customer, string? subscription, Guid userId, string plan, string cycle, string? promo = null, string mode = "subscription") =>
+    public static object Session(
+        string id, string customer, string? subscription, Guid userId, string plan, string cycle, string? promo = null, string mode = "subscription",
+        string? paymentIntent = null, decimal baht = 0) =>
         new Dictionary<string, object?>
         {
             ["id"] = id, ["object"] = "checkout.session", ["mode"] = mode, ["status"] = "complete", ["payment_status"] = "paid",
             ["customer"] = customer, ["subscription"] = subscription, ["client_reference_id"] = userId.ToString(),
+            ["payment_intent"] = paymentIntent, ["amount_total"] = (long)(baht * 100),
             ["metadata"] = Metadata(userId, plan, cycle, promo),
         };
 

@@ -14,7 +14,8 @@ public sealed class BillingController : ControllerBase
 {
     /// <param name="Cycle">Billing cycle; omitted keeps the current one.</param>
     /// <param name="PromoCode">Applies to the first invoice of a new subscription only.</param>
-    public sealed record ChangePlanRequest(PlanKey Plan, BillingCycle? Cycle, string? PromoCode);
+    /// <param name="Method">The way to pay picked in the payment window when Stripe's own page is used (promptpay = a one-off page for one period).</param>
+    public sealed record ChangePlanRequest(PlanKey Plan, BillingCycle? Cycle, string? PromoCode, PaymentMethodKind? Method = null);
 
     /// <param name="SessionId">The id Stripe put in the return address (cs_...).</param>
     public sealed record ConfirmCheckoutRequest(string SessionId);
@@ -46,7 +47,7 @@ public sealed class BillingController : ControllerBase
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     public Task<PlanChangeDto> ChangePlan(
         ChangePlanRequest request, [FromServices] ICommandHandler<ChangePlanCommand, PlanChangeDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new ChangePlanCommand(request.Plan, request.Cycle, request.PromoCode), ct);
+        handler.HandleAsync(new ChangePlanCommand(request.Plan, request.Cycle, request.PromoCode, request.Method), ct);
 
     /// <summary>The customer is back from Stripe Checkout: applies the paid session (the webhook does the same).</summary>
     [HttpPost("billing/checkout/confirm")]

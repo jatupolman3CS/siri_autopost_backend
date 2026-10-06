@@ -69,6 +69,7 @@ public sealed class ChangePlanCommandValidator : AbstractValidator<ChangePlanCom
         RuleFor(x => x.Plan).IsInEnum().WithMessage("แผนไม่ถูกต้อง");
         RuleFor(x => x.Cycle).IsInEnum().WithMessage("รอบบิลไม่ถูกต้อง");
         RuleFor(x => x.PromoCode).MaximumLength(30).WithMessage("โค้ดส่วนลดยาวเกิน 30 ตัวอักษร");
+        RuleFor(x => x.Method).IsInEnum().WithMessage("ช่องทางชำระเงินไม่ถูกต้อง");
     }
 }
 

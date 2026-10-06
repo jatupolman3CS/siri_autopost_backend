@@ -134,6 +134,27 @@ public sealed class PaymentIntentSync(
         return attempt;
     }
 
+    /// <summary>
+    /// A paid one-off Checkout session (the PromptPay page of Stripe, used when the in-app window has no publishable key):
+    /// its payment gets an attempt of its own now, then goes the same way as one made in the window.
+    /// </summary>
+    public async Task ApplyCheckoutAsync(CheckoutSessionSnapshot session, CancellationToken ct)
+    {
+        var key = $"checkout:{session.Id}";
+        if (await processed.ExistsAsync(key, ct)) return;
+        if (session is not { UserId: { } userId, PaymentIntentId: { } intentId, Plan: { } plan, Cycle: { } cycle }) return; // not one of ours
+        var now = clock.GetUtcNow();
+        var attempt = await attempts.GetByIntentAsync(intentId, ct);
+        if (attempt is null)
+        {
+            attempt = PaymentAttempt.Start(
+                userId, intentId, null, PaymentFlow.Prepaid, PaymentMethodKind.Promptpay, plan, cycle, session.Amount, session.PromoCode, now);
+            attempts.Add(attempt);
+        }
+        processed.Add(ProcessedPaymentEvent.Create(key, "checkout", now));
+        await ApplyAsync(attempt, ct);
+    }
+
     public async Task ApplyAsync(PaymentAttempt attempt, CancellationToken ct)
     {
         if (attempt.State == PaymentAttemptState.Succeeded) return; // final: nothing Stripe says later changes it

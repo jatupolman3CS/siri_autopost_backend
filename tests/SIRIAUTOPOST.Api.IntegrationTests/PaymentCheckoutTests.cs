@@ -238,6 +238,94 @@ public class PaymentCheckoutTests(ApiFactory factory)
         }
     }
 
+    // --- Stripe's own page, when the window has no publishable key: the way to pay picked in the window still decides the page ---
+
+    private static async Task<PlanChangeDto> ChoosePlanAsync(HttpClient c, object body)
+    {
+        var res = await c.PutAsJsonAsync("/api/billing/plan", body, Json);
+        res.EnsureSuccessStatusCode();
+        return (await res.Content.ReadFromJsonAsync<PlanChangeDto>(Json))!;
+    }
+
+    [Fact]
+    public async Task Picking_PromptPay_for_Stripes_own_page_makes_a_one_off_page_for_one_period_that_the_return_and_the_webhook_apply_once()
+    {
+        var (client, auth, _) = await factory.SignUpAsync();
+
+        var change = await ChoosePlanAsync(client, new { plan = "pro", cycle = "year", method = "promptpay" });
+        Assert.StartsWith("https://checkout.stripe.test/", change.CheckoutUrl);
+        Assert.Equal(PlanKey.Free, change.User.Plan); // nothing is paid yet
+        var session = factory.Payments.LastSessionOf(auth.User.Id);
+        var request = factory.Payments.Session(session);
+        Assert.Equal((7584, (int?)null, PlanKey.Pro, BillingCycle.Year), (request.PrepaidAmount, request.ChargeOverride, request.Plan, request.Cycle));
+
+        var intent = factory.Payments.PayCheckout(session);
+        var customer = factory.Payments.CustomerOf(auth.User.Id);
+        var confirmed = await client.PostAsJsonAsync("/api/billing/checkout/confirm", new { sessionId = session }, Json);
+        confirmed.EnsureSuccessStatusCode();
+        Assert.Equal((PlanKey.Pro, BillingCycle.Year), ((await confirmed.Content.ReadFromJsonAsync<UserDto>(Json))!.Plan, (await MeAsync(client)).Cycle));
+
+        // Stripe's own webhook for the same session, and the browser coming back again, change nothing.
+        await factory.SendAsync("checkout.session.completed",
+            StripeEvents.Session(session, customer, null, auth.User.Id, "pro", "year", null, "payment", intent, 7584));
+        (await client.PostAsJsonAsync("/api/billing/checkout/confirm", new { sessionId = session }, Json)).EnsureSuccessStatusCode();
+
+        var billing = await BillingAsync(client);
+        Assert.False(billing.HasSubscription);
+        Assert.True(billing.RenewsAt > DateTimeOffset.UtcNow.AddMonths(11) && billing.RenewsAt < DateTimeOffset.UtcNow.AddMonths(13));
+        var charge = Assert.Single((await client.GetFromJsonAsync<List<TransactionDto>>("/api/billing/invoices", Json))!);
+        Assert.Equal((TransactionType.Charge, 7584m, true), (charge.Type, charge.Amount, charge.Refundable));
+    }
+
+    [Fact]
+    public async Task The_webhook_alone_can_apply_a_one_off_page_and_every_other_way_to_pay_gets_the_subscription_page()
+    {
+        var (client, auth, _) = await factory.SignUpAsync();
+        await ChoosePlanAsync(client, new { plan = "basic", method = "promptpay" });
+        var session = factory.Payments.LastSessionOf(auth.User.Id);
+        var intent = factory.Payments.PayCheckout(session);
+        await factory.SendAsync("checkout.session.completed",
+            StripeEvents.Session(session, factory.Payments.CustomerOf(auth.User.Id), null, auth.User.Id, "basic", "month", null, "payment", intent, 290));
+        Assert.Equal(PlanKey.Basic, (await MeAsync(client)).Plan);
+
+        foreach (var method in new[] { "card", "apple_pay", "google_pay", "link" })
+        {
+            var (other, otherAuth, _) = await factory.SignUpAsync();
+            await ChoosePlanAsync(other, new { plan = "pro", method });
+            Assert.Null(factory.Payments.Session(factory.Payments.LastSessionOf(otherAuth.User.Id)).PrepaidAmount);
+        }
+    }
+
+    [Fact]
+    public async Task A_promo_code_or_the_test_amount_sets_the_price_of_the_one_off_page_and_a_subscriber_cannot_use_it()
+    {
+        var admin = await factory.AdminAsync();
+        var code = ("PP" + Guid.NewGuid().ToString("N")[..8]).ToUpperInvariant();
+        (await admin.PostAsJsonAsync("/api/admin/promos", new { code, discount = "d20" }, Json)).EnsureSuccessStatusCode();
+        var (client, auth, _) = await factory.SignUpAsync();
+        await ChoosePlanAsync(client, new { plan = "pro", method = "promptpay", promoCode = code });
+        Assert.Equal(632, factory.Payments.Session(factory.Payments.LastSessionOf(auth.User.Id)).PrepaidAmount);
+
+        var (tester, testerAuth, _) = await factory.SignUpAsync();
+        (await admin.PutAsJsonAsync("/api/admin/payment-override", new { enabled = true, amount = 25, emails = new[] { testerAuth.User.Email } }, Json)).EnsureSuccessStatusCode();
+        try
+        {
+            await ChoosePlanAsync(tester, new { plan = "pro", method = "promptpay" });
+            Assert.Equal(25, factory.Payments.Session(factory.Payments.LastSessionOf(testerAuth.User.Id)).PrepaidAmount);
+        }
+        finally
+        {
+            (await admin.PutAsJsonAsync("/api/admin/payment-override", new { enabled = false, amount = 10, emails = Array.Empty<string>() }, Json)).EnsureSuccessStatusCode();
+        }
+
+        var (subscriber, subscriberAuth, _) = await factory.SignUpAsync();
+        await factory.SubscribeAsync(subscriber, subscriberAuth, PlanKey.Basic);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity,
+            (await subscriber.PutAsJsonAsync("/api/billing/plan", new { plan = "pro", method = "promptpay" }, Json)).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest,
+            (await client.PutAsJsonAsync("/api/billing/plan", new { plan = "pro", method = "bitcoin" }, Json)).StatusCode);
+    }
+
     [Fact]
     public async Task A_promo_code_takes_its_discount_off_the_first_payment_and_is_counted_when_it_is_paid()
     {

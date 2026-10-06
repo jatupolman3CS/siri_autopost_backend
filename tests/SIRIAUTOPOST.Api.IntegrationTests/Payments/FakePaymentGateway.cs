@@ -19,6 +19,7 @@ public sealed class FakePaymentGateway(string webhookSecret) : IPaymentGateway
     private readonly ConcurrentDictionary<Guid, string> customers = new();
     private readonly ConcurrentDictionary<string, CheckoutRequest> sessions = new();
     private readonly ConcurrentDictionary<string, string> sessionSubscriptions = new();
+    private readonly ConcurrentDictionary<string, string> sessionIntents = new();
     private readonly ConcurrentDictionary<string, SubscriptionSnapshot> subscriptions = new();
     private readonly ConcurrentDictionary<string, RefundSnapshot> refunds = new();
     private int counter;
@@ -45,10 +46,17 @@ public sealed class FakePaymentGateway(string webhookSecret) : IPaymentGateway
     public string LastSessionOf(Guid userId) =>
         sessions.Where(s => s.Value.UserId == userId).OrderBy(s => s.Key, StringComparer.Ordinal).Last().Key;
 
-    /// <summary>The customer pays on Stripe's page: the session completes and a subscription starts.</summary>
+    /// <summary>The customer pays on Stripe's page: the session completes and a subscription starts (a one-off PromptPay page: its PaymentIntent is paid, and its id returned).</summary>
     public string PayCheckout(string sessionId)
     {
         var r = sessions[sessionId];
+        if (r.PrepaidAmount is { } baht)
+        {
+            var intent = Make(r.UserId, baht, null, PaymentFlow.Prepaid).IntentId;
+            PayIntent(intent, PaymentMethodKind.Promptpay);
+            sessionIntents[sessionId] = intent;
+            return intent;
+        }
         var id = Next("sub");
         subscriptions[id] = new SubscriptionSnapshot(id, r.CustomerId, SubscriptionState.Active, r.Plan, r.Cycle, DateTimeOffset.UtcNow.AddMonths(1), false);
         sessionSubscriptions[sessionId] = id;
@@ -72,6 +80,10 @@ public sealed class FakePaymentGateway(string webhookSecret) : IPaymentGateway
     {
         if (!sessions.TryGetValue(sessionId, out var r)) throw new PaymentGatewayException("No such session");
         var paid = sessionSubscriptions.TryGetValue(sessionId, out var sub);
+        if (r.PrepaidAmount is { } baht)
+            return Task.FromResult(new CheckoutSessionSnapshot(
+                sessionId, r.CustomerId, null, sessionIntents.ContainsKey(sessionId), r.UserId, r.PromoCode,
+                sessionIntents.GetValueOrDefault(sessionId), true, r.Plan, r.Cycle, baht));
         return Task.FromResult(new CheckoutSessionSnapshot(sessionId, r.CustomerId, sub, paid, r.UserId, r.PromoCode));
     }
 

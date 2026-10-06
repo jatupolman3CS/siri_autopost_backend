@@ -53,7 +53,7 @@ own namespace (`<app>-prd` / `<app>-dev`, like the other systems), own `api-env`
    |---|---|
    | `ConnectionStrings__Default` | **required**, e.g. `Host=...;Database=SIRIAUTOPOST_PRD;Username=...;Password=...;Gss Encryption Mode=Disable` (DEV: `Database=SIRIAUTOPOST`) |
    | `Jwt__Key` | **required**, 32+ characters (the API does not start without it); different per environment |
-   | `Admin__Email`, `Admin__Password` | creates the platform admin on first start. Optional for the pod, but without it nobody can reach the admin area (customers, refunds, plans) |
+   | `Admin__Email`, `Admin__Password` | creates the platform admin on first start. Optional for the pod, but without it nobody can reach the admin area (customers, refunds, plans). If an account with `Admin__Email` already exists (signed up first), it is made an admin on the top plan (Agency/Premium) on the next start (password stays; `Admin__Password` is then not needed); the person signs in again |
    | `Stripe__SecretKey` | the Stripe secret key (`sk_live_...`; DEV `sk_test_...`). Without it online payment is off: the dashboard says so and paid plans cannot be bought |
    | `Stripe__WebhookSecret` | the signing secret (`whsec_...`) of the webhook endpoint below. Without it Stripe's calls are rejected, so a paid plan would never be applied or renewed |
    | `Ai__ApiKey` | optional, the platform's Anthropic key for the AI post writer (Pro and above). Without it the AI buttons are disabled; `Ai__Model` and `Ai__DailyLimit` (drafts per workspace per day, default 50) are optional |

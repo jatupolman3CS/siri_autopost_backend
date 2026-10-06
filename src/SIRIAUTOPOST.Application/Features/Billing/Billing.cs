@@ -66,7 +66,11 @@ public sealed class GetBillingQueryHandler(
 /// cancellation). A promo code applies to the first invoice only. A customer the admin listed for a payment test
 /// (<see cref="PaymentOverride"/>) is charged the test amount for the period instead of the plan's price.
 /// </summary>
-public sealed record ChangePlanCommand(PlanKey Plan, BillingCycle? Cycle, string? PromoCode) : ICommand<PlanChangeDto>;
+/// <remarks>
+/// <paramref name="Method"/> is the way to pay picked in the payment window when Stripe's own page is used: PromptPay gets a
+/// one-off page for one period of the plan (Stripe cannot put it on a subscription), every other way the subscription page.
+/// </remarks>
+public sealed record ChangePlanCommand(PlanKey Plan, BillingCycle? Cycle, string? PromoCode, PaymentMethodKind? Method = null) : ICommand<PlanChangeDto>;
 
 public sealed class ChangePlanCommandHandler(
     IUserRepository users, IPlanRepository plans, IPromoRepository promos, IAuditRepository audit, IPaymentOverrideRepository overrides,
@@ -92,9 +96,10 @@ public sealed class ChangePlanCommandHandler(
         else if (user.HasSubscription)
         {
             if (promoCode.Length > 0) throw new DomainException("ใช้โค้ดส่วนลดได้ตอนสมัครแผนครั้งแรกเท่านั้น");
+            if (c.Method == PaymentMethodKind.Promptpay) throw new DomainException("คุณมีการสมัครสมาชิกอยู่แล้ว PromptPay ใช้ตัดซ้ำอัตโนมัติไม่ได้ เปลี่ยนแผนด้วยบัตรที่ผูกไว้ หรือยกเลิกการสมัครก่อน");
             await MoveSubscriptionAsync(user, plan, cycle, await TestAmountAsync(user, promoCode, ct), now, ct);
         }
-        else checkoutUrl = await StartCheckoutAsync(user, plan, cycle, promoCode, await TestAmountAsync(user, promoCode, ct), now, ct);
+        else checkoutUrl = await StartCheckoutAsync(user, plan, cycle, promoCode, await TestAmountAsync(user, promoCode, ct), c.Method, now, ct);
 
         await uow.SaveChangesAsync(ct);
         return new PlanChangeDto(UserDto.From(user), checkoutUrl);
@@ -147,7 +152,7 @@ public sealed class ChangePlanCommandHandler(
     }
 
     private async Task<string> StartCheckoutAsync(
-        User user, PlanSetting plan, BillingCycle cycle, string promoCode, int? testAmount, DateTimeOffset now, CancellationToken ct)
+        User user, PlanSetting plan, BillingCycle cycle, string promoCode, int? testAmount, PaymentMethodKind? method, DateTimeOffset now, CancellationToken ct)
     {
         if (!gateway.Enabled) throw new DomainException(NotReady);
         Promo? promo = null;
@@ -164,11 +169,18 @@ public sealed class ChangePlanCommandHandler(
         }
         var web = urls.WebBase;
         var discount = promo is null ? 0 : Pricing.FirstDiscount(plan.Price, cycle, promo.Discount);
+        int? prepaid = null;
+        if (method == PaymentMethodKind.Promptpay)
+        {
+            prepaid = testAmount ?? Pricing.Charge(plan.Price, cycle, promo?.Discount);
+            if (prepaid < PlanSetting.MinPaidPrice)
+                throw new DomainException($"ยอดชำระหลังหักส่วนลดต่ำกว่า {PlanSetting.MinPaidPrice} บาท ซึ่งเป็นขั้นต่ำที่ Stripe เรียกเก็บได้ ลองไม่ใช้โค้ดส่วนลด");
+        }
         var url = await gateway.CreateCheckoutAsync(new CheckoutRequest(
             user.Id, customer, plan.Key, cycle, plan.Price, discount, promo?.Code,
             SuccessUrl: $"{web}/app/billing?checkout=success&session_id={{CHECKOUT_SESSION_ID}}",
             CancelUrl: $"{web}/app/billing?checkout=cancel",
-            ChargeOverride: testAmount), ct);
+            ChargeOverride: testAmount, PrepaidAmount: prepaid), ct);
         RecordTestAmount(user, plan.Key, testAmount, now);
         return url;
     }
@@ -188,7 +200,7 @@ public sealed class ChangePlanCommandHandler(
 public sealed record ConfirmCheckoutCommand(string SessionId) : ICommand<UserDto>;
 
 public sealed class ConfirmCheckoutCommandHandler(
-    IUserRepository users, IPaymentGateway gateway, PaymentSync sync, ICurrentUser current, IUnitOfWork uow)
+    IUserRepository users, IPaymentGateway gateway, PaymentSync sync, PaymentIntentSync intents, ICurrentUser current, IUnitOfWork uow)
     : ICommandHandler<ConfirmCheckoutCommand, UserDto>
 {
     public async Task<UserDto> HandleAsync(ConfirmCheckoutCommand c, CancellationToken ct = default)
@@ -198,7 +210,8 @@ public sealed class ConfirmCheckoutCommandHandler(
         // Someone else's session looks like a missing one.
         if (session.UserId != user.Id) throw new NotFoundException("การชำระเงิน", c.SessionId);
         if (!session.Paid) throw new DomainException("การชำระเงินยังไม่เสร็จสมบูรณ์");
-        await sync.CompleteCheckoutAsync(session, user.Id, ct);
+        if (session.Prepaid) await intents.ApplyCheckoutAsync(session, ct);
+        else await sync.CompleteCheckoutAsync(session, user.Id, ct);
         try
         {
             await uow.SaveChangesAsync(ct);
@@ -242,7 +255,8 @@ public sealed class StripeWebhookCommandHandler(
         switch (evt)
         {
             case CheckoutCompletedEvent e:
-                if (e.Session.Paid) await sync.CompleteCheckoutAsync(e.Session, PaymentSync.System, ct);
+                if (e.Session.Paid && e.Session.Prepaid) await intents.ApplyCheckoutAsync(e.Session, ct);
+                else if (e.Session.Paid) await sync.CompleteCheckoutAsync(e.Session, PaymentSync.System, ct);
                 break;
             case SubscriptionChangedEvent e:
                 // Re-read the subscription: events can arrive late or out of order, Stripe's current state is the truth.

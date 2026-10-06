@@ -67,6 +67,41 @@ public sealed class StripePaymentGateway : IPaymentGateway
     public Task<string> CreateCheckoutAsync(CheckoutRequest r, CancellationToken ct = default) => Call(async () =>
     {
         var metadata = StripeMapping.Metadata(r.UserId, r.Plan, r.Cycle, r.PromoCode);
+        if (r.PrepaidAmount is { } prepaid)
+        {
+            // PromptPay: Stripe's page for ONE payment (it is not allowed in subscription mode), for one period of the plan.
+            metadata[StripeMapping.KindKey] = StripeMapping.PrepaidKind;
+            var once = await new Stripe.Checkout.SessionService(Client).CreateAsync(new Stripe.Checkout.SessionCreateOptions
+            {
+                Mode = "payment",
+                AllowedPaymentMethodTypes = ["promptpay"],
+                Customer = r.CustomerId,
+                ClientReferenceId = r.UserId.ToString(),
+                SuccessUrl = r.SuccessUrl,
+                CancelUrl = r.CancelUrl,
+                Locale = "th",
+                LineItems =
+                [
+                    new Stripe.Checkout.SessionLineItemOptions
+                    {
+                        Quantity = 1,
+                        PriceData = new Stripe.Checkout.SessionLineItemPriceDataOptions
+                        {
+                            Currency = Currency,
+                            Product = await ProductAsync(r.Plan, ct),
+                            UnitAmount = Money.Satang(prepaid),
+                        },
+                    },
+                ],
+                Metadata = metadata,
+                PaymentIntentData = new Stripe.Checkout.SessionPaymentIntentDataOptions
+                {
+                    Metadata = metadata,
+                    Description = $"AutoPost {r.Plan} ({StripeMapping.Key(r.Cycle)})",
+                },
+            }, cancellationToken: ct);
+            return once.Url ?? throw new PaymentGatewayException("Stripe ไม่ได้ส่งหน้าชำระเงินกลับมา");
+        }
         var session = new Stripe.Checkout.SessionCreateOptions
         {
             Mode = "subscription",

@@ -16,6 +16,8 @@ def main():
     ap.add_argument("--workspace", required=True)
     ap.add_argument("--drop")
     ap.add_argument("--sizes")
+    ap.add_argument("--active-only", action="store_true", help="take the --drop images only off posts that are switched on (posts that are off keep them)")
+    ap.add_argument("--keep-files-on", action="store_true", help="do not switch the dropped files off in the media library")
     ap.add_argument("--commit", action="store_true")
     a = ap.parse_args()
     drop = json.load(open(a.drop)) if a.drop else []
@@ -23,10 +25,11 @@ def main():
     conn = db.connect(a.db); conn.autocommit = False; cur = conn.cursor()
     if drop:
         cur.execute('update "COLLECTION_POSTS" set media_ids = array(select m from unnest(media_ids) m where m <> all(%s::uuid[])), updated_at=now() '
-                    'where workspace_id=%s and media_ids && %s::uuid[]', (drop, a.workspace, drop))
+                    'where workspace_id=%s and media_ids && %s::uuid[]' + (' and active' if a.active_only else ''), (drop, a.workspace, drop))
         print("posts that lost an unrepairable image:", cur.rowcount)
-        cur.execute('update "MEDIA_FILES" set active=false where workspace_id=%s and id = any(%s::uuid[])', (a.workspace, drop))
-        print("library files switched off:", cur.rowcount)
+        if not a.keep_files_on:
+            cur.execute('update "MEDIA_FILES" set active=false where workspace_id=%s and id = any(%s::uuid[])', (a.workspace, drop))
+            print("library files switched off:", cur.rowcount)
     n = 0
     for mid, size in sizes.items():
         cur.execute('update "MEDIA_FILES" set size=%s where workspace_id=%s and id=%s', (int(size), a.workspace, mid)); n += cur.rowcount

@@ -392,6 +392,34 @@ public class StripePaymentGatewayTests
     }
 
     [Fact]
+    public async Task The_PromptPay_page_is_a_one_off_payment_session_for_one_period_not_a_subscription()
+    {
+        var stub = new Stub();
+        stub.Answer = c => (c.Method.Method, c.Path) switch
+        {
+            ("GET", "/v1/products/autopost_pro") => (HttpStatusCode.OK, """{"id":"autopost_pro","object":"product"}"""),
+            ("POST", "/v1/checkout/sessions") => (HttpStatusCode.OK, """{"id":"cs_test_pp","object":"checkout.session","url":"https://checkout.stripe.com/c/pay/cs_test_pp"}"""),
+            _ => (HttpStatusCode.NotFound, Error("resource_missing", "unexpected " + c.Path)),
+        };
+
+        var url = await Gateway(stub).CreateCheckoutAsync(new CheckoutRequest(
+            UserId, "cus_1", PlanKey.Pro, BillingCycle.Year, 790, 0, "LAUNCH20",
+            "https://app.test/app/billing?checkout=success&session_id={CHECKOUT_SESSION_ID}", "https://app.test/app/billing?checkout=cancel",
+            ChargeOverride: null, PrepaidAmount: 7000));
+
+        Assert.Equal("https://checkout.stripe.com/c/pay/cs_test_pp", url);
+        Assert.DoesNotContain(stub.Calls, c => c.Path == "/v1/coupons"); // the promo is already in the amount
+        var s = stub.Calls.Single(c => c.Path == "/v1/checkout/sessions").Fields;
+        Assert.Equal(("payment", "promptpay", "cus_1", UserId.ToString()), (s["mode"], s["allowed_payment_method_types[0]"], s["customer"], s["client_reference_id"]));
+        Assert.Equal(("autopost_pro", "thb", "700000", "1"), (
+            s["line_items[0][price_data][product]"], s["line_items[0][price_data][currency]"], s["line_items[0][price_data][unit_amount]"], s["line_items[0][quantity]"]));
+        Assert.False(s.ContainsKey("line_items[0][price_data][recurring][interval]"));
+        Assert.Equal(("prepaid", "pro", "year"), (s["metadata[kind]"], s["metadata[plan]"], s["metadata[cycle]"]));
+        Assert.Equal(("prepaid", "pro"), (s["payment_intent_data[metadata][kind]"], s["payment_intent_data[metadata][plan]"]));
+        Assert.False(s.ContainsKey("subscription_data[metadata][plan]"));
+    }
+
+    [Fact]
     public async Task A_test_amount_replaces_the_price_of_the_subscription_period()
     {
         var stub = new Stub();

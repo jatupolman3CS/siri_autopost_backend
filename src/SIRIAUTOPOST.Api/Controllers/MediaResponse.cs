@@ -1,11 +1,44 @@
 using Microsoft.AspNetCore.Mvc;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Domain.Services;
 
 namespace SIRIAUTOPOST.Api.Controllers;
 
 public static class MediaResponse
 {
+    private static readonly string[] Mpeg4Types = ["video/mp4", "video/quicktime", "video/x-m4v"];
+
+    /// <summary>
+    /// The file for a posting browser. An MP4 whose index sits after its picture data, or that carries a cover picture,
+    /// never finished processing in Facebook's composer, so a video like that goes out in the layout Facebook takes
+    /// (<see cref="Mp4Layout"/>: lossless, the library file itself is not touched). It is read into memory for that; library
+    /// files are 100 MB at most. Every other file is sent as <see cref="ToResultAsync"/> does.
+    /// </summary>
+    public static async Task<IActionResult> ToDeviceResultAsync(this ControllerBase c, MediaContent m, IHttpClientFactory http, IObjectStorage storage, CancellationToken ct)
+    {
+        var result = await c.ToResultAsync(m, http, storage, ct);
+        if (!Mpeg4Types.Contains(m.ContentType, StringComparer.OrdinalIgnoreCase)) return result;
+        byte[] bytes;
+        switch (result)
+        {
+            case FileContentResult content:
+                bytes = content.FileContents;
+                break;
+            case FileStreamResult stream:
+                await using (stream.FileStream)
+                {
+                    var buffer = new MemoryStream();
+                    await stream.FileStream.CopyToAsync(buffer, ct);
+                    bytes = buffer.ToArray();
+                }
+                break;
+            default:
+                return result; // a 404 or 502
+        }
+        return c.File(Mp4Layout.ForFacebook(bytes) ?? bytes, m.ContentType, m.Name);
+    }
+
     /// <summary>
     /// The file as a response. Files in object storage are streamed through the API (not redirected), so the
     /// bucket stays private and needs no CORS rule. <c>r2://key</c> addresses are read with the bucket's keys;

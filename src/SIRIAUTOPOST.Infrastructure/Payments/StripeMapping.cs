@@ -63,7 +63,12 @@ internal static class StripeMapping
         var paid = s.Status == "complete" && s.PaymentStatus is "paid" or "no_payment_required";
         var user = Guid.TryParse(s.ClientReferenceId, out var id) ? id : (Guid?)null;
         var promo = s.Metadata is not null && s.Metadata.TryGetValue(PromoKey, out var code) ? code : null;
-        return new CheckoutSessionSnapshot(s.Id, s.CustomerId, s.SubscriptionId, paid, user, promo);
+        // A "payment" mode session is the one-off PromptPay page: it carries the plan and cycle in its metadata.
+        var prepaid = s.Mode == "payment";
+        var (plan, cycle) = prepaid ? PlanOf(s.Metadata) : (null, null);
+        return new CheckoutSessionSnapshot(
+            s.Id, s.CustomerId, s.SubscriptionId, paid, user, promo,
+            s.PaymentIntentId, prepaid, plan, cycle, Money.FromSatang(s.AmountTotal ?? 0));
     }
 
     /// <param name="paid">The amount is what was collected (AmountPaid) rather than what was asked for (AmountDue).</param>

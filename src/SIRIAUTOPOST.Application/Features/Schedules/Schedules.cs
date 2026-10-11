@@ -114,7 +114,7 @@ public sealed class CreateScheduleCommandHandler(
                 : "ชุดโพสต์นี้ยังไม่มีโพสต์ เพิ่มโพสต์ก่อนสร้างตาราง");
         var accountList = await accounts.ListAsync(ws.Id, ct);
         var poster = LinkSetAccounts.PostingAccount(set, accountList);
-        if (poster is null || poster.Platform != Platform.Fb) throw new DomainException(NoDevice);
+        if (poster is null || poster.Platform != Platform.Fb) throw new DomainException(LinkSetAccounts.NoPosterReason(accountList));
         if (!poster.IsConnected) throw new DomainException($"บัญชี {poster.Name} ยังไม่ได้เชื่อมกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อนสร้างตารางโพสต์");
         var targets = ScheduleTargets.Resolve(set, await setLinks.ListBySetAsync(ws.Id, set.Id, ct), accountList);
         if (targets.Count == 0) throw new DomainException("ชุดลิงก์นี้ยังไม่มีกลุ่มที่เปิดใช้งานและลิงก์ถูกต้อง หรือบัญชีอื่นให้โพสต์");
@@ -313,7 +313,7 @@ public sealed class CreateTestPostCommandHandler(
             }
             account = c.DeviceId is { } chosen
                 ? TestDevices.AccountOf(accountList, chosen)
-                : LinkSetAccounts.PostingAccount(set, accountList) ?? throw new DomainException(CreateScheduleCommandHandler.NoDevice);
+                : LinkSetAccounts.PostingAccount(set, accountList) ?? throw new DomainException(LinkSetAccounts.NoPosterReason(accountList));
         }
 
         var all = await collectionPosts.ListByCollectionAsync(ws.Id, collection.Id, ct);

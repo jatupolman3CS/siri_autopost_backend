@@ -55,7 +55,8 @@ public sealed class GetBackupQueryHandler(
         var backupPosts = allPosts.Where(p => !inCollections.Contains(p.Id)).Select(Backed).ToList();
         var backupSets = allSets.Select((s, i) => new BackupLinkSetDto(
             setNames[i], s.PostAsAccountId, s.AccountIds,
-            linksBy[s.Id].Select(l => new BackupLinkDto(l.Name, l.Url, l.Code, l.DailyMax, l.Enabled)).ToList())).ToList();
+            linksBy[s.Id].Select(l => new BackupLinkDto(l.Name, l.Url, l.Code, l.DailyMax, l.Enabled)).ToList(),
+            s.RandomOrder, s.DailyPerGroup)).ToList();
 
         var backupSchedules = new List<BackupScheduleDto>();
         foreach (var s in await schedules.ListAsync(ws.Id, ct))
@@ -189,9 +190,11 @@ public sealed class RestoreBackupCommandHandler(
         for (var i = 0; i < b.LinkSets.Count; i++)
         {
             var bs = b.LinkSets[i];
-            var postAs = bs.PostAsAccountId is { } id && facebook.Contains(id) ? id : (Guid?)null;
+            // The extension of the file when this workspace still has it; else the only connected one (a set belongs to
+            // an extension from the start), else nobody: with several the person picks, and nothing posts meanwhile.
+            var postAs = (bs.PostAsAccountId is { } id && facebook.Contains(id) ? id : (Guid?)null) ?? LinkOwnership.OnlyConnected(accountList)?.Id;
             var set = LinkSet.Create(ws.Id, bs.Name, postAs, now, i);
-            set.Update(bs.Name, postAs, (bs.AccountIds ?? []).Where(known.Contains));
+            set.Update(bs.Name, postAs, (bs.AccountIds ?? []).Where(known.Contains), bs.RandomOrder, bs.DailyPerGroup);
             if (bs.Links.Count > LinkSet.MaxLinks) throw new DomainException($"ชุดลิงก์ \"{bs.Name}\" มีลิงก์เกิน {LinkSet.MaxLinks} ลิงก์");
             var own = new List<SetLink>();
             for (var k = 0; k < bs.Links.Count; k++)

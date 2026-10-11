@@ -88,6 +88,17 @@ public class SocialAccount : Entity
 
     public string? UrlFor(string group) => GroupLinks.FirstOrDefault(l => l.Name == group)?.Url;
 
+    /// <summary>
+    /// A browser that pairs again takes its old account back: the same account (its link sets, groups and history), a new
+    /// device, healthy (the pairing is a fresh login of that browser).
+    /// </summary>
+    public void Reconnect(Device device)
+    {
+        DeviceId = device.Id;
+        Health = AccountHealth.Ok;
+        Name = $"Facebook · {device.Name}";
+    }
+
     /// <summary>The device was unbound: the account stays (with its history) but cannot post.</summary>
     public void Disconnect()
     {

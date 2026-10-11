@@ -14,7 +14,10 @@ public sealed class LinkSetsController : ControllerBase
     public sealed record CreateLinkSetRequest(string Name, Guid? PostAsAccountId);
 
     public sealed record SetActiveRequest(bool Active);
-    public sealed record UpdateLinkSetRequest(string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds);
+    /// <param name="RandomOrder">Null keeps the stored value.</param>
+    /// <param name="DailyPerGroup">Posts a day per group (0-50, 0 = no limit from the set); null keeps the stored value.</param>
+    public sealed record UpdateLinkSetRequest(
+        string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds, bool? RandomOrder = null, int? DailyPerGroup = null);
 
     /// <summary>A blank or invalid address is allowed: the row is created invalid so the web app can add an empty row.</summary>
     public sealed record AddLinkRequest(string? Name, string? Url, string? Code, int? DailyMax);
@@ -40,7 +43,7 @@ public sealed class LinkSetsController : ControllerBase
     [HttpPut("link-sets/{id:guid}")]
     public Task<LinkSetDto> Update(
         Guid wsId, Guid id, UpdateLinkSetRequest r, [FromServices] ICommandHandler<UpdateLinkSetCommand, LinkSetDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new UpdateLinkSetCommand(wsId, id, r.Name, r.PostAsAccountId, r.AccountIds), ct);
+        handler.HandleAsync(new UpdateLinkSetCommand(wsId, id, r.Name, r.PostAsAccountId, r.AccountIds, r.RandomOrder, r.DailyPerGroup), ct);
 
     /// <summary>Deletes the set and its links; 422 while a schedule uses it.</summary>
     [HttpPut("link-sets/{id:guid}/active")]

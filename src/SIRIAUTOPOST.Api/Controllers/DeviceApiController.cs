@@ -24,7 +24,7 @@ namespace SIRIAUTOPOST.Api.Controllers;
 [Authorize(AuthenticationSchemes = DeviceKeyAuthenticationHandler.SchemeName)]
 public sealed class DeviceApiController : ControllerBase
 {
-    public sealed record HeartbeatRequest(string? Version);
+    public sealed record HeartbeatRequest(string? Version, bool? SessionOk = null);
     public sealed record GroupsRequest(IReadOnlyList<GroupLinkDto> Groups);
     /// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it (a bump opens it).</param>
     /// <param name="Shot">A picture of the posting window (a JPEG/PNG data URL, 2 MB at most) for the notification, sent when the job asked for one.</param>
@@ -46,7 +46,7 @@ public sealed class DeviceApiController : ControllerBase
     [HttpPost("heartbeat")]
     public Task<DeviceStatusDto> Heartbeat(
         HeartbeatRequest r, [FromServices] ICommandHandler<DeviceHeartbeatCommand, DeviceStatusDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new DeviceHeartbeatCommand(r.Version), ct);
+        handler.HandleAsync(new DeviceHeartbeatCommand(r.Version, r.SessionOk), ct);
 
     /// <summary>Replaces the groups of the device's Facebook account; returns how many it has.</summary>
     [HttpPut("groups")]

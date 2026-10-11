@@ -609,6 +609,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<int>("DailyPerGroup")
+                        .HasColumnType("integer")
+                        .HasColumnName("daily_per_group");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(120)
@@ -618,6 +622,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Property<Guid?>("PostAsAccountId")
                         .HasColumnType("uuid")
                         .HasColumnName("post_as_account_id");
+
+                    b.Property<bool>("RandomOrder")
+                        .HasColumnType("boolean")
+                        .HasColumnName("random_order");
 
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer")

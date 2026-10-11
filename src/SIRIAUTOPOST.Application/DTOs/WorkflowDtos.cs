@@ -113,23 +113,29 @@ public sealed record SetLinkDto(
 /// <param name="PostAsAccountId">The Facebook account whose browser posts the links; null = the first connected one.</param>
 /// <param name="AccountIds">Other accounts that post the same content to their default target.</param>
 /// <param name="Links">In their order.</param>
+/// <param name="RandomOrder">The groups of a round go out in a random order (see <see cref="LinkSet.RandomOrder"/>).</param>
+/// <param name="DailyPerGroup">Posts a day each group may get unless its own limit says otherwise; 0 = no limit from the set.</param>
 public sealed record LinkSetDto(
-    Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount, bool Active)
+    Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount, bool Active,
+    bool RandomOrder = true, int DailyPerGroup = 0)
 {
     public static LinkSetDto From(LinkSet set, IReadOnlyList<SetLink> links, int scheduleCount)
     {
         var seen = new HashSet<string>(FacebookGroupUrl.Comparer); // /groups/ABC and /groups/abc are one group
         var dtos = links.Select(l => SetLinkDto.From(l, l.IsValid && !seen.Add(l.Url))).ToList();
-        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount, set.Active);
+        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount, set.Active, set.RandomOrder, set.DailyPerGroup);
     }
 }
 
-public sealed record BulkLinksResultDto(int Added, int Duplicates, int Recoded, int Invalid, LinkSetDto Set);
+/// <param name="Conflicts">Addresses left out because another extension's link set already holds the group (one group, one extension).</param>
+/// <param name="ConflictNote">Why the first of them was left out, in Thai; null when none was.</param>
+public sealed record BulkLinksResultDto(
+    int Added, int Duplicates, int Recoded, int Invalid, LinkSetDto Set, int Conflicts = 0, string? ConflictNote = null);
 
 /// <summary>One line of the CSV import: set,name,url,code.</summary>
 public sealed record CsvLinkRow(string Set, string? Name, string? Url, string? Code);
 
-public sealed record CsvImportResultDto(int Links, int Sets, int Invalid);
+public sealed record CsvImportResultDto(int Links, int Sets, int Invalid, int Conflicts = 0, string? ConflictNote = null);
 
 // ---------- schedules ----------
 

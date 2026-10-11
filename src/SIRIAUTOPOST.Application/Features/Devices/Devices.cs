@@ -165,19 +165,21 @@ internal static class DeviceLimit
     /// <summary>
     /// Returns the owner's device limit, or throws when the workspace already has that many devices, or the owner
     /// already has as many connected accounts (all workspaces) as the plan allows: each device brings one.
+    /// <paramref name="replacing"/> is 1 when the new device takes the place of one the workspace already has (a browser
+    /// that pairs again): that one is not counted.
     /// </summary>
     public static async Task<int?> EnsureRoomAsync(
         Workspace ws, IUserRepository users, IPlanRepository plans, IDeviceRepository devices, IAccountRepository accounts,
-        IWorkspaceRepository workspaces, CancellationToken ct)
+        IWorkspaceRepository workspaces, CancellationToken ct, int replacing = 0)
     {
         var owner = await users.OwnerOfAsync(ws, ct);
         var limits = await plans.ForAsync(owner, ct);
-        if (limits.Devices is { } m && await devices.CountAsync(ws.Id, ct) >= m)
+        if (limits.Devices is { } m && await devices.CountAsync(ws.Id, ct) - replacing >= m)
             throw new DomainException($"แผนปัจจุบันผูกอุปกรณ์ได้สูงสุด {m} เครื่อง ยกเลิกการผูกเครื่องเดิมหรืออัปเกรดแผนก่อน");
         if (limits.Accounts is { } a)
         {
             var own = (await workspaces.ListByOwnerAsync(owner.Id, ct)).Select(w => w.Id);
-            if (await accounts.CountConnectedAsync(own, ct) >= a)
+            if (await accounts.CountConnectedAsync(own, ct) - replacing >= a)
                 throw new DomainException($"แผนปัจจุบันเชื่อมบัญชีได้สูงสุด {a} บัญชี อัปเกรดแผนก่อน");
         }
         return limits.Devices;
@@ -186,13 +188,21 @@ internal static class DeviceLimit
 
 // ---------- device side (extension, X-Device-Key) ----------
 
-/// <summary>The extension trades a pairing code for its device key, and gets a Facebook account in the workspace.</summary>
-public sealed record PairDeviceCommand(string Code, string Name, string? Browser, string? Version) : ICommand<PairResultDto>;
+/// <summary>
+/// The extension trades a pairing code for its device key, and gets a Facebook account in the workspace.
+/// A browser that pairs AGAIN says who it was and keeps its account (with the link sets pinned to it, its groups and its
+/// history) instead of becoming a second one: <paramref name="PreviousDeviceKey"/> is the key it still holds (the pairing
+/// replaces that device), or <paramref name="PreviousAccountId"/> / <paramref name="PreviousName"/> is what it remembers
+/// after the web unbound it. Without them a pairing is a new browser, as before.
+/// </summary>
+public sealed record PairDeviceCommand(
+    string Code, string Name, string? Browser, string? Version,
+    string? PreviousDeviceKey = null, Guid? PreviousAccountId = null, string? PreviousName = null) : ICommand<PairResultDto>;
 
 public sealed class PairDeviceCommandHandler(
     IDevicePairingRepository pairings, IWorkspaceRepository workspaces, IUserRepository users, IPlanRepository plans,
-    IDeviceRepository devices, IAccountRepository accounts, IDeviceEventRepository events, IDeviceSecrets secrets,
-    INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
+    IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps, ILinkSetRepository linkSets,
+    IDeviceEventRepository events, IDeviceSecrets secrets, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<PairDeviceCommand, PairResultDto>
 {
     public async Task<PairResultDto> HandleAsync(PairDeviceCommand c, CancellationToken ct = default)
@@ -202,20 +212,88 @@ public sealed class PairDeviceCommandHandler(
         var pairing = await pairings.GetByCodeAsync(code, ct) ?? throw new DomainException("ไม่พบรหัสจับคู่นี้ ตรวจสอบรหัสอีกครั้ง");
         pairing.Use(now);
         var ws = await workspaces.GetByIdAsync(pairing.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", pairing.WorkspaceId);
-        await DeviceLimit.EnsureRoomAsync(ws, users, plans, devices, accounts, workspaces, ct);
+        var (replaced, returning) = await ReturningAsync(ws, c, ct);
+        // The device this pairing replaces is not an extra one: a browser that pairs again is never refused for the plan's device limit.
+        await DeviceLimit.EnsureRoomAsync(ws, users, plans, devices, accounts, workspaces, ct, replacing: replaced is null ? 0 : 1);
 
         var key = secrets.NewDeviceKey();
-        // A second browser that pairs with the same name ("Chrome 6/10/2569") gets "(2)": names are unique in a workspace.
-        var name = Device.UniqueName(c.Name, await devices.ListNamesAsync(ws.Id, null, ct));
+        // A browser that comes back keeps the name it had in the web app (renamed there, say "ส่วนขยาย 1"), not the dated
+        // default of this pairing. A second browser that pairs with the same name ("Chrome 6/10/2569") gets "(2)": names
+        // are unique in a workspace.
+        var wanted = returning is null ? c.Name : FirstFilled(replaced?.Name, c.PreviousName) ?? c.Name;
+        var name = Device.UniqueName(wanted, await devices.ListNamesAsync(ws.Id, replaced?.Id, ct));
         var device = Device.Pair(ws.Id, name, c.Browser ?? "", c.Version ?? "", secrets.Hash(key), now);
-        devices.Add(device);
-        var account = SocialAccount.Connect(ws.Id, device, await accounts.CountAsync(ws.Id, ct));
-        accounts.Add(account);
-        events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Paired, new { name = device.Name, accountId = account.Id }, now));
-        await uow.SaveChangesAsync(ct);
+        SocialAccount? account = null;
+        // One transaction, two saves: the old device has to be gone before the new one takes its name (a unique index), and
+        // the account has to point at the new device only after that device exists.
+        await uow.ExecuteInTransactionAsync($"pair:{ws.Id:N}", async () =>
+        {
+            if (replaced is not null)
+            {
+                await ReplaceAsync(replaced, returning, now, ct);
+                await uow.SaveChangesAsync(ct);
+            }
+            devices.Add(device);
+            if (returning is not null)
+            {
+                returning.Reconnect(device);
+                account = returning;
+            }
+            else
+            {
+                // A second extension is about to join: until now "no choice" meant the only one, so the sets that name
+                // nobody are given to it first (otherwise they would belong to no machine the moment the new one pairs).
+                if (LinkOwnership.OnlyConnected(await accounts.ListAsync(ws.Id, ct)) is { } only)
+                    LinkOwnership.PinUnassigned(await linkSets.ListAsync(ws.Id, ct), only.Id);
+                account = SocialAccount.Connect(ws.Id, device, await accounts.CountAsync(ws.Id, ct));
+                accounts.Add(account);
+            }
+            events.Add(DeviceEvents.Make(ws.Id, device.Id, DeviceEventType.Paired, new { name = device.Name, accountId = account.Id }, now));
+            await uow.SaveChangesAsync(ct);
+        }, ct);
+        if (replaced is not null) await events.PruneAsync(replaced.Id, DeviceRevocation.KeepEvents, ct);
         await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DevicePaired(device)], ct);
-        return new PairResultDto(key, device.Id, device.Name, ws.Id, ws.Name, account.Id);
+        return new PairResultDto(key, device.Id, device.Name, ws.Id, ws.Name, account!.Id);
     }
+
+    /// <summary>
+    /// Who this browser was: the device its old key belongs to in this workspace (it is replaced, and its account is
+    /// the one to keep), else the account it remembers when that account has no browser any more. A key of another
+    /// workspace, an account that another live browser holds, or nothing at all means a new browser.
+    /// </summary>
+    private async Task<(Device? Replaced, SocialAccount? Account)> ReturningAsync(Workspace ws, PairDeviceCommand c, CancellationToken ct)
+    {
+        var oldKey = (c.PreviousDeviceKey ?? "").Trim();
+        if (oldKey.Length > 0 && await devices.GetByKeyHashAsync(secrets.Hash(oldKey), ct) is { } old && old.WorkspaceId == ws.Id)
+        {
+            var account = await accounts.GetByDeviceAsync(old.Id, ct);
+            return (old, account is { Platform: Platform.Fb } ? account : null);
+        }
+        if (c.PreviousAccountId is { } id && await accounts.GetAsync(ws.Id, id, ct) is { Platform: Platform.Fb, IsConnected: false } free)
+            return (null, free);
+        return (null, null);
+    }
+
+    /// <summary>
+    /// The old device of a browser that paired again goes away. Posts it had taken and never reported fail (the browser
+    /// that took them is the one that just started over); the posts still waiting stay queued for the account, which
+    /// the new device claims.
+    /// </summary>
+    private async Task ReplaceAsync(Device old, SocialAccount? kept, DateTimeOffset now, CancellationToken ct)
+    {
+        foreach (var p in await posts.ListClaimedByAsync(old.Id, ct))
+        {
+            p.Fail(FailureCode.Network, "ส่วนขยายจับคู่ใหม่ระหว่างโพสต์", now);
+            events.Add(DeviceEvents.PostChanged(old.WorkspaceId, old.Id, p, now));
+        }
+        foreach (var b in await bumps.ListClaimedByAsync(old.Id, ct)) b.Fail("ส่วนขยายจับคู่ใหม่ระหว่างดันโพสต์", now);
+        var oldAccount = await accounts.GetByDeviceAsync(old.Id, ct);
+        if (oldAccount is not null && oldAccount != kept) oldAccount.Disconnect(); // an account the new pairing does not take over
+        devices.Remove(old);
+        events.Add(DeviceEvents.Make(old.WorkspaceId, old.Id, DeviceEventType.Revoked, new { name = old.Name }, now));
+    }
+
+    private static string? FirstFilled(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v));
 
     /// <summary>"k7qf 2mxp" and "K7QF-2MXP" are the same code.</summary>
     public static string NormalizeCode(string code)
@@ -225,7 +303,12 @@ public sealed class PairDeviceCommandHandler(
     }
 }
 
-public sealed record DeviceHeartbeatCommand(string? Version) : ICommand<DeviceStatusDto>;
+/// <param name="SessionOk">
+/// True when the extension has just seen Facebook logged in again after it reported that a login was missing. A device
+/// whose account waits for a login (the engine hands it nothing) is healthy again from then on, with nobody pressing
+/// "sign in again" on the web. Null or false changes nothing.
+/// </param>
+public sealed record DeviceHeartbeatCommand(string? Version, bool? SessionOk = null) : ICommand<DeviceStatusDto>;
 
 public sealed class DeviceHeartbeatCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
@@ -239,17 +322,23 @@ public sealed class DeviceHeartbeatCommandHandler(
         if (device.Seen(c.Version, now))
             events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         var pauseEnded = DevicePause.Settle(device, events, now, out var pauseReason);
+        var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        // The extension saw Facebook logged in again: the account that waited for a login takes jobs again.
+        if (c.SessionOk == true && account is { Health: AccountHealth.Relogin })
+        {
+            account.MarkHealthy();
+            events.Add(DevicePause.Changed(device, now)); // the web's account list reads the new health
+        }
         await uow.SaveChangesAsync(ct);
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         if (pauseEnded) await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DevicePauseEnded(device, pauseReason)], ct);
-        var account = await accounts.GetByDeviceAsync(device.Id, ct);
         // "Paused" is also what a suspended, banned or paused customer's device is told, and a device the engine
         // paused itself (a Facebook block, posts that kept failing): it gets no jobs.
         var owner = await users.OwnerOfAsync(ws, ct);
         var auto = device.IsAutoPaused(now);
         return new DeviceStatusDto(device.Id, device.Name, ws.Id, ws.Name, account?.Id, account?.GroupLinks.Count ?? 0,
             ws.ExtensionOnline, AntiBanDto.From(ws.AntiBan), device.JobsPaused || !owner.CanPost || auto,
-            auto ? device.AutoPausedUntil : null, auto ? device.AutoPauseReason : null);
+            auto ? device.AutoPausedUntil : null, auto ? device.AutoPauseReason : null, account is { CanPost: false });
     }
 }
 
@@ -506,8 +595,38 @@ public sealed class ClaimJobCommandHandler(
             notes.Settled(p);
         }
 
+        // One group, one extension (2026-10-10): a post only goes to the browser of the link set it came from, and a
+        // group that sits in the sets of two extensions goes out from the extension that held it first. Anything else
+        // (a set handed to another machine after its posts were queued, a group copied into a second machine's set
+        // before this rule existed) is skipped with the reason, never posted from the wrong machine.
+        IReadOnlyList<SocialAccount>? accountList = null;
+        OwnershipMap? ownership = null;
+        var setCache = new Dictionary<Guid, LinkSet?>();
+        async Task<string?> WrongMachineAsync(SetLink link)
+        {
+            accountList ??= await accounts.ListAsync(ws.Id, ct);
+            if (!setCache.TryGetValue(link.LinkSetId, out var set)) setCache[link.LinkSetId] = set = await linkSets.GetAsync(ws.Id, link.LinkSetId, ct);
+            if (set is null) return null;
+            var owner = LinkOwnership.OwnerOf(set, accountList);
+            if (owner is null) return $"ชุดลิงก์ \"{set.Name}\" ยังไม่ได้เลือกเครื่องที่จะโพสต์ จึงไม่โพสต์ (เลือกเครื่องในการ์ดของชุดลิงก์)";
+            if (owner != account.Id)
+                return $"ชุดลิงก์ \"{set.Name}\" ใช้เครื่อง \"{OwnershipMap.ExtensionName(owner.Value, accountList)}\" ไม่ใช่เครื่องนี้ จึงไม่โพสต์";
+            ownership ??= OwnershipMap.Build(await linkSets.ListAsync(ws.Id, ct), await links.ListAsync(ws.Id, ct), accountList);
+            return ownership.WinnerOf(link.Url) is { } first && first.Owner != account.Id
+                ? $"กลุ่มนี้อยู่ในชุดลิงก์ \"{first.Set.Name}\" ของเครื่อง \"{OwnershipMap.ExtensionName(first.Owner, accountList)}\" ด้วย (กลุ่มหนึ่งใช้ได้กับเครื่องเดียว) จึงไม่โพสต์จากเครื่องนี้"
+                : null;
+        }
+
         foreach (var p in due)
         {
+            // A schedule's post "for another account of the set" (the retired feature) is never handed out: it would
+            // post a set's text through a second extension. Posts of the old composer have no schedule and no such key.
+            if (p.ScheduleId is not null && p.LinkId is null && !p.IsTest && p.TargetKey is { } key && key.StartsWith("account:", StringComparison.Ordinal))
+            {
+                p.Skip(now, "ชุดลิงก์ไม่โพสต์ผ่านเครื่องของบัญชีอื่นอีกแล้ว (ชุดหนึ่งใช้เครื่องเดียว) จึงไม่โพสต์");
+                Settle(p);
+                continue;
+            }
             SetLink? link = null;
             var holdUntil = DateTimeOffset.MinValue;
             if (p.LinkId is { } linkId)
@@ -519,12 +638,22 @@ public sealed class ClaimJobCommandHandler(
                     Settle(p);
                     continue;
                 }
-                if (link.DailyMax > 0)
+                // A test post goes to the extension the person chose for it (even one that does not own the set): not checked.
+                if (!p.IsTest && await WrongMachineAsync(link) is { } wrong)
+                {
+                    p.Skip(now, wrong);
+                    Settle(p);
+                    continue;
+                }
+                // The group's own limit, else the one of its set ("posts a day per group").
+                if (!setCache.TryGetValue(link.LinkSetId, out var set)) setCache[link.LinkSetId] = set = await linkSets.GetAsync(ws.Id, link.LinkSetId, ct);
+                var dailyCap = set?.DailyCapFor(link) ?? link.DailyMax;
+                if (dailyCap > 0)
                 {
                     var (dayStart, dayEnd) = await DayOfAsync(p);
                     if (!perLinkDay.TryGetValue((linkId, dayStart), out var published))
                         perLinkDay[(linkId, dayStart)] = published = await posts.CountPublishedToLinkAsync(linkId, dayStart, dayEnd, ct);
-                    if (published >= link.DailyMax)
+                    if (published >= dailyCap)
                     {
                         p.Skip(now, "ครบเพดานต่อวันของกลุ่มนี้");
                         Settle(p);

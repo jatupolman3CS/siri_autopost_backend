@@ -53,7 +53,7 @@ function renderPair() {
   const replace = $('#pairReplace');
   show(replace, !!c.enabled);
   if (c.enabled) {
-    replace.textContent = `เครื่องนี้เชื่อมกับเวิร์กสเปซ "${c.workspaceName || '-'}" อยู่แล้ว การอนุญาตจะย้ายไปเชื่อมกับเว็บนี้แทน (ยกเลิกการผูกเครื่องเดิมได้ที่หน้าเว็บเดิม)`;
+    replace.textContent = `เครื่องนี้เชื่อมกับเวิร์กสเปซ "${c.workspaceName || '-'}" อยู่แล้ว การอนุญาตจะเปลี่ยนไปเชื่อมกับเว็บนี้แทน ถ้าเป็นเว็บและเวิร์กสเปซเดิม เครื่องนี้จะคงบัญชี Facebook ชื่อเครื่อง และชุดลิงก์ที่ผูกไว้เหมือนเดิม (ไม่เกิดเครื่องซ้ำ)`;
   }
 }
 
@@ -103,9 +103,21 @@ function renderLink() {
   const paired = !!c.enabled;
   const badge = $('#linkBadge');
   const err = c.lastError || c.configError || '';
-  badge.className = 'badge' + (paired ? (err ? ' bad' : ' on') : '');
-  badge.textContent = !paired ? 'ยังไม่ได้เชื่อมต่อ' : err ? 'มีปัญหา' : 'เชื่อมต่อแล้ว';
+  const unbound = !paired && !!c.unboundAt;
+  const needLogin = paired && !!c.loginLostAt;
+  badge.className = 'badge' + (paired ? (err || needLogin ? ' bad' : ' on') : unbound ? ' bad' : '');
+  badge.textContent = unbound ? 'ถูกยกเลิกการผูก' : !paired ? 'ยังไม่ได้เชื่อมต่อ' : needLogin ? 'รอล็อกอิน Facebook' : err ? 'มีปัญหา' : 'เชื่อมต่อแล้ว';
   show($('#unpairedCard'), !paired && !pairRequest());
+  // Unbound by the web: say so (the web may not be open here), and what pairing again brings back.
+  show($('#unboundCard'), unbound && !pairRequest());
+  if (unbound) {
+    const who = c.prev && c.prev.deviceName
+      ? ` (เครื่อง "${c.prev.deviceName}"${c.prev.workspaceName ? ` ในเวิร์กสเปซ "${c.prev.workspaceName}"` : ''})`
+      : '';
+    $('#unboundNote').textContent =
+      `ถูกยกเลิกการผูกเมื่อ ${fmtDateTime(c.unboundAt)}${who} จึงไม่รับงานโพสต์จนกว่าจะเชื่อมต่อใหม่: เปิดหน้าเว็บ AutoPost > ทีมและเวิร์กสเปซ > เพิ่มอุปกรณ์ แล้วกด "เชื่อมต่อ Chrome เครื่องนี้" ` +
+      'บัญชี Facebook ชื่อเครื่อง และชุดลิงก์ที่ผูกกับเครื่องนี้จะกลับมาใช้ต่อเอง';
+  }
   show($('#linkCard'), paired);
   if (!paired) return;
   $('#openWeb').href = `${c.apiUrl}/app/overview`;
@@ -119,6 +131,12 @@ function renderLink() {
     ['ชุดโพสต์บนเว็บ', c.configSyncAt ? `ฉบับที่ ${c.configRevision || 0} (ซิงก์ ${fmtDateTime(c.configSyncAt)})` : 'ยังไม่ได้ซิงก์'],
     ['งานโพสต์จากเว็บ', c.paused ? 'พักรับงาน (ตั้งจากหน้าเว็บ)' : resting ? `พักหลัง Facebook แจ้งเตือนถึง ${fmtDateTime(c.pausedUntil)}` : `รับงาน · ${c.groups || 0} กลุ่ม`],
     ['งานล่าสุด', job ? `${fmtDateTime(job.at)} ${job.ok ? 'สำเร็จ' : `ไม่สำเร็จ: ${job.error}`} (${job.group})` : ''],
+    [
+      'Facebook',
+      c.loginLostAt
+        ? `ยังไม่ได้ล็อกอินในเครื่องนี้ (ตั้งแต่ ${fmtDateTime(c.loginLostAt)}): ล็อกอิน Facebook ใน Chrome นี้ แล้วระบบจะรับงานต่อเองภายในไม่กี่นาที${c.loginProbeAt ? ` (ตรวจครั้งถัดไป ${fmtDateTime(c.loginProbeAt)})` : ''}`
+        : '',
+    ],
   ]);
   const e = $('#linkError');
   show(e, !!err);

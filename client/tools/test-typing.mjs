@@ -15,7 +15,7 @@ const harnessSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...a) => {
   const stack = new Error().stack;
   if ((ms ?? 0) < 100000 && stack.includes('typeHuman') && /at sleep/.test(stack)) waits.push(ms ?? 0); // not the message time-outs of tabCmd
-  return harnessSetTimeout(fn, Math.min(ms ?? 0, 2), ...a);
+  return harnessSetTimeout(fn, (ms ?? 0) >= 100000 ? ms : Math.min(ms ?? 0, 2), ...a); // the deadlines and time-outs (100 s and more) stay real
 };
 
 const cmds = {}; // content.js commands by name

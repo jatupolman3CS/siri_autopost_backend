@@ -89,15 +89,6 @@ internal sealed class SchedulingWorld
         return link;
     }
 
-    /// <summary>An account of the workspace that is not connected to a browser, like the demo accounts.</summary>
-    public SocialAccount AddOtherAccount()
-    {
-        var account = SocialAccount.Create(Ws.Id, Platform.Fb, "@shop", "", "ฟีด");
-        Accounts.Add(account);
-        Set.Update(Set.Name, Set.PostAsAccountId, [.. Set.AccountIds, account.Id]);
-        return account;
-    }
-
     /// <summary>The advanced anti-ban numbers (Pro).</summary>
     public void SetAdvanced(Action<AdvancedAntiBanSettings> change)
     {
@@ -121,6 +112,10 @@ internal sealed class SchedulingWorld
         settings.Shuffle = on;
         Ws.UpdateAntiBan(settings, advancedAllowed: true);
     }
+
+    /// <summary>The link set's own rules: its groups in a random order, and the posts a day each group may get (0 = no limit from the set).</summary>
+    public void SetGroupRules(bool? randomOrder = null, int? dailyPerGroup = null) =>
+        Set.Update(Set.Name, Set.PostAsAccountId, Set.AccountIds, randomOrder, dailyPerGroup);
 
     public Schedule NewSchedule(
         ScheduleMode mode = ScheduleMode.Daily, string[]? times = null, PostOrder order = PostOrder.Rotate, DateOnly? start = null,

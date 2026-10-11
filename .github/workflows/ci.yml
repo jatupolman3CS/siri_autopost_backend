@@ -119,6 +119,11 @@ jobs:
         run: node client/tools/test-cloud.mjs http://localhost:5100
       - name: A web schedule alone hands work to an extension with no campaign setup
         run: node client/tools/test-schedule-flow.mjs http://localhost:5100
+      - name: The extension on its own (alarm only, restart, a lost Facebook login, a browser paired again, a hung job)
+        # Step 4 (two extensions, unbound and paired again) waits out the engine's 2-minute gap; the API integration tests cover it.
+        env:
+          ONLY: "1,2,3,5,6"
+        run: node client/tools/test-unattended.mjs http://localhost:5100
       - name: Bumping a post and posting to a Facebook page
         env:
           # The bump is due hours after its post: the test moves its due time in the database (psql comes with the runner image).

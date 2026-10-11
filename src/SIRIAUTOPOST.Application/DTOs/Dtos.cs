@@ -248,9 +248,10 @@ public sealed record PairResultDto(string DeviceKey, Guid DeviceId, string Devic
 /// <param name="Online">False while the offline simulation holds the workspace offline: take no jobs.</param>
 /// <param name="JobsPaused">Paused in the web app, or by the engine itself (<paramref name="AutoPausedUntil"/>): take no jobs (state and settings still sync).</param>
 /// <param name="AutoPausedUntil">The engine's own pause (a Facebook block, posts that kept failing) lasts until then; null when there is none.</param>
+/// <param name="SessionLost">The account waits for a Facebook login (a job found the browser logged out): it gets no jobs until the extension reports a login again (heartbeat <c>sessionOk</c>) or the web's "sign in again" is pressed.</param>
 public sealed record DeviceStatusDto(
     Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid? AccountId, int Groups, bool Online, AntiBanDto AntiBan,
-    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null);
+    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null, bool SessionLost = false);
 
 public sealed record GroupLinkDto(string Name, string Url);
 

@@ -159,6 +159,16 @@ internal sealed class Shop : IDisposable
     public async Task<LinkSetDto> RefreshSetAsync() =>
         Set = (await Owner.LinkSetsAsync(Ws)).Single(s => s.Id == Set.Id);
 
+    /// <summary>The link set's rules for its groups (random order, posts a day per group); null keeps a value.</summary>
+    public async Task<LinkSetDto> UpdateSetRulesAsync(bool? randomOrder = null, int? dailyPerGroup = null)
+    {
+        var res = await Owner.PutAsJsonAsync($"{Api}/link-sets/{Set.Id}",
+            new { name = Set.Name, postAsAccountId = Set.PostAsAccountId, accountIds = Set.AccountIds, randomOrder, dailyPerGroup }, Json);
+        var updated = await res.ReadAsync<LinkSetDto>();
+        await RefreshSetAsync();
+        return updated;
+    }
+
     public async Task<SetLinkDto> UpdateLinkAsync(int link, bool? enabled = null, int? dailyMax = null)
     {
         var l = Link(link);

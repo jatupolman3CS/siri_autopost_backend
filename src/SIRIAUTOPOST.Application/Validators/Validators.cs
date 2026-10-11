@@ -475,6 +475,8 @@ public sealed class UpdateLinkSetCommandValidator : AbstractValidator<UpdateLink
             .MaximumLength(LinkSet.MaxNameLength).WithMessage($"ชื่อชุดลิงก์ยาวเกิน {LinkSet.MaxNameLength} ตัวอักษร");
         RuleFor(x => x.AccountIds).Must(a => a is null || a.Count <= LinkSet.MaxAccounts)
             .WithMessage($"เพิ่มบัญชีอื่นได้ไม่เกิน {LinkSet.MaxAccounts} บัญชีต่อชุด");
+        RuleFor(x => x.DailyPerGroup).Must(n => n is null or >= 0 and <= SetLink.MaxDailyMax)
+            .WithMessage($"จำนวนโพสต์ต่อวันต่อกลุ่มของชุดต้องอยู่ระหว่าง 0–{SetLink.MaxDailyMax}");
     }
 }
 

@@ -172,4 +172,65 @@ public class SetLinkTests
         l.Edit("", "https://www.facebook.com/groups/baan.dee", "", 0, true);
         Assert.Equal("baan dee", l.Name);
     }
+
+    [Fact]
+    public void A_set_keeps_no_other_accounts_it_is_posted_by_one_extension_only()
+    {
+        var set = NewSet();
+
+        set.Update("ชุดหลัก", Guid.NewGuid(), [Guid.NewGuid(), Guid.NewGuid()]);
+
+        Assert.Empty(set.AccountIds);
+    }
+
+    // ---- the set's own rules: group order and posts a day per group ----
+
+    private static LinkSet NewSet() => LinkSet.Create(Ws, "ชุดหลัก", null, Now);
+
+    [Fact]
+    public void A_new_set_posts_its_groups_in_a_random_order_with_no_limit_from_the_set()
+    {
+        var set = NewSet();
+
+        Assert.True(set.RandomOrder);
+        Assert.Equal(0, set.DailyPerGroup);
+    }
+
+    [Fact]
+    public void An_update_that_says_nothing_about_the_rules_keeps_them()
+    {
+        var set = NewSet();
+        set.Update("ชุดหลัก", null, [], randomOrder: false, dailyPerGroup: 2);
+
+        set.Update("ชื่อใหม่", null, []);
+
+        Assert.False(set.RandomOrder);
+        Assert.Equal(2, set.DailyPerGroup);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(51)]
+    public void The_posts_a_day_per_group_must_be_between_zero_and_fifty(int value)
+    {
+        var set = NewSet();
+
+        Assert.Throws<DomainException>(() => set.Update("ชุดหลัก", null, [], dailyPerGroup: value));
+        Assert.Equal(0, set.DailyPerGroup);
+    }
+
+    [Fact]
+    public void A_link_with_a_limit_of_its_own_uses_it_otherwise_the_set_decides()
+    {
+        var set = NewSet();
+        set.Update("ชุดหลัก", null, [], dailyPerGroup: 2);
+
+        Assert.Equal(2, set.DailyCapFor(Link()));
+        Assert.Equal(5, set.DailyCapFor(Link(dailyMax: 5)));
+        Assert.Equal(1, set.DailyCapFor(Link(dailyMax: 1))); // its own limit may be lower or higher than the set's
+
+        set.Update("ชุดหลัก", null, [], dailyPerGroup: 0);
+        Assert.Equal(0, set.DailyCapFor(Link()));
+        Assert.Equal(3, set.DailyCapFor(Link(dailyMax: 3)));
+    }
 }

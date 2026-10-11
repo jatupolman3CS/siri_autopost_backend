@@ -33,6 +33,63 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_set_starts_with_a_random_group_order_and_no_limit_per_group()
+    {
+        var (client, _, ws) = await factory.SignUpAsync();
+
+        var set = await client.CreateLinkSetAsync(ws);
+
+        Assert.True(set.RandomOrder);
+        Assert.Equal(0, set.DailyPerGroup);
+    }
+
+    [Fact]
+    public async Task The_rules_for_the_groups_are_saved_and_a_save_that_leaves_them_out_keeps_them()
+    {
+        var (client, _, ws) = await factory.SignUpAsync();
+        var set = await client.CreateLinkSetAsync(ws);
+
+        var saved = await (await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}",
+            new { name = "ชุดใหม่", postAsAccountId = (Guid?)null, accountIds = Array.Empty<Guid>(), randomOrder = false, dailyPerGroup = 3 }, Json))
+            .ReadAsync<LinkSetDto>();
+        Assert.Equal(("ชุดใหม่", false, 3), (saved.Name, saved.RandomOrder, saved.DailyPerGroup));
+
+        // An older client that knows nothing of the rules renames the set: the rules stay.
+        var renamed = await (await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}",
+            new { name = "ชื่ออื่น", postAsAccountId = (Guid?)null, accountIds = Array.Empty<Guid>() }, Json)).ReadAsync<LinkSetDto>();
+        Assert.Equal(("ชื่ออื่น", false, 3), (renamed.Name, renamed.RandomOrder, renamed.DailyPerGroup));
+        var listed = (await client.LinkSetsAsync(ws)).Single();
+        Assert.Equal((false, 3), (listed.RandomOrder, listed.DailyPerGroup));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(51)]
+    public async Task The_posts_a_day_per_group_of_a_set_are_zero_to_fifty(int value)
+    {
+        var (client, _, ws) = await factory.SignUpAsync();
+        var set = await client.CreateLinkSetAsync(ws);
+
+        var res = await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}",
+            new { name = set.Name, postAsAccountId = (Guid?)null, accountIds = Array.Empty<Guid>(), dailyPerGroup = value }, Json);
+
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+        Assert.Equal(0, (await client.LinkSetsAsync(ws)).Single().DailyPerGroup);
+    }
+
+    [Fact]
+    public async Task A_viewer_cannot_change_the_rules_for_the_groups()
+    {
+        var team = await factory.TeamAsync();
+        var set = await team.Owner.CreateLinkSetAsync(team.Ws);
+
+        var res = await team.Viewer.PutAsJsonAsync($"{Sets(team.Ws)}/{set.Id}",
+            new { name = set.Name, postAsAccountId = (Guid?)null, accountIds = Array.Empty<Guid>(), dailyPerGroup = 2 }, Json);
+
+        Assert.Equal(HttpStatusCode.Forbidden, res.StatusCode);
+    }
+
+    [Fact]
     public async Task Links_are_added_normalised_and_named_from_their_address()
     {
         var (client, _, ws) = await factory.SignUpAsync();
@@ -396,7 +453,7 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task A_set_names_the_account_that_posts_it_and_other_accounts()
+    public async Task A_set_names_the_account_that_posts_it_and_refuses_other_accounts_one_set_one_extension()
     {
         var (client, _, ws) = await factory.SignUpAsync();
         var page = await factory.SeedAccountAsync(ws, "เพจ", "เพจ");
@@ -406,10 +463,15 @@ public class LinkSetsEndpointsTests(ApiFactory factory)
         var set = await client.CreateLinkSetAsync(ws, "ชุดเพจ", page.Id);
         Assert.Equal(page.Id, set.PostAsAccountId);
 
+        // "Other accounts" that post the same text through their own extensions are gone: a set is posted by one extension.
+        var others = await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}",
+            new { name = "ชุดเพจ 2", postAsAccountId = page.Id, accountIds = new[] { ig.Id, x.Id } }, Json);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, others.StatusCode);
+        Assert.Contains("เครื่องเดียว", await others.Content.ReadAsStringAsync());
         var updated = await (await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}",
-            new { name = "ชุดเพจ 2", postAsAccountId = page.Id, accountIds = new[] { ig.Id, x.Id, ig.Id, page.Id } }, Json)).ReadAsync<LinkSetDto>();
-        Assert.Equal("ชุดเพจ 2", updated.Name);
-        Assert.Equal([ig.Id, x.Id], updated.AccountIds); // distinct, and not the posting account itself
+            new { name = "ชุดเพจ 2", postAsAccountId = page.Id, accountIds = Array.Empty<Guid>() }, Json)).ReadAsync<LinkSetDto>();
+        Assert.Equal(("ชุดเพจ 2", page.Id), (updated.Name, updated.PostAsAccountId));
+        Assert.Empty(updated.AccountIds);
 
         var cleared = await (await client.PutAsJsonAsync($"{Sets(ws)}/{set.Id}", new { name = "x", postAsAccountId = (Guid?)null, accountIds = Array.Empty<Guid>() }, Json))
             .ReadAsync<LinkSetDto>();

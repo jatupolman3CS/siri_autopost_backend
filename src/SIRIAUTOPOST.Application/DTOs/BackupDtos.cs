@@ -17,7 +17,10 @@ public sealed record BackupCollectionDto(
 public sealed record BackupLinkDto(string Name, string Url, string Code, int DailyMax, bool Enabled);
 
 /// <param name="PostAsAccountId">The account of this workspace whose browser posts the links (accounts are not part of a backup).</param>
-public sealed record BackupLinkSetDto(string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<BackupLinkDto> Links);
+/// <param name="RandomOrder">A file from before the setting has none: the groups are in a random order, as the default.</param>
+/// <param name="DailyPerGroup">A file from before the setting has none: no limit from the set.</param>
+public sealed record BackupLinkSetDto(
+    string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<BackupLinkDto> Links, bool RandomOrder = true, int DailyPerGroup = 0);
 
 /// <param name="Collection">The collection's name.</param>
 /// <param name="LinkSet">The link set's name.</param>

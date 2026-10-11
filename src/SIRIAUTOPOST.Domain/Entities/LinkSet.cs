@@ -23,11 +23,27 @@ public class LinkSet : Entity
     /// account when posts are generated.
     /// </summary>
     public Guid? PostAsAccountId { get; private set; }
-    /// <summary>Other accounts of the workspace that post the same content, each to its default target (no group code).</summary>
+    /// <summary>
+    /// RETIRED (2026-10-10): "other accounts that post the same content through their own extension" broke the rule that a
+    /// link set is posted by ONE extension. It is always empty now; <see cref="Update"/> drops what it is given, the API
+    /// refuses a non-empty list, and the start-up pass clears what older data held.
+    /// </summary>
     public List<Guid> AccountIds { get; private set; } = [];
     public int SortOrder { get; private set; }
     /// <summary>Off = schedules that use the set queue nothing to it until it is switched on again.</summary>
     public bool Active { get; private set; } = true;
+    /// <summary>
+    /// The groups of a round go out in a random order (a different one every round, and a round never opens with the group
+    /// the round before it opened with), so no group is always the first to be posted. Off = the order of the list. The
+    /// workspace's anti-ban "shuffle the order of target groups" must be on as well.
+    /// </summary>
+    public bool RandomOrder { get; private set; } = true;
+    /// <summary>
+    /// How many posts a day each group of the set may get (the schedule's local day); 0 = no limit from the set. A link's own
+    /// <see cref="SetLink.DailyMax"/> replaces it for that link. A group that has more times than this in a day gets a random
+    /// choice of them, so the same group is not always posted in the first slot.
+    /// </summary>
+    public int DailyPerGroup { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
     private LinkSet() { } // EF Core
@@ -41,14 +57,23 @@ public class LinkSet : Entity
 
     public void SetActive(bool active) => Active = active;
 
-    public void Update(string name, Guid? postAsAccountId, IEnumerable<Guid>? accountIds)
+    /// <param name="randomOrder">Null keeps the stored value.</param>
+    /// <param name="dailyPerGroup">Null keeps the stored value.</param>
+    public void Update(string name, Guid? postAsAccountId, IEnumerable<Guid>? accountIds, bool? randomOrder = null, int? dailyPerGroup = null)
     {
-        var accounts = (accountIds ?? []).Distinct().Where(id => id != postAsAccountId).ToList();
-        if (accounts.Count > MaxAccounts) throw new DomainException($"เพิ่มบัญชีอื่นได้ไม่เกิน {MaxAccounts} บัญชีต่อชุด");
+        if (dailyPerGroup is < 0 or > SetLink.MaxDailyMax)
+            throw new DomainException($"จำนวนโพสต์ต่อวันต่อกลุ่มของชุดต้องอยู่ระหว่าง 0–{SetLink.MaxDailyMax}");
         Name = CleanName(name);
         PostAsAccountId = postAsAccountId;
-        AccountIds = accounts;
+        AccountIds = []; // retired: see the property
+        RandomOrder = randomOrder ?? RandomOrder;
+        DailyPerGroup = dailyPerGroup ?? DailyPerGroup;
     }
+
+    /// <summary>
+    /// The most posts a day this link of the set may get: its own limit when it has one, else the set's; 0 = no limit.
+    /// </summary>
+    public int DailyCapFor(SetLink link) => link.DailyMax > 0 ? link.DailyMax : DailyPerGroup;
 
     private static string CleanName(string? name)
     {

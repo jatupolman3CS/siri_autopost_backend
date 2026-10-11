@@ -22,7 +22,8 @@ public static class ScheduleTargets
 {
     /// <summary>
     /// The targets of a link set in their order: the links that are on and valid (the second link with an address the
-    /// set already has is left out: a group never gets the same post twice), then the other accounts.
+    /// set already has is left out: a group never gets the same post twice). A set's "other accounts" are gone (2026-10-10):
+    /// every target is a link, posted by the one extension that owns the set.
     /// </summary>
     public static IReadOnlyList<ScheduleTarget> Resolve(LinkSet set, IReadOnlyList<SetLink> links, IReadOnlyList<SocialAccount> accounts)
     {
@@ -35,9 +36,6 @@ public static class ScheduleTargets
             if (!link.IsUsable || !seen.Add(link.Url)) continue;
             list.Add(new ScheduleTarget(Schedule.LinkKey(link.Id), Post.LinkTargetKey(link.Id), link, linkAccount));
         }
-        foreach (var id in set.AccountIds.Distinct())
-            if (accounts.FirstOrDefault(a => a.Id == id) is { } account)
-                list.Add(new ScheduleTarget(Schedule.AccountKey(account.Id), Post.AccountTargetKey(account.Id), null, account));
         return list;
     }
 }
@@ -85,6 +83,14 @@ public sealed class ScheduleMaterializer(
         if (targets.Count == 0) return new MaterializeResult(0, null, null, [], usable.Count);
 
         var existing = (await posts.ListScheduleKeysAsync(s.Id, s.ToUtc(fromLocal, "00:00"), ct)).ToHashSet();
+        // How many posts each target already has on a local day ("yyyy-MM-dd" = the first ten characters of a slot key), for the
+        // groups' daily limit: what the schedule made before this run, then what this run makes.
+        var usedByDay = new Dictionary<(string Target, string Day), int>();
+        foreach (var (targetKey, slotKey) in existing)
+        {
+            var key = (targetKey, DayOf(slotKey));
+            usedByDay[key] = usedByDay.GetValueOrDefault(key) + 1;
+        }
 
         var anti = ws.AntiBan;
         var avoidLast = anti.Advanced.RecentAvoid;
@@ -111,6 +117,9 @@ public sealed class ScheduleMaterializer(
             }
         }
         var deck = new List<CollectionPost>();
+        // The posts the groups of the slot being queued have been given: a new deck keeps them for last, so a round does not
+        // repeat a text because the deck ran out in the middle of it.
+        var inSlot = new HashSet<Guid>();
         // With a lot of posts a link avoids the last N it had; with few it can only avoid the last one (or nothing, with one post).
         var avoidCount = repeat == PostRepeat.Any || usable.Count <= 1 ? 0 : avoidLast > 0 && usable.Count > avoidLast + 1 ? avoidLast : 1;
 
@@ -163,14 +172,17 @@ public sealed class ScheduleMaterializer(
                     deck.RemoveAt(i);
                     history.Insert(0, picked.Id);
                     everHad[targetKey].Add(picked.Id);
+                    inSlot.Add(picked.Id);
                     return picked;
                 }
-                deck = Shuffled(usable); // the deck is empty, or only holds what this link just had or what this slot does not allow: deal a new one
+                // The deck is empty, or only holds what this link just had or what this slot does not allow: deal a new one.
+                deck = [.. Shuffled(usable.Where(p => !inSlot.Contains(p.Id)).ToList()), .. Shuffled(usable.Where(p => inSlot.Contains(p.Id)).ToList())];
             }
             var last = usable.FirstOrDefault(allowed);
             if (last is null) return null;
             history.Insert(0, last.Id);
             everHad[targetKey].Add(last.Id);
+            inSlot.Add(last.Id);
             return last;
         }
 
@@ -183,6 +195,7 @@ public sealed class ScheduleMaterializer(
         {
             if (created.Count + fresh.Count > Schedule.MaxPostsPerRun) throw new DomainException(TooManyPerDay);
 
+            inSlot.Clear();
             CollectionPost? shared = null;
             if (s.Order == PostOrder.Rotate)
             {
@@ -206,6 +219,8 @@ public sealed class ScheduleMaterializer(
                 var target = t.Link is { } l ? l.Name : t.Account!.DefaultTarget;
                 created.Add(Post.FromSchedule(
                     ws.Id, t.Account!, target, text, cp.MediaIds, when, now, s.Id, cp.Id, t.Link?.Id, t.TargetKey, slotKey, t.Link?.Url, code));
+                var used = (t.TargetKey, DayOf(slotKey));
+                usedByDay[used] = usedByDay.GetValueOrDefault(used) + 1;
             }
         }
 
@@ -213,7 +228,21 @@ public sealed class ScheduleMaterializer(
         // the anti-ban "shuffle the order of target groups" is on), the first at the start of the round and each next one
         // after the smart delay (a random time between Min and Max minutes). Whole seconds: the database keeps
         // microseconds and a time should read back as it was made.
-        List<ScheduleTarget> Ordered(List<ScheduleTarget> members) => anti.Shuffle ? ShuffledTargets(members) : members;
+        // A round never opens with the group the round before it opened with, so no group is always the first one posted.
+        var randomOrder = anti.Shuffle && set.RandomOrder;
+        string? lastFirst = null;
+        List<ScheduleTarget> Ordered(List<ScheduleTarget> members)
+        {
+            if (!randomOrder) return members;
+            var list = ShuffledTargets(members);
+            if (list.Count > 1 && list[0].TargetKey == lastFirst)
+            {
+                var j = 1 + Math.Min(list.Count - 2, (int)(random.NextDouble() * (list.Count - 1)));
+                (list[0], list[j]) = (list[j], list[0]);
+            }
+            if (list.Count > 0) lastFirst = list[0].TargetKey;
+            return list;
+        }
 
         List<(ScheduleTarget Target, DateTimeOffset At)> Stagger(
             IReadOnlyList<ScheduleTarget> members, DateTimeOffset first, string slotKey, bool firstIsNow)
@@ -228,6 +257,27 @@ public sealed class ScheduleMaterializer(
                 if (at > now && !existing.Contains((members[i].TargetKey, slotKey))) fresh.Add((members[i], at));
             }
             return fresh;
+        }
+
+        // A group may get only so many posts a day (its own limit, else the set's). A group with more times than that in a
+        // day gets a random choice of them, so one group is not always posted in the first slot of the day. What the
+        // schedule already made for the group that day (the opening round too) counts; slots still to come are preferred.
+        void LimitGroupsToTheirDailyCap(SortedDictionary<string, List<ScheduleTarget>> buckets, DateOnly day)
+        {
+            var dayKey = $"{day:yyyy-MM-dd}";
+            foreach (var t in targets)
+            {
+                if (t.Link is not { } link) continue;
+                var cap = set.DailyCapFor(link);
+                if (cap <= 0) continue;
+                var open = s.SlotsFor(t.OverrideKey).Where(slot => !existing.Contains((t.TargetKey, Schedule.SlotKey(day, slot)))).ToList();
+                var room = Math.Max(0, cap - usedByDay.GetValueOrDefault((t.TargetKey, dayKey)));
+                if (open.Count <= room) continue;
+                var future = open.Where(slot => s.ToUtc(day, slot) > now).ToList();
+                var started = open.Except(future).ToList();
+                var keep = ShuffledList(future).Concat(ShuffledList(started)).Take(room).ToHashSet();
+                foreach (var slot in open.Where(slot => !keep.Contains(slot))) buckets[slot].Remove(t);
+            }
         }
 
         // "Start now": every target once, beginning at this moment, before the regular times.
@@ -256,6 +306,8 @@ public sealed class ScheduleMaterializer(
                     if (!buckets.TryGetValue(slot, out var list)) buckets[slot] = list = [];
                     list.Add(t);
                 }
+
+            LimitGroupsToTheirDailyCap(buckets, day);
 
             // The most the day can add (today's past slots counted too, so it is never less than what is made).
             var most = buckets.Sum(b => b.Value.Count(t => !existing.Contains((t.TargetKey, Schedule.SlotKey(day, b.Key)))));
@@ -289,19 +341,14 @@ public sealed class ScheduleMaterializer(
                 created.SelectMany(p => p.MediaIds).Distinct().ToList(), usable.Count, Advanced: true);
     }
 
-    private List<ScheduleTarget> ShuffledTargets(List<ScheduleTarget> source)
-    {
-        var list = source.ToList();
-        for (var i = list.Count - 1; i > 0; i--)
-        {
-            var j = Math.Min(i, (int)(random.NextDouble() * (i + 1)));
-            (list[i], list[j]) = (list[j], list[i]);
-        }
-        return list;
-    }
+    private static string DayOf(string slotKey) => slotKey.Length >= 10 ? slotKey[..10] : slotKey;
+
+    private List<ScheduleTarget> ShuffledTargets(List<ScheduleTarget> source) => ShuffledList(source);
+
+    private List<CollectionPost> Shuffled(IReadOnlyList<CollectionPost> source) => ShuffledList(source);
 
     // Fisher-Yates with the injected randomness (deterministic in tests).
-    private List<CollectionPost> Shuffled(IReadOnlyList<CollectionPost> source)
+    private List<T> ShuffledList<T>(IReadOnlyList<T> source)
     {
         var list = source.ToList();
         for (var i = list.Count - 1; i > 0; i--)

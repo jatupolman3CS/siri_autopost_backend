@@ -102,6 +102,71 @@ public class EngineClaimTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_group_follows_the_daily_limit_of_its_set_and_a_limit_of_its_own_replaces_it()
+    {
+        using var shop = await factory.ShopAsync(links: 2);
+        AwayFromUtcMidnight(shop);
+        await shop.UpdateSetRulesAsync(dailyPerGroup: 1);
+        Assert.Equal(PostStatus.Success, (await RunAsync(shop, 0)).Status);
+
+        var second = await shop.TestPostAsync(0);
+        Assert.Null(await shop.ClaimAsync());
+        var skipped = await shop.PostAsync(second.Id);
+        Assert.Equal((PostStatus.Skipped, "ครบเพดานต่อวันของกลุ่มนี้"), (skipped.Status, skipped.FailureDetail));
+
+        // Another group of the set has its own post for the day.
+        Assert.Equal(PostStatus.Success, (await RunAsync(shop, 1)).Status);
+        await shop.TestPostAsync(1);
+        Assert.Null(await shop.ClaimAsync());
+
+        // A limit of its own (2) replaces the set's (1): the group may be posted twice, and a third time is refused.
+        await shop.UpdateLinkAsync(1, dailyMax: 2);
+        await shop.TestPostAsync(1);
+        Assert.Equal(PostStatus.Success, (await shop.RunNextAsync())!.Status);
+        shop.Wait(TimeSpan.FromMinutes(5));
+        var third = await shop.TestPostAsync(1);
+        Assert.Null(await shop.ClaimAsync());
+        Assert.Equal(PostStatus.Skipped, (await shop.PostAsync(third.Id)).Status);
+    }
+
+    [Fact]
+    public async Task A_schedule_queues_a_group_no_more_posts_a_day_than_its_limit_and_a_new_limit_makes_the_queue_again()
+    {
+        using var shop = await factory.ShopAsync(links: 3);
+        await shop.UpdateSetRulesAsync(dailyPerGroup: 1);
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["06:00", "11:00", "16:00", "21:00"], Offset: 420));
+
+        static IEnumerable<IGrouping<(Guid?, DateOnly), PostDto>> PerGroupDay(IEnumerable<PostDto> posts) =>
+            posts.GroupBy(p => (p.LinkId, DateOnly.FromDateTime(p.ScheduledAt.ToOffset(TimeSpan.FromMinutes(420)).DateTime)));
+
+        var queued = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.Status == PostStatus.Queued).ToList();
+        Assert.NotEmpty(queued);
+        Assert.All(PerGroupDay(queued), g => Assert.Single(g));
+        // The one post of a day is not always the first slot of it.
+        Assert.True(queued.Select(p => p.ScheduledAt.ToOffset(TimeSpan.FromMinutes(420)).Hour).Distinct().Count() > 1);
+
+        // Two a day: the queue is made again under the new limit (at the next claim) and some groups now have two.
+        await shop.UpdateSetRulesAsync(dailyPerGroup: 2);
+        await shop.ClaimAsync();
+        var again = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.Status == PostStatus.Queued).ToList();
+        Assert.All(PerGroupDay(again), g => Assert.InRange(g.Count(), 1, 2));
+        Assert.Contains(PerGroupDay(again), g => g.Count() == 2);
+    }
+
+    [Fact]
+    public async Task A_set_without_a_limit_leaves_the_groups_with_no_limit_of_their_own_unlimited()
+    {
+        using var shop = await factory.ShopAsync(links: 1);
+        AwayFromUtcMidnight(shop);
+        await shop.UpdateSetRulesAsync(dailyPerGroup: 1);
+        await shop.UpdateSetRulesAsync(dailyPerGroup: 0);
+
+        Assert.Equal(PostStatus.Success, (await RunAsync(shop)).Status);
+        Assert.Equal(PostStatus.Success, (await RunAsync(shop)).Status);
+        Assert.Equal(PostStatus.Success, (await RunAsync(shop)).Status);
+    }
+
+    [Fact]
     public async Task A_daily_slot_with_a_cap_of_one_posts_every_day_even_when_one_claim_comes_later_than_the_day_before()
     {
         using var shop = await factory.ShopAsync(links: 1);
@@ -126,12 +191,16 @@ public class EngineClaimTests(ApiFactory factory)
     {
         using var shop = await factory.ShopAsync(links: 1);
         await shop.UpdateLinkAsync(0, dailyMax: 1);
-        // A calendar that is at 21:30 now: its 23:00 is ahead, then 01:00 of its next day two hours after that.
+        // A calendar that is at 21:30 now: its 23:00 is ahead, then 01:00 of its next day two hours after that. One schedule
+        // never queues more posts a day for a group than the group's cap, so the two times come from two schedules (the
+        // claim is what keeps the group to its cap when several schedules post to it).
         var utcMinutes = (int)shop.Now.UtcDateTime.TimeOfDay.TotalMinutes;
         var offset = (21 * 60 + 30 - utcMinutes + 1440) % 1440;
         if (offset > 840) offset -= 1440;
-        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["23:00", "01:00"], Offset: offset));
-        var posts = (await shop.PostsAsync(created.Schedule.Id)).OrderBy(p => p.ScheduledAt).Take(4).ToList();
+        var evening = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["23:00"], Offset: offset, Name: "ค่ำ"));
+        var night = await shop.CreateScheduleAsync(new ScheduleSpec(Times: ["01:00"], Offset: offset, Name: "ดึก"));
+        var posts = (await shop.PostsAsync(evening.Schedule.Id)).Concat(await shop.PostsAsync(night.Schedule.Id))
+            .OrderBy(p => p.ScheduledAt).Take(4).ToList();
         Assert.Equal(["23:00", "01:00", "23:00", "01:00"], posts.Select(p => p.ScheduledAt.ToOffset(TimeSpan.FromMinutes(offset)).ToString("HH:mm")));
 
         async Task<PostStatus> RunAtAsync(PostDto p)

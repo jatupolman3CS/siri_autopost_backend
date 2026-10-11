@@ -574,20 +574,20 @@ public class ScheduleMaterializerTests
     }
 
     [Fact]
-    public async Task Other_accounts_of_the_set_post_to_their_default_target_without_a_code_or_an_address()
+    public async Task A_set_has_no_other_accounts_so_every_post_is_for_one_of_its_links_and_the_one_extension_that_owns_the_set()
     {
-        var w = new SchedulingWorld(links: 1, posts: 1);
-        var ig = w.AddOtherAccount();
+        var w = new SchedulingWorld(links: 2, posts: 1);
+        // "Other accounts" are retired: a set drops what it is given, so no post is ever made for another extension.
+        w.Set.Update(w.Set.Name, w.Set.PostAsAccountId, [Guid.NewGuid(), w.Page.Id]);
+        Assert.Empty(w.Set.AccountIds);
         var s = w.NewSchedule();
 
         await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1));
 
         Assert.Equal(2, w.Added.Count);
-        var other = w.Added.Single(p => p.AccountId == ig.Id);
-        Assert.Equal(("ฟีด", Platform.Fb, null, null, null, $"account:{ig.Id:N}"), (other.Target, other.Platform, other.TargetUrl, other.Code, other.LinkId, other.TargetKey));
-        Assert.Equal("โพสต์ 1", other.Content);
-        Assert.Equal(w.Page.Id, w.Added.Single(p => p.LinkId == w.Links[0].Id).AccountId);
-        Assert.Equal(TimeSpan.FromMinutes(7.5), other.ScheduledAt - w.Added[0].ScheduledAt); // after the link in the same slot
+        Assert.All(w.Added, p => Assert.NotNull(p.LinkId));
+        Assert.All(w.Added, p => Assert.StartsWith("link:", p.TargetKey));
+        Assert.All(w.Added, p => Assert.Equal(w.Page.Id, p.AccountId));
     }
 
     [Fact]
@@ -994,4 +994,157 @@ public class ScheduleMaterializerTests
 
         Assert.Equal("A1\nสินค้า\n\nท้ายโพสต์\n#โพสต์", w.Added.Single().Content); // the group code is the first line
     }
+
+    // ---- the groups' order: never always the first one ----
+
+    [Fact]
+    public async Task A_set_whose_groups_are_not_random_keeps_the_order_of_its_list_even_when_the_workspace_shuffles()
+    {
+        var w = new SchedulingWorld(links: 6);
+        w.SetGroupRules(randomOrder: false);
+        var s = w.NewSchedule(times: ["18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3), new SeededRandom(5));
+
+        Assert.Equal(18, w.Added.Count);
+        foreach (var round in w.Added.GroupBy(p => p.SlotKey))
+            Assert.Equal(w.Links.Select(l => l.Id), round.OrderBy(p => p.ScheduledAt).Select(p => p.LinkId!.Value));
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(4)]
+    public async Task A_round_never_opens_with_the_group_the_round_before_it_opened_with(int seed)
+    {
+        var w = new SchedulingWorld(links: 3);
+        var s = w.NewSchedule(times: ["09:00", "13:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(5), new SeededRandom(seed));
+
+        var firsts = w.Added.GroupBy(p => p.SlotKey).OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => g.OrderBy(p => p.ScheduledAt).First().LinkId).ToList();
+        Assert.Equal(15, firsts.Count);
+        for (var i = 1; i < firsts.Count; i++) Assert.NotEqual(firsts[i - 1], firsts[i]);
+        Assert.True(firsts.Distinct().Count() > 1, "the first group of the day is not always the same one");
+    }
+
+    [Fact]
+    public async Task Two_groups_open_the_rounds_in_turn_because_a_round_never_opens_like_the_one_before()
+    {
+        var w = new SchedulingWorld(links: 2);
+        var s = w.NewSchedule(times: ["09:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3), new FixedRandom(0.99)); // the same draw every time: only the rule can change it
+
+        var firsts = w.Added.GroupBy(p => p.SlotKey).OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => g.OrderBy(p => p.ScheduledAt).First().LinkId).ToList();
+        Assert.Equal(6, firsts.Count);
+        for (var i = 1; i < firsts.Count; i++) Assert.NotEqual(firsts[i - 1], firsts[i]);
+    }
+
+    // ---- posts a day per group (the set's limit, or the link's own) ----
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(3)]
+    public async Task A_group_limited_to_one_post_a_day_gets_a_random_one_of_the_days_slots(int seed)
+    {
+        var w = new SchedulingWorld(links: 8);
+        w.SetGroupRules(dailyPerGroup: 1);
+        var s = w.NewSchedule(times: ["09:00", "12:00", "15:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(4), new SeededRandom(seed)); // 4 days
+
+        Assert.Equal(8 * 4, w.Added.Count);
+        foreach (var day in w.Added.GroupBy(p => (p.LinkId, Day: p.SlotKey![..10]))) Assert.Single(day);
+        Assert.True(w.Added.Select(p => p.SlotKey![11..]).Distinct().Count() > 1, "the same slot is not always the one a group gets");
+        Assert.True(
+            w.Links.Any(link => w.Added.Where(p => p.LinkId == link.Id).Select(p => p.SlotKey![11..]).Distinct().Count() > 1),
+            "a group does not get the same slot every day");
+    }
+
+    [Fact]
+    public async Task A_limit_bigger_than_the_number_of_slots_changes_nothing()
+    {
+        var w = new SchedulingWorld(links: 3);
+        w.SetGroupRules(dailyPerGroup: 5);
+        var s = w.NewSchedule(times: ["09:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(2), new SeededRandom(1));
+
+        Assert.Equal(3 * 2 * 2, w.Added.Count);
+    }
+
+    [Fact]
+    public async Task A_group_may_have_a_limit_of_its_own_that_replaces_the_sets()
+    {
+        var w = new SchedulingWorld(links: 2);
+        w.SetGroupRules(dailyPerGroup: 1);
+        var own = w.AddLink("own", "O1", dailyMax: 3);
+        var s = w.NewSchedule(times: ["09:00", "12:00", "15:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(7));
+
+        Assert.Equal(3, w.Added.Count(p => p.LinkId == own.Id));
+        Assert.Equal(1, w.Added.Count(p => p.LinkId == w.Links[0].Id));
+        Assert.Equal(1, w.Added.Count(p => p.LinkId == w.Links[1].Id));
+    }
+
+    [Fact]
+    public async Task The_posts_the_schedule_already_made_for_a_group_that_day_count_toward_its_limit()
+    {
+        var w = new SchedulingWorld(links: 3);
+        w.SetGroupRules(dailyPerGroup: 1);
+        var s = w.NewSchedule(times: ["09:00", "18:00"]);
+        var day = Today.AddDays(1);
+        w.ExistingKeys.Add((Post.LinkTargetKey(w.Links[0].Id), Schedule.SlotKey(day, "09:00"))); // the first group has its post for the day
+
+        await w.RunAsync(s, day, day, new SeededRandom(2));
+
+        Assert.DoesNotContain(w.Added, p => p.LinkId == w.Links[0].Id);
+        Assert.Equal(1, w.Added.Count(p => p.LinkId == w.Links[1].Id));
+        Assert.Equal(1, w.Added.Count(p => p.LinkId == w.Links[2].Id));
+    }
+
+    [Fact]
+    public async Task The_opening_round_of_a_start_now_schedule_counts_toward_the_limit()
+    {
+        var w = new SchedulingWorld(links: 4);
+        w.SetGroupRules(dailyPerGroup: 1);
+        var s = w.NewSchedule(times: ["12:00", "15:00", "18:00"], startNow: true);
+
+        await w.RunAsync(s, Today, Today, new SeededRandom(3));
+
+        Assert.Equal(4, w.Added.Count);
+        Assert.All(w.Added, p => Assert.EndsWith("Tnow", p.SlotKey));
+    }
+
+    [Fact]
+    public async Task A_limited_group_is_given_the_slots_still_to_come_rather_than_one_that_has_started()
+    {
+        var w = new SchedulingWorld(links: 4);
+        w.SetGroupRules(dailyPerGroup: 2);
+        var s = w.NewSchedule(times: ["09:00", "12:00", "18:00"]); // it is 10:30: 09:00 has started, 12:00 and 18:00 are ahead
+
+        await w.RunAsync(s, Today, Today, new SeededRandom(4));
+
+        Assert.Equal(8, w.Added.Count);
+        Assert.All(w.Added, p => Assert.Contains(p.SlotKey![11..], new[] { "12:00", "18:00" }));
+    }
+
+    [Fact]
+    public async Task A_group_that_is_not_limited_keeps_every_slot()
+    {
+        var w = new SchedulingWorld(links: 2);
+        w.SetGroupRules(dailyPerGroup: 0);
+        var s = w.NewSchedule(times: ["09:00", "12:00", "15:00", "18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(1), new SeededRandom(1));
+
+        Assert.Equal(2 * 4, w.Added.Count);
+    }
 }
+

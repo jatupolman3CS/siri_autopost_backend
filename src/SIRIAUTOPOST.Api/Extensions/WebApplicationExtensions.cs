@@ -39,5 +39,6 @@ public static class WebApplicationExtensions
             await scope.ServiceProvider.GetRequiredService<AppDbContext>().Database.MigrateAsync();
         }
         await AdminAccountSeeder.EnsureAdminAsync(app.Services);
+        await LinkSetOwnerBackfill.EnsureAsync(app.Services);
     }
 }

@@ -249,10 +249,12 @@ assert.equal(data.get('cloud').paused, false);
 
 step('unbound in the web app: the extension reports it');
 await api('DELETE', `/api/workspaces/${ws.id}/devices/${devices[0].id}`);
-r = await bg('cloudSync');
+// One stray 401 does not wipe a pairing: the browser lets go after a few in a row (every round and sync that fails counts).
+for (let i = 0; i < 5 && data.get('cloud').enabled; i++) r = await bg('cloudSync');
 assert.equal(r.ok, false);
 assert.match(r.error, /ยกเลิกการผูก/);
 assert.equal(data.get('cloud').enabled, false, 'back to "not paired" by itself');
+assert.ok(data.get('cloud').unboundAt > 0, 'and it says it was unbound (the toolbar badge and the status page show it)');
 assert.equal(alarms.has('fbap-cloud'), false);
 assert.ok(data.get('settings').campaigns.length, 'the campaigns stay in the browser');
 

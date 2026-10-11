@@ -65,7 +65,7 @@ public class BackupEndpointsTests(ApiFactory factory)
         var beta = await owner.AddLinkAsync(ws, main.Id, Beta, "B1", "เบต้า");
         await owner.AddLinkAsync(ws, main.Id, Gamma, null, "แกมมา");
         (await owner.PutAsJsonAsync($"{shop.Api}/link-sets/{main.Id}/links/{beta.Id}", new { name = "เบต้า", url = Beta, code = "B1", dailyMax = 0, enabled = false }, Json)).EnsureSuccessStatusCode();
-        (await owner.PutAsJsonAsync($"{shop.Api}/link-sets/{main.Id}", new { name = "ชุดหลัก", postAsAccountId = shop.Pair.AccountId, accountIds = new[] { instagram.Id } }, Json)).EnsureSuccessStatusCode();
+        (await owner.PutAsJsonAsync($"{shop.Api}/link-sets/{main.Id}", new { name = "ชุดหลัก", postAsAccountId = shop.Pair.AccountId, accountIds = Array.Empty<Guid>(), randomOrder = false, dailyPerGroup = 3 }, Json)).EnsureSuccessStatusCode();
         var second = await owner.CreateLinkSetAsync(ws, "ชุดรอง");
         await owner.AddLinkAsync(ws, second.Id, "https://www.facebook.com/groups/delta", "D1", "เดลต้า");
         shop.Set = (await owner.LinkSetsAsync(ws)).Single(s => s.Id == main.Id);
@@ -73,7 +73,7 @@ public class BackupEndpointsTests(ApiFactory factory)
         var (slot, _) = SlotAhead(shop.Now, 420, TimeSpan.FromHours(2));
         var morning = await CreateAsync(shop, plain.Id, main.Id, new ScheduleSpec(
             Times: [slot, "20:00"], Order: "shuffle", Offset: 420, Name: "ตารางเช้า", BumpHours: 6, AutoDeleteDays: 3,
-            Overrides: new() { [alpha.Id.ToString("N")] = ["12:00"], [$"account:{instagram.Id:N}"] = ["21:30"] }));
+            Overrides: new() { [alpha.Id.ToString("N")] = ["12:00"] }));
         var once = await CreateAsync(shop, plain.Id, second.Id, new ScheduleSpec(Mode: "once", StartDate: ToLocalDay(shop.Now.AddDays(1), 420), OnceTime: "14:00", Offset: 420, Name: "ครั้งเดียว"));
         var paused = await CreateAsync(shop, plain.Id, main.Id, new ScheduleSpec(Mode: "weekdays", Times: ["08:00"], Offset: 420, Name: "พักไว้"));
         await shop.SetActiveAsync(paused.Schedule.Id, false);
@@ -155,7 +155,9 @@ public class BackupEndpointsTests(ApiFactory factory)
         Assert.Equal(["ชุดหลัก", "ชุดรอง"], backup.LinkSets.Select(s => s.Name));
         var main = backup.LinkSets[0];
         Assert.Equal(shop.Pair.AccountId, main.PostAsAccountId);
-        Assert.Equal([rich.Instagram.Id], main.AccountIds);
+        Assert.Empty(main.AccountIds); // a set is posted by one extension: "other accounts" are gone
+        Assert.Equal((false, 3), (main.RandomOrder, main.DailyPerGroup)); // the rules for the groups travel with the set
+        Assert.Equal((true, 0), (backup.LinkSets[1].RandomOrder, backup.LinkSets[1].DailyPerGroup));
         Assert.Equal([("อัลฟา", Alpha, "A1", 2, true), ("เบต้า", Beta, "B1", 0, false), ("แกมมา", Gamma, "", 0, true)],
             main.Links.Select(l => (l.Name, l.Url, l.Code, l.DailyMax, l.Enabled)));
 
@@ -165,8 +167,7 @@ public class BackupEndpointsTests(ApiFactory factory)
         Assert.Equal(2, morning.Times.Count);
         // Times of one target are keyed by its address, not its id: the id is new after a restore.
         Assert.Equal(["12:00"], morning.Overrides[Alpha]);
-        Assert.Equal(["21:30"], morning.Overrides[$"account:{rich.Instagram.Id:N}"]);
-        Assert.Equal(2, morning.Overrides.Count);
+        Assert.Single(morning.Overrides);
         Assert.False(backup.Schedules[2].Active);
         Assert.Equal((ScheduleMode.Once, "14:00"), (backup.Schedules[1].Mode, backup.Schedules[1].OnceTime));
 
@@ -255,9 +256,9 @@ public class BackupEndpointsTests(ApiFactory factory)
         var alpha = set.Links.Single(l => l.Url == Alpha);
         var morning = schedules[0];
         // Both sides sorted: the keys are random ids, so neither has a fixed order.
-        Assert.Equal(new[] { alpha.Id.ToString("N"), $"account:{rich.Instagram.Id:N}" }.Order(), morning.Overrides.Keys.Order());
+        Assert.Equal([alpha.Id.ToString("N")], morning.Overrides.Keys);
         Assert.Equal(["12:00"], morning.Overrides[alpha.Id.ToString("N")]);
-        Assert.Equal((set.Id, 3), (morning.LinkSetId, morning.TargetCount)); // two usable links and the other account
+        Assert.Equal((set.Id, 2), (morning.LinkSetId, morning.TargetCount)); // two usable links
 
         // The active schedules have posts again; the paused one has none; the old schedule's queued posts are gone, what went out stays.
         var posts = await shop.PostsAsync();
@@ -526,6 +527,33 @@ public class BackupEndpointsTests(ApiFactory factory)
         Assert.Equal(new RestoreResultDto(1, 1, 1), await res.ReadAsync<RestoreResultDto>());
         var schedule = Assert.Single((await client.GetFromJsonAsync<List<ScheduleDto>>($"/api/workspaces/{ws}/schedules", Json))!);
         Assert.Equal((true, 1, null), (schedule.Active, schedule.TargetCount, schedule.NextRunAt));
+    }
+
+    [Fact]
+    public async Task A_restored_set_that_names_an_extension_this_workspace_does_not_have_goes_to_the_only_connected_one_and_to_nobody_when_there_are_several()
+    {
+        object File(Guid? postAs) => new
+        {
+            version = 2, createdAt = DateTimeOffset.UtcNow,
+            collections = Array.Empty<object>(),
+            linkSets = new[] { new { name = "กลุ่ม", postAsAccountId = postAs, accountIds = Array.Empty<Guid>(), links = new[] { new { name = "อัลฟา", url = Alpha, code = "A1", dailyMax = 0, enabled = true } } } },
+            schedules = Array.Empty<object>(),
+        };
+
+        // One extension: the set belongs to it from the start, as a set made on the web does.
+        using var shop = await factory.ShopAsync("agency", links: 1);
+        (await shop.Owner.PostAsJsonAsync($"{shop.Api}/restore", File(Guid.NewGuid()), Json)).EnsureSuccessStatusCode();
+        Assert.Equal(shop.Pair.AccountId, Assert.Single(await shop.Owner.LinkSetsAsync(shop.Ws)).PostAsAccountId);
+
+        // The file names an extension that is here: it keeps it.
+        (await shop.Owner.PostAsJsonAsync($"{shop.Api}/restore", File(shop.Pair.AccountId), Json)).EnsureSuccessStatusCode();
+        Assert.Equal(shop.Pair.AccountId, Assert.Single(await shop.Owner.LinkSetsAsync(shop.Ws)).PostAsAccountId);
+
+        // Two extensions: a guess would send the set's groups to the wrong machine, so it names nobody until a person picks.
+        var code = (await (await shop.Owner.PostAsync($"{shop.Api}/devices/pairing", null)).Content.ReadFromJsonAsync<PairingCodeDto>(Json))!;
+        (await factory.CreateClient().PostAsJsonAsync("/api/device/pair", new { code = code.Code, name = "Second PC", browser = "Chrome", version = "2.4.0" }, Json)).EnsureSuccessStatusCode();
+        (await shop.Owner.PostAsJsonAsync($"{shop.Api}/restore", File(Guid.NewGuid()), Json)).EnsureSuccessStatusCode();
+        Assert.Null(Assert.Single(await shop.Owner.LinkSetsAsync(shop.Ws)).PostAsAccountId);
     }
 
     // ---- who may, and what the plan allows ----

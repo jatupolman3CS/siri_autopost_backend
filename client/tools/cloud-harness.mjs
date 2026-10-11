@@ -47,6 +47,7 @@ const local = {
 // The Facebook group page, as content.js would answer for it.
 const page = {
   loggedIn: true,
+  hang: false, // the tab never answers (a stuck page)
   open: false,
   text: '',
   attached: [], // media records content.js would have loaded from storage
@@ -58,7 +59,7 @@ const page = {
   commented: [],    // { text, files, url }: the comments (bumps) made
 };
 const contentHandlers = {
-  check: () => ({ ok: true, title: `${GROUP.name} | Facebook`, login: !page.loggedIn, checkpoint: false, canSwitch: page.canSwitch }),
+  check: () => (page.hang ? new Promise(() => {}) : { ok: true, title: `${GROUP.name} | Facebook`, login: !page.loggedIn, checkpoint: false, canSwitch: page.canSwitch }),
   blockCheck: () => ({ ok: true, blocked: false }),
   scroll: () => ({ ok: true }),
   scrollTop: () => ({ ok: true }),
@@ -151,7 +152,7 @@ const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn, ms, ...a) => realSetTimeout(fn, (ms ?? 0) >= 100000 ? ms : Math.min(ms ?? 0, 50), ...a); // keeps request timeouts
 
 const { migrateSettings, newCampaign } = await import('../lib/shared.js');
-await import('../background.js');
+const background = await import('../background.js');
 
 function bg(cmd, extra = {}) {
   return new Promise((resolve) => {
@@ -191,5 +192,5 @@ export function setToken(t) {
 
 export {
   API, ADMIN, GROUP, BARE, data, local, listeners, alarms, page, tabUrls, bg, api, step, sleep, realSetTimeout,
-  migrateSettings, newCampaign,
+  migrateSettings, newCampaign, background,
 };

@@ -130,21 +130,22 @@ public class SchedulesEndpointsTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task Other_accounts_of_the_set_post_to_their_default_target()
+    public async Task A_schedule_posts_only_through_the_one_extension_that_owns_the_set_never_through_other_accounts()
     {
         using var shop = await factory.ShopAsync(links: 1);
         var ig = await factory.SeedAccountAsync(shop.Ws);
-        (await shop.Owner.PutAsJsonAsync($"{shop.Api}/link-sets/{shop.Set.Id}",
-            new { name = shop.Set.Name, postAsAccountId = shop.Pair.AccountId, accountIds = new[] { ig.Id } }, Json)).EnsureSuccessStatusCode();
+        // A set cannot name other accounts any more (it would post its text through a second extension).
+        var refused = await shop.Owner.PutAsJsonAsync($"{shop.Api}/link-sets/{shop.Set.Id}",
+            new { name = shop.Set.Name, postAsAccountId = shop.Pair.AccountId, accountIds = new[] { ig.Id } }, Json);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
         var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
 
         var created = await shop.CreateScheduleAsync(Daily(slot));
 
-        Assert.Equal((2, 2), (created.Schedule.TargetCount, created.Schedule.PerDay));
-        var other = (await shop.PostsAsync(created.Schedule.Id)).Where(p => p.AccountId == ig.Id).ToList();
-        Assert.NotEmpty(other);
-        Assert.All(other, p => Assert.Equal((ig.DefaultTarget, Platform.Fb, null, null, null), (p.Target, p.Platform, p.TargetUrl, p.Code, p.LinkId)));
-        Assert.All(other, p => Assert.Equal(shop.Posts.Single(c => c.Id == p.CollectionPostId).Text, p.Content));
+        Assert.Equal((1, 1), (created.Schedule.TargetCount, created.Schedule.PerDay));
+        var posts = await shop.PostsAsync(created.Schedule.Id);
+        Assert.NotEmpty(posts);
+        Assert.All(posts, p => Assert.Equal((shop.Pair.AccountId, shop.Link(0).Id), (p.AccountId, p.LinkId)));
     }
 
     [Fact]

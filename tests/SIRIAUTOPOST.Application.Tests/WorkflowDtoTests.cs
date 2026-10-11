@@ -1,5 +1,6 @@
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Features.Schedules;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Exceptions;
@@ -131,30 +132,58 @@ public class WorkflowDtoTests
     }
 
     [Fact]
-    public void The_account_that_posts_a_set_is_the_one_it_names_or_the_first_connected_facebook_account()
+    public void The_account_that_posts_a_set_is_the_one_it_names_never_another_extensions()
     {
-        var device = Device.Pair(Ws, "PC", "Chrome", "2.2", "h", Now);
-        var demoPage = SocialAccount.Create(Ws, Platform.Fb, "เพจตัวอย่าง", "", "เพจ");
-        var ig = SocialAccount.Create(Ws, Platform.Fb, "@shop", "", "ฟีด");
-        var connected = SocialAccount.Connect(Ws, device, 2);
-        var all = new[] { demoPage, ig, connected };
+        var oneDevice = Device.Pair(Ws, "PC 1", "Chrome", "2.3", "h1", Now);
+        var twoDevice = Device.Pair(Ws, "PC 2", "Chrome", "2.3", "h2", Now);
+        var one = SocialAccount.Connect(Ws, oneDevice, 0);
+        var two = SocialAccount.Connect(Ws, twoDevice, 1);
+        var noBrowser = SocialAccount.Create(Ws, Platform.Fb, "เพจตัวอย่าง", "", "เพจ");
 
+        // A set that names none belongs to the ONLY connected Facebook account. With two extensions nobody is guessed
+        // (2026-10-10: "the first one" sent a set's groups to whichever machine happened to be first): it waits for a choice.
         var unnamed = LinkSet.Create(Ws, "a", null, Now);
-        Assert.Equal(connected, LinkSetAccounts.PostingAccount(unnamed, all));
+        Assert.Equal(one, LinkSetAccounts.PostingAccount(unnamed, [noBrowser, one]));
+        Assert.Null(LinkSetAccounts.PostingAccount(unnamed, [noBrowser, one, two]));
+        Assert.Null(LinkSetAccounts.PostingAccount(unnamed, [noBrowser]));
+        Assert.Null(LinkOwnership.OwnerOf(unnamed, [noBrowser, one, two]));
+        Assert.Equal(LinkSetAccounts.NoChoice, LinkSetAccounts.NoPosterReason([one, two]));
+        Assert.Equal(CreateScheduleCommandHandler.NoDevice, LinkSetAccounts.NoPosterReason([noBrowser]));
 
-        var named = LinkSet.Create(Ws, "b", demoPage.Id, Now);
-        // A named account without a browser (unbound, or paired again as a new browser) gives way to the connected one...
-        Assert.Equal(connected, LinkSetAccounts.PostingAccount(named, all));
-        // ...and when nothing is connected it is still the one returned, so the caller can say it has no browser.
-        Assert.Equal(demoPage, LinkSetAccounts.PostingAccount(named, [demoPage, ig]));
-        var pinnedToConnected = LinkSet.Create(Ws, "d", connected.Id, Now);
-        var other = SocialAccount.Connect(Ws, Device.Pair(Ws, "PC 2", "Chrome", "2.2", "h2", Now), 3);
-        Assert.Equal(other, LinkSetAccounts.PostingAccount(LinkSet.Create(Ws, "e", other.Id, Now), [connected, other])); // a connected named account stays
-        Assert.Equal(connected, LinkSetAccounts.PostingAccount(pinnedToConnected, [connected, other]));
+        // A set that names an account is posted by that browser: connected, it is the answer even when another is first...
+        Assert.Equal(two, LinkSetAccounts.PostingAccount(LinkSet.Create(Ws, "b", two.Id, Now), [one, two]));
+        Assert.Equal(one, LinkSetAccounts.PostingAccount(LinkSet.Create(Ws, "c", one.Id, Now), [one, two]));
 
-        var gone = LinkSet.Create(Ws, "c", Guid.NewGuid(), Now);
-        Assert.Equal(connected, LinkSetAccounts.PostingAccount(gone, all));
-        Assert.Null(LinkSetAccounts.PostingAccount(unnamed, [demoPage, ig]));
+        // ...and while its browser is unbound it is STILL the answer (the caller says it has no browser, the posts wait):
+        // the set never moves to the other extension, however many are connected.
+        one.Disconnect();
+        var pinned = LinkSet.Create(Ws, "d", one.Id, Now);
+        var answer = LinkSetAccounts.PostingAccount(pinned, [one, two]);
+        Assert.Equal(one, answer);
+        Assert.False(answer!.IsConnected);
+        Assert.Equal(noBrowser, LinkSetAccounts.PostingAccount(LinkSet.Create(Ws, "e", noBrowser.Id, Now), [noBrowser, two]));
+
+        // A named account that no longer exists: the only connected one takes over, with several nobody is guessed.
+        var gone = LinkSet.Create(Ws, "f", Guid.NewGuid(), Now);
+        Assert.Equal(two, LinkSetAccounts.PostingAccount(gone, [one, two]));
+        var three = SocialAccount.Connect(Ws, Device.Pair(Ws, "PC 3", "Chrome", "2.3", "h3", Now), 2);
+        Assert.Null(LinkSetAccounts.PostingAccount(gone, [two, three]));
+        Assert.Null(LinkSetAccounts.PostingAccount(gone, [noBrowser]));
+    }
+
+    [Fact]
+    public void A_browser_that_pairs_again_takes_its_old_account_back_healthy()
+    {
+        var first = Device.Pair(Ws, "ส่วนขยาย 1", "Chrome", "2.3", "h1", Now);
+        var account = SocialAccount.Connect(Ws, first, 0);
+        account.Disconnect();
+        Assert.False(account.IsConnected);
+        Assert.False(account.CanPost);
+
+        var again = Device.Pair(Ws, "ส่วนขยาย 1", "Chrome", "2.3", "h2", Now);
+        account.Reconnect(again);
+
+        Assert.Equal((again.Id, true, true, "Facebook · ส่วนขยาย 1"), (account.DeviceId!.Value, account.IsConnected, account.CanPost, account.Name));
     }
 
     [Fact]

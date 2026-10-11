@@ -1882,6 +1882,31 @@ const CLOUD_ALARM = 'fbap-cloud';
 const CLOUD_PERIOD_MIN = 0.5;
 const CLOUD_IMG = 'cloudimg:'; // media of a cloud post; removed after posting
 
+// Timings the end-to-end tests shorten (tools/test-unattended.mjs); the extension itself never changes them.
+export const tuning = {
+  loginProbeMs: 8 * 60000, // while Facebook wants a login: how often the extension looks whether the person logged in again
+  jobDeadlineMs: 14 * 60000, // a job still running after this is stopped (the web fails a job it hears nothing of after 15 minutes)
+  probeDeadlineMs: 3 * 60000,
+};
+
+// A job that never ends (a tab that does not answer, a window that cannot open) would hold the post queue for ever: every later
+// round waits behind it and the browser looks dead. Past the deadline the job is stopped and counts as failed.
+function withDeadline(run, ms, message) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      abortFlag = true;
+      reject(new Error(message));
+    }, ms);
+    Promise.resolve()
+      .then(run)
+      .then(resolve, reject)
+      .finally(() => clearTimeout(timer));
+  });
+}
+// The web answers 401 only when it does not know the key (the device was unbound). Still, one stray 401 must not wipe a
+// pairing: the browser forgets it after this many in a row.
+const AUTH_FAILS_TO_FORGET = 3;
+
 const DEFAULT_CLOUD = {
   enabled: false,
   apiUrl: '',
@@ -1894,6 +1919,13 @@ const DEFAULT_CLOUD = {
   groupsHash: '',     // groups last sent to the web app
   groupNames: {},     // url -> name as last sent (a name the web app knows is kept: queued posts use it)
   groups: 0,
+  accountId: '',      // the Facebook account this browser is in the web app (kept when it pairs again)
+  authFails: 0,       // 401s in a row (see AUTH_FAILS_TO_FORGET)
+  unboundAt: 0,       // when the web unbound this browser (it is not paired any more; `prev` says who it was)
+  unboundMsg: '',
+  prev: null,         // { apiUrl, accountId, deviceName, workspaceName } of the pairing the web removed
+  loginLostAt: 0,     // Facebook wanted a login (a job failed for it): no jobs until a probe finds the person logged in again
+  loginProbeAt: 0,    // when this browser looks next whether the person logged in again (0 = at once)
   lastSyncAt: 0,
   lastError: '',
   lastJob: null,      // { at, group, ok, error }
@@ -1915,10 +1947,40 @@ function setCloud(patch) {
   const p = cloudChain.then(async () => {
     const next = { ...(await getCloud()), ...patch };
     await chrome.storage.local.set({ cloud: next });
+    showCloudBadge(next);
     return next;
   });
   cloudChain = p.catch(() => {});
   return p;
+}
+
+// The toolbar icon says when this browser needs a person: "!" in red when the web unbound it, in orange when Facebook wants
+// a login or the web cannot be reached. Nothing when all is well. (A badge is reset by a browser restart: the service
+// worker sets it again every time it starts.)
+function showCloudBadge(c) {
+  let text = '';
+  let color = '#d93025';
+  if (!c.enabled && c.unboundAt) text = '!';
+  else if (c.enabled && c.loginLostAt) {
+    text = '!';
+    color = '#e8710a';
+  } else if (c.enabled && (c.lastError || c.configError)) {
+    text = '!';
+    color = '#e8710a';
+  }
+  try {
+    chrome.action.setBadgeText({ text });
+    if (text) chrome.action.setBadgeBackgroundColor({ color });
+    chrome.action.setTitle?.({
+      title: !c.enabled && c.unboundAt
+        ? 'AutoPost - เครื่องนี้ถูกยกเลิกการผูก จับคู่ใหม่ที่หน้าเว็บ'
+        : c.enabled && c.loginLostAt
+          ? 'AutoPost - ยังไม่ได้ล็อกอิน Facebook ในเครื่องนี้'
+          : 'AutoPost - สถานะการทำงาน',
+    });
+  } catch {
+    /* no toolbar (a test, or the API is missing): the badge is a courtesy */
+  }
 }
 
 // fetch with the device key; errors carry the API's Thai message (ProblemDetails title).
@@ -2044,7 +2106,11 @@ async function runCloudJob(c, job) {
       keys.push(key);
     }
     await log('info', `[เว็บ AutoPost] กำลังโพสต์ลงกลุ่ม ${job.groupName}: ${job.groupUrl}`);
-    result = await postToGroup(job.groupUrl, { text: job.content, imageIds: keys, targetKind: job.targetKind }, cfg, global);
+    result = await withDeadline(
+      () => postToGroup(job.groupUrl, { text: job.content, imageIds: keys, targetKind: job.targetKind }, cfg, global),
+      tuning.jobDeadlineMs,
+      'การโพสต์ใช้เวลานานเกินไปจึงหยุดงานนี้'
+    );
   } catch (e) {
     result = {
       ok: false,
@@ -2092,6 +2158,8 @@ async function runCloudJob(c, job) {
     patch.pausedUntil = Date.now() + rand(adv.blockMin || g.blockPauseHoursMin || 2, adv.blockMax || g.blockPauseHoursMax || 4) * 3600000;
     await log('warn', `[เว็บ AutoPost] Facebook แจ้งเตือน พักรับงานถึง ${fmtDateTime(patch.pausedUntil)}`);
   }
+  if (result.fatal) Object.assign(patch, loginLost());
+  else if (result.ok) Object.assign(patch, { loginLostAt: 0 });
   await setCloud(patch);
   if (result.ok) {
     await notify('success', `✅ <b>โพสต์สำเร็จ (เว็บ AutoPost)</b>\n${groupLine(result.groupName || job.groupName, job.groupUrl)}\n🕒 ${fmtDateTime(Date.now())}`, result.shot);
@@ -2129,7 +2197,11 @@ async function runCloudBump(c, job) {
       keys.push(key);
     }
     await log('info', `[เว็บ AutoPost] กำลังดันโพสต์ใน ${job.groupName}: ${job.groupUrl}`);
-    result = await commentOnPost(job.groupUrl, { text: job.content || '', imageIds: keys }, cfg, global);
+    result = await withDeadline(
+      () => commentOnPost(job.groupUrl, { text: job.content || '', imageIds: keys }, cfg, global),
+      tuning.jobDeadlineMs,
+      'การดันโพสต์ใช้เวลานานเกินไปจึงหยุดงานนี้'
+    );
   } catch (e) {
     result = {
       ok: false,
@@ -2166,9 +2238,14 @@ async function runCloudBump(c, job) {
     patch.pausedUntil = Date.now() + rand(adv.blockMin || stored.blockPauseHoursMin || 2, adv.blockMax || stored.blockPauseHoursMax || 4) * 3600000;
     await log('warn', `[เว็บ AutoPost] Facebook แจ้งเตือน พักรับงานถึง ${fmtDateTime(patch.pausedUntil)}`);
   }
+  if (result.fatal) Object.assign(patch, loginLost());
   await setCloud(patch);
   return result;
 }
+
+// Facebook wanted a login (or a checkpoint) while a job ran: the web now holds this account's jobs (its health is "relogin").
+// The browser looks again every few minutes (cloudTick) and the account takes jobs as soon as the person is logged in.
+const loginLost = () => ({ loginLostAt: Date.now(), loginProbeAt: Date.now() + tuning.loginProbeMs * rand(0.8, 1.3) });
 
 // One round: heartbeat, groups, and at most one post. Runs in the tick chain, so it never
 // overlaps a campaign post.
@@ -2176,7 +2253,7 @@ async function cloudTick({ claim = true } = {}) {
   let c = await getCloud();
   if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
   try {
-    const hb = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version });
+    let hb = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version });
     const groups = await cloudGroupList(c.groupNames || {});
     const hash = await sha256(JSON.stringify(groups));
     let count = hb.groups;
@@ -2189,23 +2266,28 @@ async function cloudTick({ claim = true } = {}) {
     c = await setCloud({
       deviceName: hb.deviceName,
       workspaceName: hb.workspaceName,
+      accountId: hb.accountId || c.accountId,
       paused: !!hb.jobsPaused,
       groupsHash: hash,
       groupNames,
       groups: count,
       lastSyncAt: Date.now(),
       lastError: '',
+      authFails: 0,
     });
+    // The web holds this account's jobs while it waits for a Facebook login: look whether the person logged in again.
+    if (claim) hb = await cloudLoginRecovery(c, hb);
+    if (!hb) return { ok: true, posted: false };
     const state = await getState();
     const resting = c.pausedUntil > Date.now() || (state.pausedUntil && Date.now() < state.pausedUntil);
-    if (!claim || c.paused || resting || !hb.online || posting) return { ok: true, posted: false };
+    if (!claim || hb.jobsPaused || resting || !hb.online || posting) return { ok: true, posted: false };
     const job = await cloudApi(c, 'POST', '/api/device/jobs/claim');
     if (!job) return { ok: true, posted: false };
     const r = await runCloudJob(c, job);
     return { ok: true, posted: true, result: !!r.ok };
   } catch (e) {
     const msg = e?.message || String(e);
-    if (e?.status === 401) return cloudForget(msg);
+    if (e?.status === 401) return cloudAuthFailed(msg);
     const prev = (await getCloud()).lastError;
     await setCloud({ lastError: msg });
     if (msg !== prev) await log('warn', `[เว็บ AutoPost] ${msg}`);
@@ -2213,11 +2295,84 @@ async function cloudTick({ claim = true } = {}) {
   }
 }
 
-// Unbound in the web app (the key no longer works): back to "not paired". The campaigns stay in this
-// browser and go up again when it is paired with a workspace.
+// Opens facebook.com in the posting window, as a person looks whether they are still logged in, and says whether the
+// page is a logged-in one (no login form, no checkpoint). Runs in the post queue, so it never overlaps a post.
+async function probeFacebookLogin() {
+  posting = true;
+  keepAlive(true);
+  try {
+    return await withDeadline(
+      async () => {
+        const tabId = await openWorkerTab('https://www.facebook.com/', false);
+        await sleep(rand(2500, 5000));
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content.js'] });
+        const page = await tabCmd(tabId, 'check');
+        return !page.login && !page.checkpoint;
+      },
+      tuning.probeDeadlineMs,
+      'ตรวจ Facebook ไม่เสร็จ'
+    );
+  } catch {
+    return false;
+  } finally {
+    posting = false;
+    keepAlive(false);
+  }
+}
+
+// A job found Facebook logged out, so the web gave this account no more jobs: left alone, the extension would stay
+// silent until somebody pressed "sign in again" on the web, even after the person logged in. So the browser looks about
+// every `tuning.loginProbeMs` and, when the page is a logged-in one, tells the web (heartbeat `sessionOk`), which then
+// hands out jobs again. Returns the heartbeat answer to go on with, or null when this round has nothing to take.
+async function cloudLoginRecovery(c, hb) {
+  const lost = !!hb.sessionLost;
+  if (!lost) {
+    if (c.loginLostAt) await setCloud({ loginLostAt: 0 }); // the web is satisfied (a click on "sign in again"): forget our note
+    return hb;
+  }
+  if (!c.loginLostAt) {
+    // The web knows before this browser does (a restart since the failed job, a job of an earlier pairing): look at once.
+    c = await setCloud({ loginLostAt: Date.now(), loginProbeAt: 0 });
+  }
+  if (posting || Date.now() < c.loginProbeAt) return null;
+  const ok = await probeFacebookLogin();
+  const next = Date.now() + tuning.loginProbeMs * rand(0.8, 1.3);
+  if (!ok) {
+    await setCloud({ loginProbeAt: next });
+    await log('info', `[เว็บ AutoPost] ยังไม่ได้ล็อกอิน Facebook ในเครื่องนี้ รอรับงานอยู่ (ตรวจอีกครั้งตอน ${fmtDateTime(next)})`);
+    return null;
+  }
+  const again = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version, sessionOk: true });
+  await setCloud({ loginLostAt: 0, loginProbeAt: 0 });
+  await log('success', '[เว็บ AutoPost] ล็อกอิน Facebook ในเครื่องนี้อีกครั้งแล้ว กลับมารับงานต่อ');
+  return again;
+}
+
+// The web answered 401: it does not know this browser's key (the device was unbound there). A few in a row and the browser
+// lets go of the pairing; one stray answer does not wipe it.
+async function cloudAuthFailed(msg) {
+  const c = await getCloud();
+  if (!c.enabled) return { ok: false, error: msg };
+  const n = (c.authFails || 0) + 1;
+  if (n < AUTH_FAILS_TO_FORGET) {
+    await setCloud({ authFails: n, lastError: msg });
+    return { ok: false, error: msg };
+  }
+  return cloudForget(msg);
+}
+
+// Unbound in the web app (the key no longer works): back to "not paired". It is NOT silent: the toolbar badge turns red and
+// the status page says so. The browser keeps who it was (`prev`), so pairing again from the web gives it back its Facebook
+// account, and with it the link sets pinned to it. The campaigns stay in this browser and go up again when it is paired.
 async function cloudForget(msg) {
-  if ((await getCloud()).enabled) {
-    await setCloud({ ...DEFAULT_CLOUD });
+  const c = await getCloud();
+  if (c.enabled) {
+    await setCloud({
+      ...DEFAULT_CLOUD,
+      unboundAt: Date.now(),
+      unboundMsg: msg,
+      prev: { apiUrl: c.apiUrl, accountId: c.accountId, deviceName: c.deviceName, workspaceName: c.workspaceName },
+    });
     await ensureCloudAlarm();
     await log('warn', `[เว็บ AutoPost] ${msg}`);
   }
@@ -2284,6 +2439,17 @@ async function cloudPair({ apiUrl, code, name }) {
   if (!String(code || '').trim()) return { ok: false, error: 'ใส่รหัสจับคู่จากหน้าเว็บก่อน' };
   const ua = (globalThis.navigator && navigator.userAgent) || '';
   const browser = (ua.match(/(Edg|OPR|Chrome)\/(\d+)/) || []).slice(1).join(' ').replace('Edg', 'Edge').replace('OPR', 'Opera') || 'Chrome';
+  // Who this browser was in this web app: it keeps that Facebook account (and the link sets pinned to it) instead of
+  // becoming a second extension. Still paired: the key it holds names its old device, which the new pairing replaces.
+  // Unbound by the web: the account and name it remembers.
+  const was = await getCloud();
+  const here = (u) => !!u && normServer(u) === url;
+  let previous = {};
+  if (was.enabled && here(was.apiUrl)) {
+    previous = { previousDeviceKey: was.deviceKey, previousAccountId: was.accountId || undefined, previousName: was.deviceName || undefined };
+  } else if (!was.enabled && was.prev && here(was.prev.apiUrl)) {
+    previous = { previousAccountId: was.prev.accountId || undefined, previousName: was.prev.deviceName || undefined };
+  }
   let pair;
   try {
     pair = await cloudApi({ apiUrl: url }, 'POST', '/api/device/pair', {
@@ -2291,6 +2457,7 @@ async function cloudPair({ apiUrl, code, name }) {
       name: String(name || '').trim() || `${browser} ${new Date().toLocaleDateString('th-TH')}`,
       browser,
       version: chrome.runtime.getManifest().version,
+      ...previous,
     });
   } catch (e) {
     return { ok: false, error: e.message };
@@ -2301,6 +2468,7 @@ async function cloudPair({ apiUrl, code, name }) {
     apiUrl: url,
     deviceKey: pair.deviceKey,
     deviceId: pair.deviceId,
+    accountId: pair.accountId || '',
     deviceName: pair.deviceName,
     workspaceName: pair.workspaceName,
   });
@@ -2484,11 +2652,11 @@ async function doCloudConfigSync({ mode = 'auto', wait = false } = {}) {
     // Report the new state right away so the web page sees it.
     if (await runRemoteCommands(s.commands || [], report)) await cloudReport(await getCloud(), false);
     if (syncError) throw syncError;
-    await setCloud({ configSyncAt: Date.now(), configError: '' });
+    await setCloud({ configSyncAt: Date.now(), configError: '', authFails: 0 });
     return { ok: true };
   } catch (e) {
     const msg = e?.status === 404 ? 'เว็บ AutoPost เวอร์ชันนี้ยังไม่รองรับการแก้ชุดโพสต์บนเว็บ' : e?.message || String(e);
-    if (e?.status === 401) return cloudForget(msg);
+    if (e?.status === 401) return cloudAuthFailed(msg);
     const prev = (await getCloud()).configError;
     await setCloud({ configError: msg });
     if (msg !== prev) await log('warn', `[เว็บ AutoPost] ซิงก์การตั้งค่าไม่สำเร็จ: ${msg}`);
@@ -2657,6 +2825,18 @@ chrome.runtime.onInstalled.addListener(() => {
   enqueue(() => loadBundledConfig({ auto: true }));
   ensureSyncAlarm().then(() => syncOnline());
   ensureCloudAlarm();
+});
+
+// Every start of the service worker, not only a browser start or an update: Chrome may have dropped the alarm (it does not
+// promise to keep them over a restart), and the toolbar badge starts empty. Without the alarm this browser would be silent.
+ensureCloudAlarm().catch((e) => console.error('[FBAP]', e));
+getCloud().then(showCloudBadge).catch(() => {});
+
+// The network came back (a computer that started before its Wi-Fi did): take the work now instead of at the next round.
+globalThis.addEventListener?.('online', async () => {
+  if (!(await getCloud()).enabled) return;
+  cloudConfigSync().catch(() => {});
+  enqueue(() => cloudTick()).catch(() => {});
 });
 
 const commands = {

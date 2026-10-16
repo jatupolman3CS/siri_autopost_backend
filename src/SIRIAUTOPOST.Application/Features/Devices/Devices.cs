@@ -577,15 +577,22 @@ public sealed class ClaimJobCommandHandler(
 
         var linkCache = new Dictionary<Guid, SetLink?>();
         var perLinkDay = new Dictionary<(Guid Link, DateTimeOffset Day), int>();
-        var offsets = new Dictionary<Guid, int>();
+        var scheduleCache = new Dictionary<Guid, Schedule?>();
         var lastToLink = new Dictionary<Guid, DateTimeOffset?>();
+        DateTimeOffset? lastBegan = null; // when the browser last took a post (a schedule's gap between groups counts from it)
+        var lastBeganKnown = false;
+
+        async Task<Schedule?> ScheduleOfAsync(Guid scheduleId)
+        {
+            if (!scheduleCache.TryGetValue(scheduleId, out var found))
+                scheduleCache[scheduleId] = found = await schedules.GetAsync(ws.Id, scheduleId, ct);
+            return found;
+        }
 
         // A group's daily cap counts calendar days, in the calendar of the schedule that made the post (UTC without one).
         async Task<(DateTimeOffset Start, DateTimeOffset End)> DayOfAsync(Post p)
         {
-            var offset = 0;
-            if (p.ScheduleId is { } scheduleId && !offsets.TryGetValue(scheduleId, out offset))
-                offsets[scheduleId] = offset = (await schedules.GetAsync(ws.Id, scheduleId, ct))?.UtcOffsetMinutes ?? 0;
+            var offset = p.ScheduleId is { } scheduleId ? (await ScheduleOfAsync(scheduleId))?.UtcOffsetMinutes ?? 0 : 0;
             return Schedule.LocalDayBounds(p.ScheduledAt, offset);
         }
 
@@ -666,6 +673,22 @@ public sealed class ClaimJobCommandHandler(
                         lastToLink[linkId] = lastPost = await posts.LastPublishedToLinkAtAsync(linkId, ct);
                     if (lastPost is { } lastAt) holdUntil = lastAt + TimeSpan.FromHours(advanced.Cooldown);
                 }
+            }
+
+            // A schedule with its own gap between groups ("how many minutes apart", 2026-10-13) keeps it here too, whatever put
+            // the posts close together (two rounds that overlap, a browser that was off and came back with a backlog, a
+            // second schedule): a post of such a schedule waits until the gap has passed since the browser last TOOK a
+            // post (start to start, so the minutes spent posting do not stretch the plan). A post somebody asked to post
+            // now, and a test, skip it: the person chose that moment. It is pacing, so lateness counts from when it ends.
+            if (p.ScheduleId is { } gapScheduleId && p.RushedAt is null && !p.IsTest
+                && await ScheduleOfAsync(gapScheduleId) is { GroupGapMinutes: > 0 } gapSchedule)
+            {
+                if (!lastBeganKnown)
+                {
+                    lastBegan = await posts.LastClaimedAtAsync(account.Id, ct);
+                    lastBeganKnown = true;
+                }
+                if (lastBegan is { } began) holdUntil = Latest(holdUntil, began + TimeSpan.FromMinutes(gapSchedule.GroupGapMinutes), DateTimeOffset.MinValue);
             }
 
             // A group's cooldown is pacing too: lateness counts from when it ends.

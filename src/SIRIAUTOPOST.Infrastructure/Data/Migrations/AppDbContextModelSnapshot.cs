@@ -1470,6 +1470,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("date")
                         .HasColumnName("generated_through");
 
+                    b.Property<int>("GroupGapMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("group_gap_minutes");
+
                     b.Property<Guid>("LinkSetId")
                         .HasColumnType("uuid")
                         .HasColumnName("link_set_id");

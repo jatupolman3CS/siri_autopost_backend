@@ -203,6 +203,19 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     public async Task<IReadOnlyList<Post>> ListFutureQueuedByLinkAsync(Guid linkId, DateTimeOffset now, CancellationToken ct = default) =>
         await db.Posts.Where(x => x.LinkId == linkId && x.ScheduleId != null && x.Status == PostStatus.Queued && x.ScheduledAt > now).ToListAsync(ct);
 
+    public async Task<IReadOnlyList<Post>> ListOpenByLinksAsync(IEnumerable<Guid> linkIds, CancellationToken ct = default)
+    {
+        var ids = linkIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+        return await db.Posts
+            .Where(x => x.LinkId != null && ids.Contains(x.LinkId.Value) && x.ScheduleId != null && !x.IsTest &&
+                        (x.Status == PostStatus.Queued || x.Status == PostStatus.Waiting))
+            .ToListAsync(ct);
+    }
+
+    public Task<DateTimeOffset?> LastClaimedAtAsync(Guid accountId, CancellationToken ct = default) =>
+        db.Posts.Where(x => x.AccountId == accountId && x.ClaimedAt != null).MaxAsync(x => x.ClaimedAt, ct);
+
     public async Task<IReadOnlyList<(string TargetKey, string SlotKey)>> ListScheduleKeysAsync(
         Guid scheduleId, DateTimeOffset scheduledFrom, CancellationToken ct = default)
     {

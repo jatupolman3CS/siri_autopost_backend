@@ -104,6 +104,55 @@ public class PostTests
     }
 
     [Fact]
+    public void MoveTo_hands_a_waiting_post_to_another_account_and_keeps_its_time_and_text()
+    {
+        var other = SocialAccount.Create(Ws, Platform.Fb, "Other", "", "เพจ", groups: ["A"]);
+        var p = Queued();
+        var at = p.ScheduledAt;
+
+        p.MoveTo(other, Now.AddMinutes(5));
+
+        Assert.Equal(other.Id, p.AccountId);
+        Assert.Equal(at, p.ScheduledAt);
+        Assert.Equal("hello", p.Content);
+        Assert.Equal(PostStatus.Queued, p.Status);
+    }
+
+    [Fact]
+    public void MoveTo_refuses_a_post_that_a_browser_took_or_that_is_over_and_an_account_of_another_workspace()
+    {
+        var other = SocialAccount.Create(Ws, Platform.Fb, "Other", "", "เพจ", groups: ["A"]);
+        var taken = Queued();
+        taken.Claim(Guid.NewGuid(), Now);
+
+        Assert.Throws<DomainException>(() => taken.MoveTo(other, Now));
+        Assert.Throws<DomainException>(() => Failed().MoveTo(other, Now));
+        Assert.Throws<DomainException>(() => Queued().MoveTo(SocialAccount.Create(Guid.NewGuid(), Platform.Fb, "Else", "", "เพจ", groups: []), Now));
+    }
+
+    [Fact]
+    public void Rehome_follows_a_failed_post_to_the_extension_that_owns_its_set_now()
+    {
+        var owner = SocialAccount.Create(Ws, Platform.Fb, "Owner", "", "เพจ", groups: ["A"]);
+        var failed = Failed();
+
+        Assert.True(failed.Rehome(owner, Now));
+        Assert.Equal(owner.Id, failed.AccountId);
+        Assert.False(failed.Rehome(owner, Now)); // already there
+        Assert.False(failed.Rehome(SocialAccount.Create(Guid.NewGuid(), Platform.Fb, "Else", "", "เพจ", groups: []), Now)); // another workspace
+    }
+
+    [Fact]
+    public void Reschedule_moves_only_a_queued_post()
+    {
+        var p = Queued();
+        p.Reschedule(Now.AddHours(3), Now);
+        Assert.Equal(Now.AddHours(3), p.ScheduledAt);
+
+        Assert.Throws<DomainException>(() => Failed().Reschedule(Now.AddHours(3), Now));
+    }
+
+    [Fact]
     public void A_retry_waits_its_turn_even_after_a_post_now()
     {
         var p = Queued();

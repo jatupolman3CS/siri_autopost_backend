@@ -127,6 +127,11 @@ public sealed record LinkSetDto(
     }
 }
 
+/// <summary>The answer of handing a link set to another extension.</summary>
+/// <param name="Set">The set, now posted by the new extension.</param>
+/// <param name="Moved">Posts of the set that were still waiting for a browser and now wait for the new one (same times and texts).</param>
+public sealed record HandOverResultDto(LinkSetDto Set, int Moved);
+
 /// <param name="Conflicts">Addresses left out because another extension's link set already holds the group (one group, one extension).</param>
 /// <param name="ConflictNote">Why the first of them was left out, in Thai; null when none was.</param>
 public sealed record BulkLinksResultDto(
@@ -150,7 +155,7 @@ public sealed record ScheduleDto(
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, IReadOnlyList<string> Slots,
     int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false,
-    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null);
+    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null, int GroupGapMinutes = 0);
 
 /// <summary>What a bump says and how often (see <see cref="BumpPlan"/>); only used while the schedule's bump hours are not 0.</summary>
 /// <param name="Rounds">Times a post is bumped, each the schedule's bump hours after the last (1-3).</param>
@@ -175,11 +180,15 @@ public sealed record BumpPlanDto(int Rounds, string Text, IReadOnlyList<Guid> Me
 /// With shuffle, whether a group may get a post again: recent (default) = not its last few, any = yes, even within a day,
 /// never = not until it has had every post. Ignored by rotate.
 /// </param>
+/// <param name="GroupGapMinutes">
+/// Minutes between one group's post and the next one's (1-120, see <see cref="Schedule.GroupGapMinutes"/>); 0 = the
+/// workspace's smart delay (a random gap between its Min and Max).
+/// </param>
 public sealed record SaveScheduleRequest(
     string? Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string>? Times, int EveryHours, string? FirstTime,
     string? StartDate, string? OnceTime, PostOrder Order, string? DripFrom, string? DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false,
-    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null);
+    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null, int GroupGapMinutes = 0);
 
 public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateTimeOffset? FirstAt, DateTimeOffset? LastAt);
 

@@ -211,6 +211,47 @@ public class Post : Entity
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Plans a queued post for another moment (the schedule's spacing re-laid its day). The slot, the group and the text stay;
+    /// a post that is being posted, went out or waits for the extension cannot be moved.
+    /// </summary>
+    public void Reschedule(DateTimeOffset at, DateTimeOffset now)
+    {
+        if (Status != PostStatus.Queued) throw new DomainException("เปลี่ยนเวลาได้เฉพาะโพสต์ที่ยังรอโพสต์");
+        var utc = at.ToUniversalTime();
+        if (utc == ScheduledAt) return;
+        ScheduledAt = utc;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// Hands a post that has not been sent to another extension's account (the timeline's "change extension" in the middle
+    /// of a day): the text, the group, the time and the slot stay, so the plan does not change, only the browser that
+    /// posts it. A post that went out, is being posted or failed keeps the account that tried it.
+    /// </summary>
+    public void MoveTo(SocialAccount account, DateTimeOffset now)
+    {
+        if (Status is not (PostStatus.Queued or PostStatus.Waiting)) throw new DomainException("ย้ายเครื่องได้เฉพาะโพสต์ที่ยังรอโพสต์");
+        if (account.WorkspaceId != WorkspaceId) throw new DomainException("บัญชีนี้ไม่ได้อยู่ในเวิร์กสเปซนี้");
+        if (account.Id == AccountId) return;
+        AccountId = account.Id;
+        Platform = account.Platform;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// A failed or skipped post put back in the queue (retry, post now) belongs to the extension that owns its link set
+    /// today, which may not be the one that tried it before the set was handed over. Returns whether it moved.
+    /// </summary>
+    public bool Rehome(SocialAccount owner, DateTimeOffset now)
+    {
+        if (owner.Id == AccountId || owner.WorkspaceId != WorkspaceId) return false;
+        AccountId = owner.Id;
+        Platform = owner.Platform;
+        UpdatedAt = now;
+        return true;
+    }
+
     /// <summary>Skip a failed post, or acknowledge one waiting for group approval.</summary>
     public void DismissError(DateTimeOffset now)
     {

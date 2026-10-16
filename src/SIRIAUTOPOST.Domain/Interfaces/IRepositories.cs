@@ -145,6 +145,13 @@ public interface IPostRepository
     /// <summary>Posts schedules queued for one link that are still in the future (tracked: the caller removes them).</summary>
     Task<IReadOnlyList<Post>> ListFutureQueuedByLinkAsync(Guid linkId, DateTimeOffset now, CancellationToken ct = default);
     /// <summary>
+    /// Posts of schedules for these links that no device has taken yet (queued, due or not, and waiting), tracked. Never one
+    /// being posted or finished, and never a test post. What a hand-over to another extension moves.
+    /// </summary>
+    Task<IReadOnlyList<Post>> ListOpenByLinksAsync(IEnumerable<Guid> linkIds, CancellationToken ct = default);
+    /// <summary>When a device last took a post of the account (published or not): what a schedule's gap between groups is measured from.</summary>
+    Task<DateTimeOffset?> LastClaimedAtAsync(Guid accountId, CancellationToken ct = default);
+    /// <summary>
     /// The (TargetKey, SlotKey) of every post a schedule generated that was due at or after <paramref name="scheduledFrom"/>
     /// (whatever its status): a new run skips these, so generating twice never doubles posts.
     /// </summary>

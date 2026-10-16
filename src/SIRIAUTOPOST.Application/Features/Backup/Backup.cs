@@ -72,7 +72,7 @@ public sealed class GetBackupQueryHandler(
             backupSchedules.Add(new BackupScheduleDto(
                 s.Name, cName, lName, s.Mode, s.Times, s.EveryHours, s.FirstTime, s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays, overrides, s.Active, s.UtcOffsetMinutes, s.Repeat,
-                BumpPlanDto.From(s.Bump)));
+                BumpPlanDto.From(s.Bump), s.GroupGapMinutes));
         }
 
         var n = ws.Notifications;
@@ -224,7 +224,7 @@ public sealed class RestoreBackupCommandHandler(
                 ws.Id, bsc.Name, collection.Id, set.Id, bsc.Mode, bsc.Times, bsc.EveryHours, bsc.FirstTime, start, bsc.OnceTime, bsc.Order,
                 bsc.DripFrom, bsc.DripTo, bsc.DripCount, bsc.BumpHours, bsc.AutoDeleteDays,
                 TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count), repeat: bsc.Repeat,
-                bump: bump);
+                bump: bump, groupGapMinutes: Math.Clamp(bsc.GroupGapMinutes, 0, Schedule.MaxGroupGapMinutes));
             if (!bsc.Active) schedule.SetActive(false);
             newSchedules.Add(schedule);
         }

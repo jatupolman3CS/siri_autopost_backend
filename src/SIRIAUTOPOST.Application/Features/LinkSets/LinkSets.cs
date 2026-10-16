@@ -1,5 +1,6 @@
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
@@ -155,6 +156,59 @@ public sealed class UpdateLinkSetCommandHandler(
         else if (added) await sync.SetChangedAsync(c.WorkspaceId, set.Id, dropQueued: false, clock.GetUtcNow(), ct);
         await uow.SaveChangesAsync(ct);
         return await LinkSetLookups.ViewAsync(set, links, schedules, ct);
+    }
+}
+
+/// <summary>
+/// Hands a link set to another extension in the middle of the day (the timeline's "change extension", 2026-10-13). The set
+/// is posted by the new extension from now on, and the posts of its schedules that no browser has taken yet are moved to it
+/// with their times, groups and texts, so the plan does not change, only the machine that works through it. Posts already
+/// sent, being posted or failed stay with the extension that tried them. Refused when the new extension is not paired, is
+/// the one that has the set already, or when a group of the set is held by a third extension's set.
+/// </summary>
+public sealed record HandOverLinkSetCommand(Guid WorkspaceId, Guid LinkSetId, Guid ToAccountId) : ICommand<HandOverResultDto>;
+
+public sealed class HandOverLinkSetCommandHandler(
+    IWorkspaceRepository workspaces, ILinkSetRepository sets, IAccountRepository accounts, ISetLinkRepository links,
+    IScheduleRepository schedules, IPostRepository posts, IExtensionRepository ext, IDeviceEventRepository events,
+    INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<HandOverLinkSetCommand, HandOverResultDto>
+{
+    public async Task<HandOverResultDto> HandleAsync(HandOverLinkSetCommand c, CancellationToken ct = default)
+    {
+        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
+        var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
+        var target = accountList.FirstOrDefault(a => a.Id == c.ToAccountId && a.Platform == Platform.Fb)
+            ?? throw new NotFoundException("ส่วนขยาย", c.ToAccountId);
+        if (target.DeviceId is not { } toDevice || !target.IsConnected)
+            throw new DomainException("ส่วนขยายปลายทางยังไม่ได้เชื่อมกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อน");
+        var from = LinkOwnership.OwnerOf(set, accountList);
+        if (from == target.Id) throw new DomainException("ชุดลิงก์นี้ใช้ส่วนขยายนี้อยู่แล้ว");
+
+        var setLinks = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
+        set.Update(set.Name, target.Id, set.AccountIds);
+        LinkSetLookups.EnsureSetFree(await LinkSetLookups.OwnershipAsync(sets, links, accountList, c.WorkspaceId, ct), set, setLinks, target.Id, accountList);
+
+        var now = clock.GetUtcNow();
+        var moving = (await posts.ListOpenByLinksAsync(setLinks.Select(l => l.Id), ct)).Where(p => p.AccountId != target.Id).ToList();
+        foreach (var p in moving) p.MoveTo(target, now);
+        // The old browser's queue shrank and the new one's grew: one event each wakes the web's lists, and the new browser is
+        // told to look for work at once instead of at its next 30-second round.
+        if (moving.Count > 0)
+        {
+            events.Add(DeviceEvents.PostChanged(c.WorkspaceId, toDevice, moving[0], now));
+            if (from is { } fromId && accountList.FirstOrDefault(a => a.Id == fromId)?.DeviceId is { } fromDevice)
+                events.Add(DeviceEvents.PostChanged(c.WorkspaceId, fromDevice, moving[0], now));
+            var wake = DeviceCommand.Create(c.WorkspaceId, toDevice, "takeJobs", "{}", now);
+            ext.Add(wake);
+            events.Add(CommandEvents.Of(wake, now));
+        }
+        await uow.SaveChangesAsync(ct);
+
+        var fromName = from is { } id ? OwnershipMap.ExtensionName(id, accountList) : "ไม่มี";
+        await EngineNotices.SendAsync(notifier, c.WorkspaceId, [EngineNotices.SetHandedOver(set, fromName, OwnershipMap.ExtensionName(target.Id, accountList), moving.Count)], ct);
+        return new HandOverResultDto(await LinkSetLookups.ViewAsync(set, links, schedules, ct), moving.Count);
     }
 }
 

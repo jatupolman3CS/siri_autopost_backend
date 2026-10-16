@@ -58,7 +58,7 @@ public sealed class ScheduleViews(
             s.BumpHours, s.AutoDeleteDays,
             s.Overrides.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value),
             s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow, s.Repeat,
-            BumpPlanDto.From(s.Bump));
+            BumpPlanDto.From(s.Bump), s.GroupGapMinutes);
 }
 
 public sealed record GetSchedulesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ScheduleDto>>;
@@ -144,7 +144,7 @@ public sealed class CreateScheduleCommandHandler(
         }
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
-            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat, bump);
+            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat, bump, r.GroupGapMinutes);
         var made = MaterializeResult.None;
         // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
         await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
@@ -217,6 +217,34 @@ public sealed class RenameScheduleCommandHandler(
         schedule.Rename(c.Name);
         await uow.SaveChangesAsync(ct);
         return await views.BuildOneAsync(schedule, clock.GetUtcNow(), ct);
+    }
+}
+
+/// <summary>
+/// Sets the minutes between two groups of a schedule that already exists (0 = the workspace's smart delay again) and lays
+/// out the posts it still has queued with it: the same posts, texts and slots, new times, so a plan that had posts sitting
+/// too close together is spread out at once without being made again. Also the button "spread again" (same gap). Posts
+/// somebody asked to post now, posts waiting for the extension and days that are over are not touched.
+/// </summary>
+public sealed record SetScheduleGapCommand(Guid WorkspaceId, Guid ScheduleId, int GroupGapMinutes) : ICommand<ScheduleDto>;
+
+public sealed class SetScheduleGapCommandHandler(
+    IWorkspaceRepository workspaces, IScheduleRepository schedules, IPostRepository posts, ScheduleViews views, IRandomSource random,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SetScheduleGapCommand, ScheduleDto>
+{
+    public async Task<ScheduleDto> HandleAsync(SetScheduleGapCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var schedule = await schedules.GetAsync(ws.Id, c.ScheduleId, ct) ?? throw new NotFoundException("ตารางโพสต์", c.ScheduleId);
+        var now = clock.GetUtcNow();
+        schedule.SetGroupGap(c.GroupGapMinutes);
+        var open = await posts.ListOpenByScheduleAsync(schedule.Id, ct);
+        var account = open.FirstOrDefault(p => p.Status == PostStatus.Queued)?.AccountId;
+        var lastBegan = account is { } id ? await posts.LastClaimedAtAsync(id, ct) : null;
+        ScheduleSpacing.Reflow(schedule, open, now, lastBegan, () => ScheduleSpacing.GapSeconds(schedule, ws.AntiBan, random.NextDouble));
+        await uow.SaveChangesAsync(ct);
+        return await views.BuildOneAsync(schedule, now, ct);
     }
 }
 

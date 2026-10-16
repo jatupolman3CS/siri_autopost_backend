@@ -231,6 +231,22 @@ public sealed class ScheduleMaterializer(
         // A round never opens with the group the round before it opened with, so no group is always the first one posted.
         var randomOrder = anti.Shuffle && set.RandomOrder;
         string? lastFirst = null;
+
+        // Spread mode (Schedule.GroupGapMinutes > 0, 2026-10-13): the person says how many minutes apart two groups are
+        // posted. A gap is that many minutes plus up to a quarter more (never less, so no two posts sit closer than asked),
+        // and the rounds of one local day follow each other on a single line: a round that would start while the one before
+        // is still going waits until it has ended (and one more gap), so a long round and the next one never overlap into a
+        // burst. Without it the gap is the workspace's smart delay, a random time between its Min and Max.
+        var spread = s.GroupGapMinutes > 0;
+        DateOnly? lineDay = null;
+        DateTimeOffset? lineEnd = null; // when the last post of the day's line is planned
+        double GapSeconds() => ScheduleSpacing.GapSeconds(s, anti, random.NextDouble);
+        void OnLine(DateOnly day)
+        {
+            if (lineDay == day) return;
+            lineDay = day;
+            lineEnd = null;
+        }
         List<ScheduleTarget> Ordered(List<ScheduleTarget> members)
         {
             if (!randomOrder) return members;
@@ -247,15 +263,22 @@ public sealed class ScheduleMaterializer(
         List<(ScheduleTarget Target, DateTimeOffset At)> Stagger(
             IReadOnlyList<ScheduleTarget> members, DateTimeOffset first, string slotKey, bool firstIsNow)
         {
+            // A round that would open before the previous one of the day has ended opens one gap after it.
+            if (spread && lineEnd is { } previous && members.Count > 0)
+            {
+                var earliest = previous.AddSeconds(GapSeconds());
+                if (earliest > first) first = earliest;
+            }
             var at = first;
             var fresh = new List<(ScheduleTarget Target, DateTimeOffset At)>();
             for (var i = 0; i < members.Count; i++)
             {
-                if (i > 0) at = at.AddSeconds(Math.Round((anti.Min + random.NextDouble() * (anti.Max - anti.Min)) * 60));
+                if (i > 0) at = at.AddSeconds(GapSeconds());
                 // A start-now round begins a few seconds after the click, not on the very second.
                 else if (firstIsNow) at = at.AddSeconds(Math.Round(2 + random.NextDouble() * 18));
                 if (at > now && !existing.Contains((members[i].TargetKey, slotKey))) fresh.Add((members[i], at));
             }
+            if (members.Count > 0) lineEnd = at;
             return fresh;
         }
 
@@ -284,6 +307,7 @@ public sealed class ScheduleMaterializer(
         if (s.NowPending)
         {
             var slotKey = Schedule.SlotKey(s.LocalDay(now), Schedule.NowSlot);
+            OnLine(s.LocalDay(now));
             var fresh = Stagger(Ordered(targets), now, slotKey, firstIsNow: true);
             var localNow = now.ToOffset(TimeSpan.FromMinutes(s.UtcOffsetMinutes));
             if (fresh.Count > 0) Queue(slotKey, s.LocalDay(now), localNow.Hour * 60 + localNow.Minute, fresh);
@@ -318,6 +342,7 @@ public sealed class ScheduleMaterializer(
                 break;
             }
 
+            OnLine(day);
             foreach (var (slot, members) in buckets)
             {
                 var slotKey = Schedule.SlotKey(day, slot);

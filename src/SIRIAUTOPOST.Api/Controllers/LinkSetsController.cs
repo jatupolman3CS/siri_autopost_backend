@@ -14,6 +14,9 @@ public sealed class LinkSetsController : ControllerBase
     public sealed record CreateLinkSetRequest(string Name, Guid? PostAsAccountId);
 
     public sealed record SetActiveRequest(bool Active);
+
+    /// <param name="AccountId">The Facebook account (extension) that takes the set over; it must be paired to a browser.</param>
+    public sealed record HandOverRequest(Guid AccountId);
     /// <param name="RandomOrder">Null keeps the stored value.</param>
     /// <param name="DailyPerGroup">Posts a day per group (0-50, 0 = no limit from the set); null keeps the stored value.</param>
     public sealed record UpdateLinkSetRequest(
@@ -45,7 +48,18 @@ public sealed class LinkSetsController : ControllerBase
         Guid wsId, Guid id, UpdateLinkSetRequest r, [FromServices] ICommandHandler<UpdateLinkSetCommand, LinkSetDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new UpdateLinkSetCommand(wsId, id, r.Name, r.PostAsAccountId, r.AccountIds, r.RandomOrder, r.DailyPerGroup), ct);
 
-    /// <summary>Deletes the set and its links; 422 while a schedule uses it.</summary>
+    /// <summary>
+    /// Hands the set to another extension in the middle of the day: it is posted by the new extension from now on and its
+    /// posts that no browser has taken yet move with their times and texts (nothing is made again). 404 for an unknown
+    /// extension, 422 when it is not paired, already has the set, or a group of the set belongs to a third extension.
+    /// </summary>
+    [HttpPost("link-sets/{id:guid}/handover")]
+    [ProducesResponseType<HandOverResultDto>(StatusCodes.Status200OK)]
+    public Task<HandOverResultDto> HandOver(
+        Guid wsId, Guid id, HandOverRequest r, [FromServices] ICommandHandler<HandOverLinkSetCommand, HandOverResultDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new HandOverLinkSetCommand(wsId, id, r.AccountId), ct);
+
+    /// <summary>Switches the set on or off; off drops the posts its schedules still have queued in the future.</summary>
     [HttpPut("link-sets/{id:guid}/active")]
     public Task<LinkSetDto> SetSetActive(
         Guid wsId, Guid id, SetActiveRequest r, [FromServices] ICommandHandler<SetLinkSetActiveCommand, LinkSetDto> handler, CancellationToken ct) =>

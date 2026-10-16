@@ -32,6 +32,10 @@ public class Schedule : Entity
     /// <summary>...and this many days after it (a year ahead, leap year included).</summary>
     public const int StartDateDaysAhead = 366;
     public const int MaxTimes = 48;
+    /// <summary>The most minutes a schedule may keep between two groups (see <see cref="GroupGapMinutes"/>).</summary>
+    public const int MaxGroupGapMinutes = 120;
+    /// <summary>The share of the gap that is added at random on top of it (a gap of 10 minutes becomes 10 to 12.5).</summary>
+    public const double GroupGapJitter = 0.25;
     /// <summary>Hours after a post goes out that it is bumped (0 = off).</summary>
     public static readonly int[] BumpOptions = [0, 1, 2, 3, 6, 12, 24];
     public static readonly int[] AutoDeleteOptions = [0, 3, 7, 14];
@@ -68,6 +72,14 @@ public class Schedule : Entity
     /// <summary>Stored only: the extension cannot delete posts yet (0, 3, 7 or 14 days).</summary>
     public int AutoDeleteDays { get; private set; }
     /// <summary>
+    /// Minutes between one group's post and the next one's ("spread" mode, 1-<see cref="MaxGroupGapMinutes"/>; 0 = off, the
+    /// workspace's smart delay decides: a random gap between its Min and Max). On, the groups of a round are placed
+    /// at least this far apart (plus a little human jitter, never less), the rounds of a day follow one another on one line
+    /// instead of overlapping, and the claim holds a post of this schedule back until this long after the account's last
+    /// post began, so a backlog never goes out in a burst.
+    /// </summary>
+    public int GroupGapMinutes { get; private set; }
+    /// <summary>
     /// Own times of a target: the key is a link's id ("N" format) or "account:&lt;id&gt;"; the value is distinct sorted
     /// "HH:mm". A target without an entry follows the schedule.
     /// </summary>
@@ -98,8 +110,10 @@ public class Schedule : Entity
         Guid workspaceId, string name, Guid collectionId, Guid linkSetId, ScheduleMode mode, IEnumerable<string>? times,
         int everyHours, string? firstTime, DateOnly startDate, string? onceTime, PostOrder order, string? dripFrom, string? dripTo,
         int dripCount, int bumpHours, int autoDeleteDays, IReadOnlyDictionary<string, IReadOnlyList<string>>? overrides,
-        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false, PostRepeat repeat = PostRepeat.Recent, BumpPlan? bump = null)
+        int utcOffsetMinutes, DateTimeOffset now, bool startNow = false, PostRepeat repeat = PostRepeat.Recent, BumpPlan? bump = null,
+        int groupGapMinutes = 0)
     {
+        EnsureGroupGap(groupGapMinutes);
         var n = (name ?? "").Trim();
         if (n.Length == 0) throw new DomainException("กรุณาใส่ชื่อตาราง");
         if (n.Length > MaxNameLength) throw new DomainException($"ชื่อตารางยาวเกิน {MaxNameLength} ตัวอักษร");
@@ -154,6 +168,7 @@ public class Schedule : Entity
             BumpHours = bumpHours,
             Bump = bumpPlan,
             AutoDeleteDays = autoDeleteDays,
+            GroupGapMinutes = groupGapMinutes,
             Overrides = CleanOverrides(overrides),
             UtcOffsetMinutes = utcOffsetMinutes,
             CreatedAt = now,
@@ -280,6 +295,22 @@ public class Schedule : Entity
 
     /// <summary>The start-now round has been queued (or there was nothing it could do for good).</summary>
     public void ClearNowPending() => NowPending = false;
+
+    /// <summary>
+    /// Changes the gap between groups (0 = back to the workspace's smart delay). The posts already queued were placed with
+    /// the old gap: the caller lays them out again (<c>ScheduleSpacing.Reflow</c>); the days not made yet use the new one.
+    /// </summary>
+    public void SetGroupGap(int minutes)
+    {
+        EnsureGroupGap(minutes);
+        GroupGapMinutes = minutes;
+    }
+
+    public static void EnsureGroupGap(int minutes)
+    {
+        if (minutes is < 0 or > MaxGroupGapMinutes)
+            throw new DomainException($"ระยะห่างต่อกลุ่มต้องอยู่ระหว่าง 0–{MaxGroupGapMinutes} นาที (0 = ใช้ค่าหน่วงเวลาสุ่มของระบบกันบล็อก)");
+    }
 
     /// <summary>Remembers how far posts were generated and where Rotate stands.</summary>
     public void MarkGenerated(DateOnly through, int cursor)

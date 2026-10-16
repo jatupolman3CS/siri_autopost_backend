@@ -152,14 +152,20 @@ public sealed class DeletePostCommandHandler(
 public sealed record RetryPostCommand(Guid WorkspaceId, Guid PostId) : ICommand<PostDto>;
 
 public sealed class RetryPostCommandHandler(
-    IWorkspaceRepository workspaces, IPostRepository posts, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IWorkspaceRepository workspaces, IPostRepository posts, IAccountRepository accounts, ISetLinkRepository links, ILinkSetRepository sets,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RetryPostCommand, PostDto>
 {
     public async Task<PostDto> HandleAsync(RetryPostCommand c, CancellationToken ct = default)
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
-        post.Retry(clock.GetUtcNow());
+        var now = clock.GetUtcNow();
+        // A set handed to another extension takes its failed posts along when they are tried again.
+        if (post.Status == PostStatus.Failed
+            && await PostHoming.NewOwnerAsync(post, links, sets, await accounts.ListAsync(c.WorkspaceId, ct), ct) is { } owner)
+            post.Rehome(owner, now);
+        post.Retry(now);
         await uow.SaveChangesAsync(ct);
         return PostDto.From(post);
     }
@@ -174,8 +180,8 @@ public sealed record RetryPostsCommand(Guid WorkspaceId, IReadOnlyList<Guid> Pos
 public sealed record RetryPostsResultDto(int Retried, int Unbound, int NotFailed);
 
 public sealed class RetryPostsCommandHandler(
-    IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts, ICurrentUser current, IUnitOfWork uow,
-    TimeProvider clock)
+    IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts, ISetLinkRepository links, ILinkSetRepository sets,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RetryPostsCommand, RetryPostsResultDto>
 {
     public const int MaxItems = 500;
@@ -185,8 +191,12 @@ public sealed class RetryPostsCommandHandler(
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var ids = c.PostIds.Distinct().ToList();
         var failed = (await posts.ListByIdsAsync(c.WorkspaceId, ids, ct)).Where(p => p.Status == PostStatus.Failed).ToList();
-        var connected = (await accounts.ListAsync(c.WorkspaceId, ct)).Where(a => a.IsConnected).Select(a => a.Id).ToHashSet();
+        var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
         var now = clock.GetUtcNow();
+        // Posts whose set was handed to another extension follow the set; the others need their own browser to be paired.
+        foreach (var post in failed)
+            if (await PostHoming.NewOwnerAsync(post, links, sets, accountList, ct) is { } owner) post.Rehome(owner, now);
+        var connected = accountList.Where(a => a.IsConnected).Select(a => a.Id).ToHashSet();
         var retried = 0;
         foreach (var post in failed.Where(p => connected.Contains(p.AccountId)))
         {
@@ -208,13 +218,18 @@ public sealed record RunPostNowCommand(Guid WorkspaceId, Guid PostId) : ICommand
 
 public sealed class RunPostNowCommandHandler(
     IWorkspaceRepository workspaces, IAccountRepository accounts, IPostRepository posts, IExtensionRepository ext,
-    IDeviceEventRepository events, IUserRepository users, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    IDeviceEventRepository events, IUserRepository users, ISetLinkRepository links, ILinkSetRepository sets, ICurrentUser current,
+    IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RunPostNowCommand, PostDto>
 {
     public async Task<PostDto> HandleAsync(RunPostNowCommand c, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var post = await posts.GetAsync(c.WorkspaceId, c.PostId, ct) ?? throw new NotFoundException("โพสต์", c.PostId);
+        // A post of a set that was handed to another extension is posted by the new one (the old browser would skip it).
+        if (post.Status is PostStatus.Queued or PostStatus.Waiting or PostStatus.Failed or PostStatus.Skipped
+            && await PostHoming.NewOwnerAsync(post, links, sets, await accounts.ListAsync(ws.Id, ct), ct) is { } owner)
+            post.Rehome(owner, clock.GetUtcNow());
         var account = await accounts.GetAsync(ws.Id, post.AccountId, ct);
         if (account?.DeviceId is not { } deviceId)
             throw new DomainException("เบราว์เซอร์ของบัญชีนี้ถูกยกเลิกการผูกแล้ว จึงไม่มีเครื่องที่จะโพสต์ ผูกเครื่องใหม่ที่หน้าทีมก่อน");

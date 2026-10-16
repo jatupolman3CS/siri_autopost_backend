@@ -15,6 +15,9 @@ public sealed class SchedulesController : ControllerBase
     public sealed record SetActiveRequest(bool Active);
     public sealed record RenameRequest(string Name);
 
+    /// <param name="GroupGapMinutes">Minutes between two groups: 0-120, 0 = the workspace's smart delay.</param>
+    public sealed record SpacingRequest(int GroupGapMinutes);
+
     /// <param name="LinkId">The group to post to; with neither it and AccountId, the set's first usable link.</param>
     /// <param name="AccountId">Another account instead of a link (it posts to its default target).</param>
     /// <param name="CollectionPostId">The post to send; null = a random usable one.</param>
@@ -51,11 +54,25 @@ public sealed class SchedulesController : ControllerBase
         Guid wsId, Guid id, SetActiveRequest r, [FromServices] ICommandHandler<SetScheduleActiveCommand, ScheduleDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new SetScheduleActiveCommand(wsId, id, r.Active), ct);
 
-    /// <summary>Deletes the schedule and the posts it still has queued in the future.</summary>
+    /// <summary>Renames the schedule; nothing else about it changes.</summary>
     [HttpPut("schedules/{id:guid}/name")]
     public Task<ScheduleDto> Rename(
         Guid wsId, Guid id, RenameRequest r, [FromServices] ICommandHandler<RenameScheduleCommand, ScheduleDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new RenameScheduleCommand(wsId, id, r.Name), ct);
+
+    /// <summary>
+    /// Sets the minutes between two groups (0 = the workspace's smart delay again, 1-120 = at least that many minutes) and
+    /// lays out the posts the schedule still has queued with it, without making them again. Calling it with the gap it
+    /// already has spreads the queued posts again.
+    /// </summary>
+    [HttpPut("schedules/{id:guid}/spacing")]
+    [ProducesResponseType<ScheduleDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    public Task<ScheduleDto> SetSpacing(
+        Guid wsId, Guid id, SpacingRequest r, [FromServices] ICommandHandler<SetScheduleGapCommand, ScheduleDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new SetScheduleGapCommand(wsId, id, r.GroupGapMinutes), ct);
+
+    /// <summary>Deletes the schedule and the posts it still has queued in the future.</summary>
 
     [HttpDelete("schedules/{id:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

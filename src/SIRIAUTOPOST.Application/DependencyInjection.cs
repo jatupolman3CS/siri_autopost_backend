@@ -148,6 +148,7 @@ public static class DependencyInjection
         services.AddQuery<GetLinkSetsQuery, IReadOnlyList<LinkSetDto>, GetLinkSetsQueryHandler>();
         services.AddCommand<CreateLinkSetCommand, LinkSetDto, CreateLinkSetCommandHandler>();
         services.AddCommand<UpdateLinkSetCommand, LinkSetDto, UpdateLinkSetCommandHandler>();
+        services.AddCommand<HandOverLinkSetCommand, HandOverResultDto, HandOverLinkSetCommandHandler>();
         services.AddCommand<SetLinkSetActiveCommand, LinkSetDto, SetLinkSetActiveCommandHandler>();
         services.AddCommand<DeleteLinkSetCommand, Unit, DeleteLinkSetCommandHandler>();
         services.AddCommand<AddLinkCommand, SetLinkDto, AddLinkCommandHandler>();
@@ -169,6 +170,7 @@ public static class DependencyInjection
         services.AddCommand<CreateScheduleCommand, ScheduleCreatedDto, CreateScheduleCommandHandler>();
         services.AddCommand<SetScheduleActiveCommand, ScheduleDto, SetScheduleActiveCommandHandler>();
         services.AddCommand<RenameScheduleCommand, ScheduleDto, RenameScheduleCommandHandler>();
+        services.AddCommand<SetScheduleGapCommand, ScheduleDto, SetScheduleGapCommandHandler>();
         services.AddCommand<DeleteScheduleCommand, Unit, DeleteScheduleCommandHandler>();
         services.AddQuery<GetBestTimesQuery, IReadOnlyList<string>, GetBestTimesQueryHandler>();
         services.AddCommand<CreateTestPostCommand, PostDto, CreateTestPostCommandHandler>();

@@ -259,6 +259,14 @@ public static partial class EngineNotices
             removed > 0 ? $"ลบคิวที่ยังไม่ได้โพสต์ {removed} รายการ" : "ไม่มีคิวค้าง",
             "เปิดตารางอีกครั้งเพื่อสร้างคิวใหม่"));
 
+    /// <summary>A link set was handed to another extension in the middle of the day (the timeline's "change extension").</summary>
+    public static Notice SetHandedOver(LinkSet set, string from, string to, int moved) => new(
+        NotifyEvent.StartStop, set.Id, null,
+        Lines(
+            $"🔀 {Bold($"ย้ายชุดลิงก์ “{set.Name}” ไปเครื่อง {to}")}",
+            $"จากเครื่อง {NotificationText.Esc(from)}",
+            moved > 0 ? $"ย้ายโพสต์ที่ยังรอคิว {moved} รายการ (เวลาเดิม) ให้เครื่องใหม่โพสต์ต่อ" : "ไม่มีโพสต์ค้างคิวให้ย้าย"));
+
     public static Notice ScheduleResumed(Schedule s) => new(
         NotifyEvent.StartStop, s.LinkSetId, null,
         Lines(

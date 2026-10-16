@@ -73,6 +73,8 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
         RuleFor(x => x.BumpHours).Must(h => Schedule.BumpOptions.Contains(h)).WithMessage("ตัวเลือกดันโพสต์ไม่ถูกต้อง");
         RuleFor(x => x.AutoDeleteDays).Must(d => Schedule.AutoDeleteOptions.Contains(d)).WithMessage("ตัวเลือกลบโพสต์อัตโนมัติไม่ถูกต้อง");
         RuleFor(x => x.UtcOffsetMinutes).InclusiveBetween(-840, 840).WithMessage("เขตเวลาไม่ถูกต้อง");
+        RuleFor(x => x.GroupGapMinutes).InclusiveBetween(0, Schedule.MaxGroupGapMinutes)
+            .WithMessage($"ระยะห่างต่อกลุ่มต้องอยู่ระหว่าง 0–{Schedule.MaxGroupGapMinutes} นาที");
         RuleFor(x => x.Overrides).Must(o => o is null || o.Count <= LinkSet.MaxLinks + LinkSet.MaxAccounts)
             .WithMessage("ตั้งเวลาเฉพาะกลุ่มได้ไม่เกินจำนวนกลุ่มในชุด");
         RuleFor(x => x.Overrides).Must(o => o is null || o.Keys.All(ScheduleRules.IsOverrideKey))
@@ -89,6 +91,13 @@ public sealed class CreateScheduleCommandValidator(TimeProvider clock) : Abstrac
         context.InstanceToValidate.Request is { } request
             ? new SaveScheduleRequestValidator(clock).ValidateAsync(request, cancellation)
             : Task.FromResult(new ValidationResult([new ValidationFailure("request", Messages.BadValue)]));
+}
+
+public sealed class SetScheduleGapCommandValidator : AbstractValidator<SetScheduleGapCommand>
+{
+    public SetScheduleGapCommandValidator() =>
+        RuleFor(x => x.GroupGapMinutes).InclusiveBetween(0, Schedule.MaxGroupGapMinutes)
+            .WithMessage($"ระยะห่างต่อกลุ่มต้องอยู่ระหว่าง 0–{Schedule.MaxGroupGapMinutes} นาที");
 }
 
 public sealed class CreateTestPostCommandValidator : AbstractValidator<CreateTestPostCommand>

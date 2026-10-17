@@ -162,6 +162,7 @@ public class TestPostEndpointsTests(ApiFactory factory)
         // A full-size text, the largest footer and the group code still fit what a composed post may hold (7,000).
         var res = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 5000) });
         Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        Assert.True((await res.ReadAsync<PostDto>()).Content.Length > 5000);
 
         var tooLong = await SendAsync(shop, new { linkSetId = shop.Set.Id, collectionId = shop.Collection.Id, text = new string('ก', 5001) });
         Assert.Equal(HttpStatusCode.BadRequest, tooLong.StatusCode);

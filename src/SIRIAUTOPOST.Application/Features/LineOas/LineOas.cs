@@ -1,0 +1,149 @@
+using System.Text.Json;
+using SIRIAUTOPOST.Application.Common;
+using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Features.Extension;
+using SIRIAUTOPOST.Application.Interfaces;
+using SIRIAUTOPOST.Application.Interfaces.Messaging;
+using SIRIAUTOPOST.Domain.Entities;
+using SIRIAUTOPOST.Domain.Enums;
+using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Interfaces;
+using SIRIAUTOPOST.Domain.Services;
+
+namespace SIRIAUTOPOST.Application.Features.LineOas;
+
+/// <summary>Builds the rows of the master list (one Line account per OA) with the numbers the page shows.</summary>
+internal static class LineOaRows
+{
+    public static async Task<IReadOnlyList<LineOaDto>> BuildAsync(
+        Guid workspaceId, IAccountRepository accounts, IDeviceRepository devices, ILineChatRepository lineChats,
+        ILinkSetRepository sets, DateTimeOffset now, CancellationToken ct)
+    {
+        var lines = (await accounts.ListAsync(workspaceId, ct)).Where(a => a.Platform == Platform.Line).ToList();
+        var deviceById = (await devices.ListAsync(workspaceId, ct)).ToDictionary(d => d.Id);
+        var allSets = await sets.ListAsync(workspaceId, ct);
+        var rows = new List<LineOaDto>();
+        foreach (var a in lines)
+        {
+            Device? d = a.DeviceId is { } id && deviceById.TryGetValue(id, out var dev) ? dev : null;
+            rows.Add(new LineOaDto(
+                a.Id, a.Name, a.Handle, LineOaUrl.Build(a.Handle), a.DeviceId, d?.Name, d?.IsOnline(now) ?? false,
+                d is not null && d.IsLineReady(now) && string.Equals(d.LineBotId, a.Handle, StringComparison.OrdinalIgnoreCase),
+                await lineChats.CountByAccountAsync(a.Id, ct), await lineChats.MaxSyncedAtAsync(a.Id, ct),
+                a.Health == AccountHealth.Relogin, allSets.Count(s => s.PostAsAccountId == a.Id)));
+        }
+        return rows;
+    }
+}
+
+internal static class LineOaCommands
+{
+    /// <summary>Queues the "read this OA's customers" command for a browser (the extension opens the OA and scrolls its chat list).</summary>
+    public static void Ask(IExtensionRepository ext, IDeviceEventRepository events, Guid workspaceId, Guid deviceId, string botId, DateTimeOffset now)
+    {
+        var cmd = DeviceCommand.Create(workspaceId, deviceId, "syncLineChats", JsonSerializer.Serialize(new { botId }), now);
+        ext.Add(cmd);
+        events.Add(CommandEvents.Of(cmd, now));
+    }
+}
+
+public sealed record GetLineOasQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<LineOaDto>>;
+
+public sealed class GetLineOasQueryHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IDeviceRepository devices,
+    ILineChatRepository lineChats, ILinkSetRepository sets, ICurrentUser current, TimeProvider clock)
+    : IQueryHandler<GetLineOasQuery, IReadOnlyList<LineOaDto>>
+{
+    public async Task<IReadOnlyList<LineOaDto>> HandleAsync(GetLineOasQuery q, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
+        await users.RequireLineChatAsync(ws, ct);
+        return await LineOaRows.BuildAsync(ws.Id, accounts, devices, lineChats, sets, clock.GetUtcNow(), ct);
+    }
+}
+
+/// <summary>Adds an OA by its address and asks the chosen browser to read its customers right away.</summary>
+public sealed record AddLineOaCommand(Guid WorkspaceId, string Url, Guid? DeviceId, string? Name) : ICommand<LineOaDto>;
+
+public sealed class AddLineOaCommandHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IDeviceRepository devices,
+    ILineChatRepository lineChats, ILinkSetRepository sets, IExtensionRepository ext, IDeviceEventRepository events,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<AddLineOaCommand, LineOaDto>
+{
+    public async Task<LineOaDto> HandleAsync(AddLineOaCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        await users.RequireLineChatAsync(ws, ct);
+        var botId = LineOaUrl.BotId(c.Url)
+            ?? throw new DomainException("ลิงก์ LINE OA ไม่ถูกต้อง: วางลิงก์จาก chat.line.biz เช่น https://chat.line.biz/Uxxxxxxxx");
+
+        var list = await devices.ListAsync(ws.Id, ct);
+        Device device;
+        if (c.DeviceId is { } did)
+            device = list.FirstOrDefault(d => d.Id == did) ?? throw new NotFoundException("อุปกรณ์", did);
+        else if (list.Count == 1)
+            device = list[0];
+        else
+            throw new DomainException(list.Count == 0
+                ? "ยังไม่มีส่วนขยายที่เชื่อมไว้: เชื่อมส่วนขยายก่อน แล้วค่อยเพิ่ม LINE OA"
+                : "มีส่วนขยายหลายเครื่อง: เลือกเครื่องที่จะอ่านรายชื่อลูกค้าของ LINE OA นี้");
+
+        var now = clock.GetUtcNow();
+        if (await accounts.FindByHandleAsync(ws.Id, Platform.Line, botId, ct) is not null)
+            throw new DomainException("LINE OA นี้อยู่ในรายการแล้ว");
+        var name = string.IsNullOrWhiteSpace(c.Name) ? botId : c.Name.Trim();
+        var account = SocialAccount.CreateLine(ws.Id, device.Id, botId, name, now, await accounts.CountAsync(ws.Id, ct));
+        accounts.Add(account);
+        LineOaCommands.Ask(ext, events, ws.Id, device.Id, botId, now);
+        await uow.SaveChangesAsync(ct);
+        return (await LineOaRows.BuildAsync(ws.Id, accounts, devices, lineChats, sets, now, ct)).First(r => r.Id == account.Id);
+    }
+}
+
+/// <summary>Asks the browser of an OA to read its customers again.</summary>
+public sealed record SyncLineOaCommand(Guid WorkspaceId, Guid AccountId) : ICommand<bool>;
+
+public sealed class SyncLineOaCommandHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IExtensionRepository ext,
+    IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SyncLineOaCommand, bool>
+{
+    public async Task<bool> HandleAsync(SyncLineOaCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        await users.RequireLineChatAsync(ws, ct);
+        var a = await accounts.GetAsync(ws.Id, c.AccountId, ct);
+        if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
+        if (a.DeviceId is not { } deviceId) throw new DomainException("LINE OA นี้ยังไม่มีส่วนขยายที่อ่านรายชื่อ");
+        LineOaCommands.Ask(ext, events, ws.Id, deviceId, a.Handle, clock.GetUtcNow());
+        await uow.SaveChangesAsync(ct);
+        return true;
+    }
+}
+
+/// <summary>Takes an OA out of the master list (its customers go with it); refused while a link set posts through it.</summary>
+public sealed record RemoveLineOaCommand(Guid WorkspaceId, Guid AccountId) : ICommand<bool>;
+
+public sealed class RemoveLineOaCommandHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, ILineChatRepository lineChats,
+    ILinkSetRepository sets, IPostRepository posts, ICurrentUser current, IUnitOfWork uow)
+    : ICommandHandler<RemoveLineOaCommand, bool>
+{
+    public async Task<bool> HandleAsync(RemoveLineOaCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        await users.RequireLineChatAsync(ws, ct);
+        var a = await accounts.GetAsync(ws.Id, c.AccountId, ct);
+        if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
+        var usedBy = (await sets.ListAsync(ws.Id, ct)).Where(s => s.PostAsAccountId == a.Id).Select(s => s.Name).ToList();
+        if (usedBy.Count > 0)
+            throw new DomainException($"ลบ LINE OA นี้ไม่ได้: ชุดโพสต์ {string.Join(", ", usedBy)} ใช้อยู่ (ลบหรือย้ายชุดก่อน)");
+        if ((await posts.ListOpenByAccountAsync(a.Id, ct)).Count > 0)
+            throw new DomainException("ลบ LINE OA นี้ไม่ได้: ยังมีโพสต์ค้างคิวของ OA นี้");
+        await lineChats.DeleteByAccountAsync(a.Id, ct);
+        accounts.Remove(a);
+        await uow.SaveChangesAsync(ct);
+        return true;
+    }
+}

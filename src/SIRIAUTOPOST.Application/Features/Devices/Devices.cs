@@ -27,16 +27,19 @@ public sealed class GetDevicesQueryHandler(
         var fbByDevice = accList
             .Where(a => a.DeviceId is not null && a.Platform == Platform.Fb)
             .ToDictionary(a => a.DeviceId!.Value, a => a.Id);
-        var lineByDevice = accList
+        // A browser can read several OAs now: the summary is of the one it reports (else the first).
+        var linesByDevice = accList
             .Where(a => a.DeviceId is not null && a.Platform == Platform.Line)
-            .ToDictionary(a => a.DeviceId!.Value, a => a);
+            .ToLookup(a => a.DeviceId!.Value);
         var now = clock.GetUtcNow();
         var deviceList = await devices.ListAsync(ws.Id, ct);
         var dtos = new List<DeviceDto>();
         foreach (var d in deviceList)
         {
             var fbId = fbByDevice.TryGetValue(d.Id, out var fId) ? (Guid?)fId : null;
-            lineByDevice.TryGetValue(d.Id, out var lineAcc);
+            var lines = linesByDevice[d.Id].ToList();
+            var lineAcc = lines.FirstOrDefault(a => string.Equals(a.Handle, d.LineBotId, StringComparison.OrdinalIgnoreCase))
+                ?? lines.FirstOrDefault();
             dtos.Add(DeviceDto.From(d, fbId, now, await DeviceLineSummary.OfAsync(d, lineAcc, lineChats, now, ct)));
         }
         return dtos;
@@ -417,7 +420,9 @@ public sealed class DeviceHeartbeatCommandHandler(
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         var owner = await users.OwnerOfAsync(ws, ct);
 
-        SocialAccount? lineAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
+        // A device may read several OAs (the web's LINE OA master): the one it reports now is the one this heartbeat is about.
+        var deviceLines = (await accounts.ListByDeviceAsync(device.Id, ct)).Where(a => a.Platform == Platform.Line).ToList();
+        SocialAccount? lineAccount = deviceLines.FirstOrDefault();
         string? lineNote = null;
         bool lineSessionLost = false;
 
@@ -428,11 +433,14 @@ public sealed class DeviceHeartbeatCommandHandler(
                 var cleanBotId = lineReq.BotId.Trim();
                 var cleanOaName = string.IsNullOrWhiteSpace(lineReq.OaName) ? cleanBotId : lineReq.OaName.Trim();
 
-                if (lineAccount is null)
+                var reported = deviceLines.FirstOrDefault(x => string.Equals(x.Handle, cleanBotId, StringComparison.OrdinalIgnoreCase));
+                if (reported is not null) lineAccount = reported;
+                if (reported is null)
                 {
                     await uow.ExecuteInTransactionAsync($"device:line:{device.Id:N}", async () =>
                     {
-                        lineAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
+                        lineAccount = (await accounts.ListByDeviceAsync(device.Id, ct))
+                            .FirstOrDefault(x => x.Platform == Platform.Line && string.Equals(x.Handle, cleanBotId, StringComparison.OrdinalIgnoreCase));
                         if (lineAccount is null)
                         {
                             var existingWithHandle = await accounts.FindByHandleAsync(ws.Id, Platform.Line, cleanBotId, ct);
@@ -469,16 +477,11 @@ public sealed class DeviceHeartbeatCommandHandler(
                 }
                 else
                 {
-                    if (!string.Equals(lineAccount.Handle, cleanBotId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        lineNote = "เครื่องนี้ผูกกับ LINE OA อื่นอยู่แล้ว ไม่สามารถเปลี่ยน LINE OA ได้";
-                    }
-                    else
                     {
                         device.SetLineReady(cleanBotId, now);
                         var expectedName = $"LINE · {cleanOaName}";
                         if (expectedName.Length > 120) expectedName = expectedName[..120];
-                        if (lineAccount.Name != expectedName) lineAccount.RenameLine(cleanOaName); // a rename never undoes a rest or a login loss
+                        if (lineAccount!.Name != expectedName) lineAccount.RenameLine(cleanOaName); // a rename never undoes a rest or a login loss
                     }
                 }
             }
@@ -550,8 +553,9 @@ public sealed class SyncLineChatsCommandHandler(
         var device = await DeviceAccess.RequireAsync(devices, current, ct);
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("ไม่พบเวิร์กสเปซ", device.WorkspaceId);
         await users.RequireLineChatAsync(ws, ct);
-        var account = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct)
-            ?? throw new DomainException("อุปกรณ์นี้ยังไม่ได้ผูกบัญชี LINE OA");
+        var account = (await accounts.ListByDeviceAsync(device.Id, ct))
+            .FirstOrDefault(x => x.Platform == Platform.Line && string.Equals(x.Handle, c.BotId?.Trim(), StringComparison.OrdinalIgnoreCase))
+            ?? throw new DomainException("อุปกรณ์นี้ยังไม่ได้ผูกบัญชี LINE OA นี้ (เพิ่มในหน้า LINE OA ก่อน)");
         var now = clock.GetUtcNow();
 
         if (device.Seen(null, now))

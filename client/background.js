@@ -1713,11 +1713,12 @@ const remoteCommands = {
     return { ok: true };
   },
   // The web's "sync LINE chats" button: read the OA's chat list now (not awaited: it takes minutes, the command is answered at once).
-  syncLineChats: async () => {
+  syncLineChats: async (args = {}) => {
     const c = await getCloud();
     if (!c.enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
     if (!c.lineEnabled) return { ok: false, error: 'ยังไม่ได้เปิดใช้ LINE OA ในเครื่องนี้ (กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยาย)' };
-    enqueue(() => lineSyncChats({ trigger: 'web' })).catch(() => {});
+    const botId = lineBotIdFromLink(args?.botId || '');
+    enqueue(() => lineSyncChats({ trigger: 'web', botId })).catch(() => {});
     return { ok: true };
   },
   // The web's "connect LINE" button: Chrome grants chat.line.biz only on a click inside an extension page, so the

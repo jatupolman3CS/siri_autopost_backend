@@ -12,6 +12,7 @@ using SIRIAUTOPOST.Application.Features.AutoReply;
 using SIRIAUTOPOST.Application.Features.Collections;
 using SIRIAUTOPOST.Application.Features.LinkSets;
 using SIRIAUTOPOST.Application.Features.LineChats;
+using SIRIAUTOPOST.Application.Features.LineOas;
 using SIRIAUTOPOST.Application.Features.MasterPosts;
 using SIRIAUTOPOST.Application.Features.Notifications;
 using SIRIAUTOPOST.Application.Features.Reports;
@@ -170,6 +171,10 @@ public static class DependencyInjection
         services.AddQuery<GetAccountGroupsQuery, IReadOnlyList<GroupLinkDto>, GetAccountGroupsQueryHandler>();
         // LINE OA customer chats
         services.AddQuery<GetLineChatsQuery, LineChatPageDto, GetLineChatsQueryHandler>();
+        services.AddQuery<GetLineOasQuery, IReadOnlyList<LineOaDto>, GetLineOasQueryHandler>();
+        services.AddCommand<AddLineOaCommand, LineOaDto, AddLineOaCommandHandler>();
+        services.AddCommand<SyncLineOaCommand, bool, SyncLineOaCommandHandler>();
+        services.AddCommand<RemoveLineOaCommand, bool, RemoveLineOaCommandHandler>();
         services.AddCommand<UpdateLineChatCommand, LineChatDto, UpdateLineChatCommandHandler>();
 
         // Schedule engine: schedules, the materializer that queues their posts, test posts, backup and restore

@@ -370,3 +370,10 @@ public sealed record FromLineChatsFilter(string? Q = null, string? Label = null,
 
 public sealed record ImportLineChatsRequest(
     Guid AccountId, IReadOnlyList<Guid>? ChatIds = null, FromLineChatsFilter? Filter = null, bool AllMatching = false);
+
+/// <summary>One LINE Official Account of the master list: its address, the browser that reads it and how many customers were read.</summary>
+public sealed record LineOaDto(
+    Guid Id, string Name, string BotId, string Url, Guid? DeviceId, string? DeviceName, bool DeviceOnline, bool Ready,
+    int Chats, DateTimeOffset? SyncedAt, bool SessionLost, int LinkSetCount);
+
+public sealed record AddLineOaRequest(string Url, Guid? DeviceId = null, string? Name = null);

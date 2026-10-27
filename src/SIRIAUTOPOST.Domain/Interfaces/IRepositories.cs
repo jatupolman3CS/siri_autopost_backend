@@ -107,6 +107,7 @@ public interface IAccountRepository
     Task<SocialAccount?> FindByHandleAsync(Guid workspaceId, Platform platform, string handle, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
     void Add(SocialAccount account);
+    void Remove(SocialAccount account);
 }
 
 public interface IPostRepository

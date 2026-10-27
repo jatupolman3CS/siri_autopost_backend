@@ -586,11 +586,13 @@ export function createLineFlow(deps) {
   // Reads the customers' chat list (names, labels, time of the last message, unread flag; never a message) and sends it to
   // the web app. Returns { ok, count, complete } or { ok: false, error, needsChoice?, login? }. The caller queues it in the
   // post queue under a deadline, so it never overlaps a post.
-  async function syncLineChats({ trigger = 'manual' } = {}) {
+  async function syncLineChats({ trigger = 'manual', botId: wantedBotId = '' } = {}) {
     const c = await getCloud();
     if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
     if (!c.lineEnabled) return { ok: false, error: 'ยังไม่ได้เปิดใช้ LINE OA ในเครื่องนี้ (กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยาย)' };
-    const wait = (c.lineSyncAt || 0) + tuning.lineSyncMinGapMs - Date.now();
+    // A read the web asked for names its OA (the web's LINE OA master); another OA than the last one is never throttled by the last read.
+    const otherOa = !!wantedBotId && wantedBotId.toLowerCase() !== String(c.lineBotId || '').toLowerCase();
+    const wait = otherOa ? 0 : (c.lineSyncAt || 0) + tuning.lineSyncMinGapMs - Date.now();
     if (wait > 0) {
       return { ok: false, throttled: true, error: `ซิงก์รายชื่อแชท LINE ไปเมื่อสักครู่ ซิงก์ได้ทุก ${Math.round(tuning.lineSyncMinGapMs / 60000)} นาที (รออีกประมาณ ${Math.ceil(wait / 60000)} นาที)` };
     }
@@ -605,6 +607,10 @@ export function createLineFlow(deps) {
       await setCloud({ lineLoginLostAt: Date.now(), lineLoginProbeAt: Date.now() + tuning.loginProbeMs });
       return fail('ยังไม่ได้ล็อกอิน LINE OA Manager ใน Chrome นี้', { login: true });
     }
+    if (wantedBotId) {
+      probe.botId = wantedBotId;
+      probe.oaName = otherOa ? '' : probe.oaName;
+    }
     if (!probe.botId) {
       if (probe.choices.length > 1) {
         await setCloud({ lineChoices: probe.choices, lineError: '' });
@@ -613,7 +619,7 @@ export function createLineFlow(deps) {
       return fail('ไม่พบ LINE OA ในบัญชีที่ล็อกอินอยู่');
     }
     // The 10-minute floor counts real reads of the list (a login that was missing does not use it up).
-    await setCloud({ lineBotId: probe.botId, lineOaName: probe.oaName || c.lineOaName || '', lineLoginLostAt: 0, lineChoices: [], lineError: '', lineSyncAt: Date.now() });
+    await setCloud({ lineBotId: probe.botId, lineOaName: probe.oaName || (otherOa ? '' : c.lineOaName) || '', lineLoginLostAt: 0, lineChoices: [], lineError: '', lineSyncAt: Date.now() });
 
     // The web must know the OA before it takes the list: the heartbeat creates the account (PUT line/chats refuses without it).
     let hb;
@@ -666,7 +672,7 @@ export function createLineFlow(deps) {
     try {
       serverTotal = await cloudApi(await getCloud(), 'PUT', '/api/device/line/chats', {
         botId: probe.botId,
-        oaName: probe.oaName || c.lineOaName || probe.botId,
+        oaName: probe.oaName || (otherOa ? '' : c.lineOaName) || probe.botId,
         complete: !!r.complete,
         chats,
       });

@@ -619,13 +619,6 @@ public class LineChatEndpointsTests(ApiFactory factory)
         var deviceId = (await shop.DeviceAsync()).Id;
         var oldAccount = (await shop.DeviceAsync()).Line!.AccountId;
 
-        // Changing the OA by just reporting another one is refused: the browser is bound to the first.
-        var refused = await shop.Device.PostAsJsonAsync("/api/device/heartbeat", new
-        {
-            version = "2.5.0", sessionOk = true, line = new { ready = true, botId = "@new_oa", oaName = "New OA" }, lineSessionOk = true,
-        }, Json);
-        Assert.Contains("ไม่สามารถเปลี่ยน LINE OA ได้", (await refused.Content.ReadFromJsonAsync<DeviceStatusDto>(Json))!.LineNote);
-
         // The web lets go of it: no LINE on the device, the account stays but has no browser, the extension is told to forget it.
         var res = await shop.Owner.DeleteAsync($"{shop.Api}/devices/{deviceId}/line");
         res.EnsureSuccessStatusCode();

@@ -107,6 +107,8 @@ public sealed class AccountRepository(AppDbContext db) : IAccountRepository
     }
 
     public void Add(SocialAccount account) => db.Accounts.Add(account);
+
+    public void Remove(SocialAccount account) => db.Accounts.Remove(account);
 }
 
 public sealed class PostRepository(AppDbContext db) : IPostRepository

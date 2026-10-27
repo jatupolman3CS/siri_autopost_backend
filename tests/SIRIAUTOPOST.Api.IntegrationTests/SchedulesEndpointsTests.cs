@@ -434,6 +434,7 @@ public class SchedulesEndpointsTests(ApiFactory factory)
         // first, at a time that is already over, so its post of that round is not made again. A fixed order keeps the count exact.
         await shop.SetAntiBanAsync(a => a with { Shuffle = false }); // a fixed order: the second group's time is a few minutes after the first
         var (slot, _) = SlotAhead(shop.Now, Bangkok, TimeSpan.FromHours(2));
+        var createdDay = ToLocalDay(shop.Now, Bangkok);
         var created = await shop.CreateScheduleAsync(Daily(slot));
         var id = created.Schedule.Id;
 
@@ -456,8 +457,12 @@ public class SchedulesEndpointsTests(ApiFactory factory)
         Assert.True(resumed.Active);
         Assert.NotNull(resumed.NextRunAt);
         var again = await shop.PostsAsync(id);
-        Assert.Equal(created.Created, again.Count); // the sent post is not made twice; the rest come back
-        Assert.Equal(created.Created - 1, again.Count(p => p.Status == PostStatus.Queued));
+        // The sent post is not made twice; the rest come back. The window is 14 local days from the clock at resume: when the
+        // clock was moved to a first slot after local midnight (the test ran in the last two hours of the day), it starts a
+        // day later than at creation and reaches one more day, two posts (two groups) more.
+        var days = (ToLocalDay(shop.Now, Bangkok) != createdDay ? 1 : 0);
+        Assert.Equal(created.Created + days * 2, again.Count);
+        Assert.Equal(again.Count - 1, again.Count(p => p.Status == PostStatus.Queued));
         Assert.Single(again, p => p.Id == done.Id);
     }
 

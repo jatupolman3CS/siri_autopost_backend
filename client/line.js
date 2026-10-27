@@ -23,7 +23,9 @@
     // The chat list (middle column) or contacts table (รายชื่อติดต่อ).
     chatRow: [
       '.list-group-item-chat[data-fbap-uid]', // the real chat list; the id is copied there by line-flow.js (stampChatRows)
-      'a[href*="/chat/"]',
+      // Only LINE's own chat links: a message may hold any link (a customer or a bot card can point at .../v1/chat/completions), and
+      // the first real run took such a message for the chat list and found no messages at all.
+      'a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]',
       'table tbody tr',
       '[role="row"]',
       '[class*="chat-item" i]',
@@ -392,7 +394,7 @@
     if (fromHref) return fromHref;
     const fromData = el.getAttribute ? (el.getAttribute('data-fbap-uid') || el.getAttribute('data-user-id') || el.getAttribute('data-id') || el.getAttribute('data-chat-id')) : '';
     if (fromData && USER_ID_RE.test(fromData)) return fromData;
-    const childLink = el.querySelector && el.querySelector('a[href*="/chat/"], [data-fbap-uid], [data-user-id], [data-id]');
+    const childLink = el.querySelector && el.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"], [data-fbap-uid], [data-user-id], [data-id]');
     if (childLink) {
       const u = userIdOfHref(childLink.getAttribute('href')) || childLink.getAttribute('data-fbap-uid') || childLink.getAttribute('data-user-id') || childLink.getAttribute('data-id');
       if (u && USER_ID_RE.test(u)) return u;
@@ -406,7 +408,7 @@
     const fromSel = every(SELECTORS.chatRow, document, (a) => USER_ID_RE.test(userIdOfEl(a)));
     if (fromSel.length) return fromSel;
     const tableRows = [...document.querySelectorAll('table tbody tr, [role="row"]')].filter(visible);
-    return tableRows.filter((tr) => !!(buttonLike(/^(?:แชท|chat)$/i, tr) || tr.querySelector('a[href*="/chat/"]')));
+    return tableRows.filter((tr) => !!(buttonLike(/^(?:แชท|chat)$/i, tr) || tr.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]')));
   }
 
   function rowFor(userId) {
@@ -471,7 +473,7 @@
   function findComposer() {
     const search = findSearch();
     const deep = shadowTextareas().filter((e) => visible(e) && !e.disabled);
-    const list = deep.length ? deep : every(SELECTORS.composer, document, (e) => e !== search && e.tagName !== 'INPUT' && !e.closest('a[href*="/chat/"]'));
+    const list = deep.length ? deep : every(SELECTORS.composer, document, (e) => e !== search && e.tagName !== 'INPUT' && !e.closest('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]'));
     if (list.length <= 1) return list[0] || null;
     const withSend = list.filter((c) => !!first(SELECTORS.sendButton, composerArea(c)));
     const pool = withSend.length ? withSend : list;
@@ -480,7 +482,7 @@
 
   // The scrollable column of messages above the composer.
   function messagePane(composer) {
-    const bySelector = first(SELECTORS.messagePane, document, (e) => !e.querySelector('a[href*="/chat/"]') && (!composer || !e.contains(shellOf(composer))) && scrollStyle(e));
+    const bySelector = first(SELECTORS.messagePane, document, (e) => !e.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]') && (!composer || !e.contains(shellOf(composer))) && scrollStyle(e));
     if (bySelector) return bySelector;
     if (!composer) return null;
     const cr = composer.getBoundingClientRect();
@@ -490,7 +492,7 @@
       if (!scrollStyle(e) || !visible(e)) continue;
       const r = e.getBoundingClientRect();
       if (!(r.bottom <= cr.top + 12 && r.right > cr.left && r.left < cr.right)) continue; // above the composer, same column
-      if (e.contains(shellOf(composer)) || e.querySelector('a[href*="/chat/"]')) continue; // not the list, not a wrapper
+      if (e.contains(shellOf(composer)) || e.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]')) continue; // not the list, not a wrapper
       if (r.height > bestH) {
         best = e;
         bestH = r.height;
@@ -768,7 +770,7 @@
         clearInput(search); // a filtered list would be taken for the whole roster
         await sleep(rnd(800, 1600));
       }
-      const filter = first(SELECTORS.listFilter, document, (e) => !e.contains(document.querySelector('a[href*="/chat/"]')));
+      const filter = first(SELECTORS.listFilter, document, (e) => !e.contains(document.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]')));
       const ft = filter ? (filter.tagName === 'SELECT' ? filter.options[filter.selectedIndex]?.textContent || '' : textOf(filter)) : '';
       roster.filtered = !!ft.trim() && ft.trim().length <= 30 && !LABELS.filterAll.test(ft);
       const sc = listScroller();
@@ -845,7 +847,7 @@
     if (!a) return { ok: true, notFound: true, found: false };
     const unread = rowUnread(a);
     if (m.click === false) return { ok: true, found: true, unread };
-    const chatBtn = (a.querySelector && a.querySelector('a[href*="/chat/"]')) || buttonLike(/^(?:แชท|chat)$/i, a) || a;
+    const chatBtn = (a.querySelector && a.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]')) || buttonLike(/^(?:แชท|chat)$/i, a) || a;
     await humanClick(chatBtn);
     const opened = await waitFor(() => {
       const c = currentChat();
@@ -955,7 +957,7 @@
       acceptNode: (n) => {
         const p = n.parentElement;
         if (!p || /^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA)$/.test(p.tagName) || !(n.nodeValue || '').trim()) return NodeFilter.FILTER_REJECT;
-        if (p.closest('[contenteditable="true"]') || p.closest('a[href*="/chat/"]') || skip.some((s) => s && s.contains(p))) return NodeFilter.FILTER_REJECT;
+        if (p.closest('[contenteditable="true"]') || p.closest('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]') || skip.some((s) => s && s.contains(p))) return NodeFilter.FILTER_REJECT;
         return NodeFilter.FILTER_ACCEPT;
       },
     });
@@ -1034,7 +1036,7 @@
   function findSendButton(area) {
     const scopes = [area, document].filter(Boolean);
     for (const root of scopes) {
-      const b = first(SELECTORS.sendButton, root, (el) => !el.closest('a[href*="/chat/"]'));
+      const b = first(SELECTORS.sendButton, root, (el) => !el.closest('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]'));
       if (b) return b;
     }
     if (area) {
@@ -1073,7 +1075,7 @@
     // customer and the identity check refused the send), and, once the message pane is known, only inside its column.
     const paneRect = pane ? pane.getBoundingClientRect() : null;
     const h = first(SELECTORS.headerName, document, (e) => {
-      if (e.closest('a[href*="/chat/"], nav, [class*="user-name" i], [class*="navbar" i], [class*="gnb" i]')) return false;
+      if (e.closest('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"], nav, [class*="user-name" i], [class*="navbar" i], [class*="gnb" i]')) return false;
       if (!paneRect) return true;
       const r = e.getBoundingClientRect();
       return r.left >= paneRect.left - 40 && r.right <= paneRect.right + 40;
@@ -1461,7 +1463,7 @@
     const login = LABELS.loginHosts.some((h) => host === h || host.endsWith('.' + h)) || LABELS.loginPath.test(location.pathname) || loginForm();
     const chat = currentChat();
     let oaName = '';
-    const el = first(SELECTORS.oaName, document, (e) => !e.closest('a[href*="/chat/"]'));
+    const el = first(SELECTORS.oaName, document, (e) => !e.closest('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]'));
     if (el) oaName = firstTextNode(el).slice(0, 120);
     return {
       ok: true,
@@ -1523,7 +1525,7 @@
   function blockCheck(ctx = null) {
     const composer = ctx ? ctx.composer : findComposer();
     const pane = ctx ? ctx.pane : messagePane(composer);
-    const inChat = (el) => (pane && pane.contains(el)) || (composer && shellOf(composer).contains(el)) || !!el.querySelector('a[href*="/chat/"]') || !!el.closest('a[href*="/chat/"]');
+    const inChat = (el) => (pane && pane.contains(el)) || (composer && shellOf(composer).contains(el)) || !!el.querySelector('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]') || !!el.closest('a:is([href^="/"], [href*="chat.line.biz/"])[href*="/chat/"]');
     const roots = every(SELECTORS.noticeRoots).filter((r) => !inChat(r));
     for (const r of roots) {
       const text = noticeText(r);

@@ -444,9 +444,9 @@ await until(async () => (await countNow()) === visibleChats(), 'the button read 
 assert.ok(linePage.contactReads > 0, 'the customers were read from the contacts page');
 assert.equal(linePage.chatListReads, 0, 'the chat list was not scrolled when the contacts page worked');
 tuning.lineSyncMinGapMs = 10 * 60000;
-const throttled = await bg('lineSyncChats');
-assert.equal(throttled.ok, false);
-assert.equal(throttled.throttled, true, 'one read per 10 minutes');
+const forced = await bg('lineSyncChats');
+assert.equal(forced.ok, true, 'a button reads now, whatever the 10-minute floor of the automatic read says');
+assert.notEqual(forced.throttled, true);
 tuning.lineSyncMinGapMs = 0;
 linePage.chats.push({ userId: lineUser(901), name: 'คุณจากรอบ 6 ชั่วโมง', labels: [], lastMessageAt: null, unread: false });
 await local.set({ cloud: { ...data.get('cloud'), lineSyncNextAt: 1 } }); // the next automatic read is due
@@ -483,6 +483,15 @@ assert.equal(good.ok, true, good.error);
 assert.equal(data.get('cloud').lineBotId, LINE_BOT);
 assert.equal(data.get('cloud').lineEnabled, true);
 await until(async () => linePage.contactReads > contactReadsBefore, 'the customers were read from the contacts page');
+
+step('(m2) the web chooses the OA the browser works for ("use this OA")');
+const noBot = await webCommand('lineUseOa', { botId: '' });
+assert.equal(noBot.ok, false, 'a command without an OA is refused');
+const used = await webCommand('lineUseOa', { botId: LINE_BOT });
+assert.equal(used.ok, true, used.error);
+assert.equal(used.botId, LINE_BOT, 'the OA the web chose is the one the browser works for');
+assert.equal(data.get('cloud').lineBotId, LINE_BOT);
+assert.equal((await api('GET', devBase)).json[0].line.botId, LINE_BOT, 'the web hears it');
 
 step('(l) several OAs on the account chooser: the person picks one on the status page');
 linePage.chooser = true;

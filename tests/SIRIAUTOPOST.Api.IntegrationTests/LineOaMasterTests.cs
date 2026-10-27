@@ -50,6 +50,12 @@ public class LineOaMasterTests(ApiFactory factory)
         var list = (await owner.GetFromJsonAsync<List<LineOaDto>>(url, Json))!;
         Assert.Equal(2, list.Count);
         Assert.All(list, o => Assert.Equal(1, o.Chats));
+        // The browser works for the OA it reported last; "use this OA" from the web tells it to switch.
+        Assert.False(list.Single(o => o.Id == one.Id).Active);
+        Assert.True(list.Single(o => o.Id == two.Id).Active);
+        Assert.Equal(HttpStatusCode.NoContent, (await owner.PostAsync($"{url}/{one.Id}/use", null)).StatusCode);
+        var useCmds = await factory.WithDbAsync(db => db.DeviceCommands.Where(c => c.Cmd == "lineUseOa").Select(c => c.Args).ToListAsync());
+        Assert.Contains(useCmds, a => a.Contains("Uoaone12345"));
         // One browser with two OAs still lists as one device (it once crashed on the second Line account).
         var devs = (await owner.GetFromJsonAsync<List<DeviceDto>>($"/api/workspaces/{ws}/devices", Json))!;
         Assert.Single(devs);

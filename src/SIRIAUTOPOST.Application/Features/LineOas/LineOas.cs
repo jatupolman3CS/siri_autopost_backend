@@ -30,7 +30,8 @@ internal static class LineOaRows
                 a.Id, a.Name, a.Handle, LineOaUrl.Build(a.Handle), a.DeviceId, d?.Name, d?.IsOnline(now) ?? false,
                 d is not null && d.IsLineReady(now) && string.Equals(d.LineBotId, a.Handle, StringComparison.OrdinalIgnoreCase),
                 await lineChats.CountByAccountAsync(a.Id, ct), await lineChats.MaxSyncedAtAsync(a.Id, ct),
-                a.Health == AccountHealth.Relogin, allSets.Count(s => s.PostAsAccountId == a.Id)));
+                a.Health == AccountHealth.Relogin, allSets.Count(s => s.PostAsAccountId == a.Id),
+                d is not null && string.Equals(d.LineBotId, a.Handle, StringComparison.OrdinalIgnoreCase)));
         }
         return rows;
     }
@@ -39,9 +40,9 @@ internal static class LineOaRows
 internal static class LineOaCommands
 {
     /// <summary>Queues the "read this OA's customers" command for a browser (the extension opens the OA and scrolls its chat list).</summary>
-    public static void Ask(IExtensionRepository ext, IDeviceEventRepository events, Guid workspaceId, Guid deviceId, string botId, DateTimeOffset now)
+    public static void Ask(IExtensionRepository ext, IDeviceEventRepository events, Guid workspaceId, Guid deviceId, string botId, DateTimeOffset now, string cmdName = "syncLineChats")
     {
-        var cmd = DeviceCommand.Create(workspaceId, deviceId, "syncLineChats", JsonSerializer.Serialize(new { botId }), now);
+        var cmd = DeviceCommand.Create(workspaceId, deviceId, cmdName, JsonSerializer.Serialize(new { botId }), now);
         ext.Add(cmd);
         events.Add(CommandEvents.Of(cmd, now));
     }
@@ -117,6 +118,27 @@ public sealed class SyncLineOaCommandHandler(
         if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
         if (a.DeviceId is not { } deviceId) throw new DomainException("LINE OA นี้ยังไม่มีส่วนขยายที่อ่านรายชื่อ");
         LineOaCommands.Ask(ext, events, ws.Id, deviceId, a.Handle, clock.GetUtcNow());
+        await uow.SaveChangesAsync(ct);
+        return true;
+    }
+}
+
+/// <summary>Tells the browser of an OA to work for that OA from now on (the web chooses; the extension's own page no longer has to).</summary>
+public sealed record UseLineOaCommand(Guid WorkspaceId, Guid AccountId) : ICommand<bool>;
+
+public sealed class UseLineOaCommandHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IExtensionRepository ext,
+    IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<UseLineOaCommand, bool>
+{
+    public async Task<bool> HandleAsync(UseLineOaCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        await users.RequireLineChatAsync(ws, ct);
+        var a = await accounts.GetAsync(ws.Id, c.AccountId, ct);
+        if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
+        if (a.DeviceId is not { } deviceId) throw new DomainException("LINE OA นี้ยังไม่มีส่วนขยายที่ดูแล");
+        LineOaCommands.Ask(ext, events, ws.Id, deviceId, a.Handle, clock.GetUtcNow(), "lineUseOa");
         await uow.SaveChangesAsync(ct);
         return true;
     }

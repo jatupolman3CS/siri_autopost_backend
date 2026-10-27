@@ -174,6 +174,7 @@ public static class DependencyInjection
         services.AddQuery<GetLineOasQuery, IReadOnlyList<LineOaDto>, GetLineOasQueryHandler>();
         services.AddCommand<AddLineOaCommand, LineOaDto, AddLineOaCommandHandler>();
         services.AddCommand<SyncLineOaCommand, bool, SyncLineOaCommandHandler>();
+        services.AddCommand<UseLineOaCommand, bool, UseLineOaCommandHandler>();
         services.AddCommand<RemoveLineOaCommand, bool, RemoveLineOaCommandHandler>();
         services.AddCommand<UpdateLineChatCommand, LineChatDto, UpdateLineChatCommandHandler>();
 

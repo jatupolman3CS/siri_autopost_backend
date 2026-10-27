@@ -809,7 +809,10 @@ public sealed class ClaimJobCommandHandler(
         foreach (var acc in deviceAccounts)
         {
             if (!acc.CanPost || acc.IsResting(now)) continue;
-            if (acc.Platform == Platform.Line && (!device.IsLineReady(now) || !owner.HasLineChat)) continue;
+            // A browser works for ONE OA at a time (the one chosen on the web); the chats of the others wait until it is switched.
+            if (acc.Platform == Platform.Line
+                && (!device.IsLineReady(now) || !owner.HasLineChat
+                    || !string.Equals(device.LineBotId, acc.Handle, StringComparison.OrdinalIgnoreCase))) continue;
 
             var pick = await FindCandidateAsync(device, ws, acc, owner, QuotasAsync, now, notes, ct);
             if (pick.Candidate is not null) candidates.Add(pick.Candidate);

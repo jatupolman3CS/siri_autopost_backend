@@ -1754,6 +1754,20 @@ const remoteCommands = {
     }
     return r;
   },
+  // The web's "use this OA": the browser works for that OA from now on (its customers are read, its chat jobs are sent). Chrome's
+  // permission for chat.line.biz cannot be given from the web, so a browser that never had LINE switched on says so.
+  lineUseOa: async (a) => {
+    const c = await getCloud();
+    if (!c.enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+    const botId = lineBotIdFromLink((a && a.botId) || '');
+    if (!botId) return { ok: false, error: 'ไม่พบรหัส LINE OA ในคำสั่ง' };
+    if (!c.lineEnabled || !(await linePermitted())) {
+      return { ok: false, needsPermission: true, error: 'ยังไม่ได้เปิดใช้ LINE OA ในเครื่องนี้: กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยายครั้งเดียว (Chrome ให้สิทธิ์ได้จากหน้านั้นเท่านั้น)' };
+    }
+    await setCloud({ lineBotId: botId, lineOaName: '', lineAvoidBotId: '', lineChoices: [], lineError: '' });
+    await log('info', '[LINE] เปลี่ยนไปใช้ LINE OA ตามที่เลือกจากเว็บ');
+    return enqueue(() => lineCheckIn(botId));
+  },
   openLineSetup: async () => {
     if (!(await getCloud()).enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
     await openDashboard();
@@ -2410,7 +2424,7 @@ async function lineOwnTabBotIds() {
   }
 }
 
-async function lineCheckIn() {
+async function lineCheckIn(wantedBotId = '') {
   let avoid = (await getCloud()).lineAvoidBotId || '';
   if (avoid) {
     const mine = (await lineOwnTabBotIds()).filter((id) => id.toLowerCase() !== avoid.toLowerCase());
@@ -2438,10 +2452,12 @@ async function lineCheckIn() {
     return { ok: false, login: !r.error, error: r.error || 'ยังไม่ได้ล็อกอิน LINE OA Manager ใน Chrome นี้: ล็อกอินที่ chat.line.biz แล้วกดตรวจอีกครั้ง' };
   }
   const patch = { lineLoginLostAt: 0, lineLoginProbeAt: 0, lineError: '' };
-  if (r.botId) Object.assign(patch, { lineBotId: r.botId, lineOaName: r.oaName || (r.botId === c.lineBotId ? c.lineOaName : '') || '', lineChoices: [] });
+  // An OA chosen on the web wins over the one LINE opened (the page lands on the OA used last).
+  const botId = wantedBotId || r.botId || '';
+  if (botId) Object.assign(patch, { lineBotId: botId, lineOaName: (botId === r.botId ? r.oaName : '') || (botId === c.lineBotId ? c.lineOaName : '') || '', lineChoices: [] });
   else patch.lineChoices = r.choices || [];
   await setCloud(patch);
-  if (r.botId) {
+  if (botId) {
     try {
       const hb = await lineHeartbeat({ lineSessionOk: true });
       await setCloud({ lineNote: hb.lineNote || '' });
@@ -2449,7 +2465,7 @@ async function lineCheckIn() {
       await log('warn', `[LINE] แจ้งเว็บไม่สำเร็จ: ${e?.message || e}`);
     }
   }
-  return { ok: true, botId: r.botId || '', oaName: r.oaName || '', choices: r.choices || [], needsChoice: !r.botId && (r.choices || []).length > 1 };
+  return { ok: true, botId, oaName: (botId === r.botId ? r.oaName : '') || '', choices: r.choices || [], needsChoice: !botId && (r.choices || []).length > 1 };
 }
 
 // The status page's button "ใช้ LINE OA ในเครื่องนี้" (it asked Chrome for the permission inside the click).

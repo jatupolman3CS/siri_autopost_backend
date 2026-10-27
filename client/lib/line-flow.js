@@ -590,13 +590,14 @@ export function createLineFlow(deps) {
   // Reads the customers' chat list (names, labels, time of the last message, unread flag; never a message) and sends it to
   // the web app. Returns { ok, count, complete } or { ok: false, error, needsChoice?, login? }. The caller queues it in the
   // post queue under a deadline, so it never overlaps a post.
-  async function syncLineChats({ trigger = 'manual', botId: wantedBotId = '' } = {}) {
+  async function readLineChats({ trigger = 'manual', botId: wantedBotId = '' } = {}) {
     const c = await getCloud();
     if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
     if (!c.lineEnabled) return { ok: false, error: 'ยังไม่ได้เปิดใช้ LINE OA ในเครื่องนี้ (กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยาย)' };
     // A read the web asked for names its OA (the web's LINE OA master); another OA than the last one is never throttled by the last read.
     const otherOa = !!wantedBotId && wantedBotId.toLowerCase() !== String(c.lineBotId || '').toLowerCase();
-    const wait = otherOa ? 0 : (c.lineSyncAt || 0) + tuning.lineSyncMinGapMs - Date.now();
+    // Only the automatic read keeps the floor: a button (the web's or the status page's) always reads now.
+    const wait = otherOa || trigger !== 'auto' ? 0 : (c.lineSyncAt || 0) + tuning.lineSyncMinGapMs - Date.now();
     if (wait > 0) {
       return { ok: false, throttled: true, error: `ซิงก์รายชื่อแชท LINE ไปเมื่อสักครู่ ซิงก์ได้ทุก ${Math.round(tuning.lineSyncMinGapMs / 60000)} นาที (รออีกประมาณ ${Math.ceil(wait / 60000)} นาที)` };
     }
@@ -689,6 +690,25 @@ export function createLineFlow(deps) {
     await setCloud({ lineChats: chats.length, lineSyncedAt: Date.now(), lineSyncNextAt: next, lineError: '' });
     await log('success', `[LINE] ซิงก์รายชื่อแชท LINE ขึ้นเว็บแล้ว ${chats.length} แชท${r.complete ? '' : ' (อ่านได้ไม่ครบทั้งรายการ จึงยังไม่ลบแชทที่หายไป)'}`);
     return { ok: true, count: chats.length, serverTotal, complete: !!r.complete, trigger };
+  }
+
+  // The OA the browser is connected to is chosen on the web (the "use this OA" button), so reading ANOTHER OA's customers must not
+  // leave the browser connected to it: the previous choice is put back (and told to the web) once the read is over.
+  async function syncLineChats(opts = {}) {
+    const before = await getCloud();
+    try {
+      return await readLineChats(opts);
+    } finally {
+      const wanted = String(opts.botId || '').toLowerCase();
+      if (wanted && before.lineBotId && before.lineBotId.toLowerCase() !== wanted) {
+        await setCloud({ lineBotId: before.lineBotId, lineOaName: before.lineOaName || '' });
+        try {
+          await heartbeat();
+        } catch {
+          /* the next round tells the web */
+        }
+      }
+    }
   }
 
   return { sendToLineChat, syncLineChats, probeLineLogin, TIMING };

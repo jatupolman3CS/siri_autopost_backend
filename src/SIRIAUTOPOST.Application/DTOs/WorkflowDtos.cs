@@ -374,6 +374,6 @@ public sealed record ImportLineChatsRequest(
 /// <summary>One LINE Official Account of the master list: its address, the browser that reads it and how many customers were read.</summary>
 public sealed record LineOaDto(
     Guid Id, string Name, string BotId, string Url, Guid? DeviceId, string? DeviceName, bool DeviceOnline, bool Ready,
-    int Chats, DateTimeOffset? SyncedAt, bool SessionLost, int LinkSetCount);
+    int Chats, DateTimeOffset? SyncedAt, bool SessionLost, int LinkSetCount, bool Active);
 
 public sealed record AddLineOaRequest(string Url, Guid? DeviceId = null, string? Name = null);

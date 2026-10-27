@@ -144,7 +144,11 @@ export function createLineFlow(deps) {
   const onBotPage = (url, botId) => {
     try {
       const u = new URL(url);
-      return u.hostname === 'chat.line.biz' && u.pathname.toLowerCase().startsWith('/' + String(botId).toLowerCase());
+      if (u.hostname !== 'chat.line.biz') return false;
+      // Only the OA's chat view is reusable: the contacts page (/<bot>/contact, left behind by a roster read) has no composer.
+      const bot = '/' + String(botId).toLowerCase();
+      const path = u.pathname.toLowerCase().replace(/\/+$/, '');
+      return path === bot || path.startsWith(bot + '/chat');
     } catch {
       return false;
     }

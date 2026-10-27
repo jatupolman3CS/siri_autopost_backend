@@ -53,6 +53,7 @@ public sealed class ApiFactory : WebApplicationFactory<Program>, IAsyncLifetime
         builder.UseEnvironment("Testing");
         builder.UseSetting("ConnectionStrings:Default", ConnectionString);
         builder.UseSetting("Database:MigrateOnStartup", "false");
+        builder.UseSetting("Public:StatsCacheSeconds", "0"); // the public figures are cached for a minute in production
         builder.UseSetting("Jwt:Key", "integration-test-signing-key-0123456789abcdef");
         builder.UseSetting("Admin:Email", AdminEmail);
         builder.UseSetting("Admin:Password", AdminPassword);

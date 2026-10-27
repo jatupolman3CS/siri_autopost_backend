@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
 
 namespace SIRIAUTOPOST.Api.IntegrationTests;
@@ -58,11 +59,20 @@ public class BillingProfileAndPublicTests(ApiFactory factory)
         Assert.Null((await ProfileAsync(client)).Card);
     }
 
+    /// <summary>A charge on the customer's ledger, as Stripe's webhook would leave it (the plan itself only changes from Stripe).</summary>
+    private Task ChargeAsync(Guid userId, decimal amount, PlanKey plan) =>
+        factory.WithDbAsync(async db =>
+        {
+            db.Transactions.Add(Transaction.Charge(userId, amount, plan, BillingCycle.Month, null, DateTimeOffset.UtcNow));
+            await db.SaveChangesAsync();
+            return 0;
+        });
+
     [Fact]
     public async Task A_statement_is_a_printable_page_for_the_customers_own_charge_only()
     {
         var (client, auth, _) = await factory.SignUpAsync();
-        (await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "pro", cycle = "month" }, Json)).EnsureSuccessStatusCode();
+        await ChargeAsync(auth.User.Id, 790, PlanKey.Pro);
         var tx = (await client.GetFromJsonAsync<List<TransactionDto>>("/api/billing/invoices", Json))!.Single();
 
         var res = await client.GetAsync($"/api/billing/invoices/{tx.Id}/statement");
@@ -84,7 +94,7 @@ public class BillingProfileAndPublicTests(ApiFactory factory)
     public async Task The_statement_page_escapes_the_customers_name()
     {
         var (client, auth, _) = await factory.SignUpAsync();
-        (await client.PutAsJsonAsync("/api/auth/me/plan", new { plan = "basic", cycle = "month" }, Json)).EnsureSuccessStatusCode();
+        await ChargeAsync(auth.User.Id, 290, PlanKey.Basic);
         var tx = (await client.GetFromJsonAsync<List<TransactionDto>>("/api/billing/invoices", Json))!.Single();
         // Names come from the sign-up form or Google; whatever they hold must not become markup.
         Assert.Contains(System.Net.WebUtility.HtmlEncode(auth.User.Name), await (await client.GetAsync($"/api/billing/invoices/{tx.Id}/statement")).Content.ReadAsStringAsync());

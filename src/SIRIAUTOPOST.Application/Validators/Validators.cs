@@ -73,6 +73,17 @@ public sealed class ChangePlanCommandValidator : AbstractValidator<ChangePlanCom
     }
 }
 
+public sealed class SetPaymentMethodCommandValidator : AbstractValidator<SetPaymentMethodCommand>
+{
+    public SetPaymentMethodCommandValidator()
+    {
+        RuleFor(x => x.Last4).Must(v => v is { Length: 4 } && v.All(char.IsAsciiDigit)).WithMessage("เลข 4 ตัวท้ายของบัตรไม่ถูกต้อง");
+        RuleFor(x => x.ExpMonth).InclusiveBetween(1, 12).WithMessage("เดือนที่บัตรหมดอายุไม่ถูกต้อง");
+        RuleFor(x => x.ExpYear).InclusiveBetween(2000, 2100).WithMessage("ปีที่บัตรหมดอายุไม่ถูกต้อง");
+        RuleFor(x => x.Brand).MaximumLength(20).WithMessage("ชนิดบัตรยาวเกินไป");
+    }
+}
+
 public sealed class StartPaymentCommandValidator : AbstractValidator<StartPaymentCommand>
 {
     public StartPaymentCommandValidator()

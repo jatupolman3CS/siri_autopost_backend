@@ -611,4 +611,55 @@ public class LineChatEndpointsTests(ApiFactory factory)
         Assert.Equal("08:00", restoredSched.LineOptions.AllowedFrom);
         Assert.True(restoredSched.LineOptions.SplitBubbles);
     }
+
+    [Fact]
+    public async Task Letting_go_of_the_line_oa_frees_the_browser_for_another_one()
+    {
+        using var shop = await factory.PairedLineShopAsync("pro", links: 1, posts: 1, botId: "@old_oa", oaName: "Old OA");
+        var deviceId = (await shop.DeviceAsync()).Id;
+        var oldAccount = (await shop.DeviceAsync()).Line!.AccountId;
+
+        // Changing the OA by just reporting another one is refused: the browser is bound to the first.
+        var refused = await shop.Device.PostAsJsonAsync("/api/device/heartbeat", new
+        {
+            version = "2.5.0", sessionOk = true, line = new { ready = true, botId = "@new_oa", oaName = "New OA" }, lineSessionOk = true,
+        }, Json);
+        Assert.Contains("ไม่สามารถเปลี่ยน LINE OA ได้", (await refused.Content.ReadFromJsonAsync<DeviceStatusDto>(Json))!.LineNote);
+
+        // The web lets go of it: no LINE on the device, the account stays but has no browser, the extension is told to forget it.
+        var res = await shop.Owner.DeleteAsync($"{shop.Api}/devices/{deviceId}/line");
+        res.EnsureSuccessStatusCode();
+        var dto = (await res.Content.ReadFromJsonAsync<DeviceDto>(Json))!;
+        Assert.Null(dto.Line);
+        Assert.Null((await shop.DeviceAsync()).Line);
+        var kept = await factory.WithDbAsync(db => db.Accounts.SingleAsync(a => a.Id == oldAccount));
+        Assert.Null(kept.DeviceId);
+        Assert.Equal(0, await factory.WithDbAsync(db => db.LineChats.CountAsync(c => c.AccountId == oldAccount)));
+        Assert.Contains(
+            await factory.WithDbAsync(db => db.DeviceCommands.Where(c => c.DeviceId == deviceId).Select(c => c.Cmd).ToListAsync()),
+            c => c == "resetLine");
+
+        // A second OA can now be connected on the same browser, as a new account; Facebook is untouched.
+        var next = (await (await shop.Device.PostAsJsonAsync("/api/device/heartbeat", new
+        {
+            version = "2.5.0", sessionOk = true, line = new { ready = true, botId = "@new_oa", oaName = "New OA" }, lineSessionOk = true,
+        }, Json)).Content.ReadFromJsonAsync<DeviceStatusDto>(Json))!;
+        Assert.Null(next.LineNote);
+        Assert.NotNull(next.LineAccountId);
+        Assert.NotEqual(oldAccount, next.LineAccountId);
+        var accounts = (await shop.Owner.GetFromJsonAsync<List<AccountDto>>($"{shop.Api}/accounts", Json))!;
+        Assert.Equal(2, accounts.Count(a => a.Platform == Platform.Line));
+        Assert.Single(accounts, a => a.Platform == Platform.Fb && a.Connected);
+    }
+
+    [Fact]
+    public async Task Only_an_admin_can_let_go_of_the_line_oa()
+    {
+        using var shop = await factory.PairedLineShopAsync("pro", links: 1, posts: 1, botId: "@role_oa", oaName: "Role OA");
+        var deviceId = (await shop.DeviceAsync()).Id;
+        var (viewer, auth, _) = await factory.SignUpAsync();
+        (await shop.Owner.PostAsJsonAsync($"{shop.Api}/members", new { email = auth.User.Email, role = "viewer" }, Json)).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Forbidden, (await viewer.DeleteAsync($"{shop.Api}/devices/{deviceId}/line")).StatusCode);
+        Assert.NotNull((await shop.DeviceAsync()).Line);
+    }
 }

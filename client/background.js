@@ -1722,6 +1722,15 @@ const remoteCommands = {
   },
   // The web's "connect LINE" button: Chrome grants chat.line.biz only on a click inside an extension page, so the
   // command opens the status page, where the "use LINE OA on this machine" button asks for it.
+  // The web's "change LINE OA": forget this browser's OA (and its permission-free state) so the status page can connect another.
+  resetLine: async () => {
+    await setCloud({
+      lineEnabled: false, lineBotId: '', lineOaName: '', lineChoices: [], lineLoginLostAt: 0, lineLoginProbeAt: 0,
+      lineError: '', lineNote: '', lineSyncedAt: 0, lineChats: 0,
+    });
+    await log('info', '[LINE] ยกเลิกการเชื่อม LINE OA ตามคำสั่งจากเว็บ: เชื่อม LINE OA ใหม่ได้ที่หน้าสถานะ');
+    return { ok: true };
+  },
   openLineSetup: async () => {
     if (!(await getCloud()).enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
     await openDashboard();

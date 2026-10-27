@@ -204,6 +204,7 @@ public static class DependencyInjection
         services.AddQuery<GetDevicesQuery, IReadOnlyList<DeviceDto>, GetDevicesQueryHandler>();
         services.AddCommand<CreatePairingCodeCommand, PairingCodeDto, CreatePairingCodeCommandHandler>();
         services.AddCommand<RevokeDeviceCommand, Unit, RevokeDeviceCommandHandler>();
+        services.AddCommand<DisconnectDeviceLineCommand, DeviceDto, DisconnectDeviceLineCommandHandler>();
         services.AddCommand<UpdateDeviceCommand, DeviceDto, UpdateDeviceCommandHandler>();
         services.AddCommand<PairDeviceCommand, PairResultDto, PairDeviceCommandHandler>();
         services.AddCommand<DeviceHeartbeatCommand, DeviceStatusDto, DeviceHeartbeatCommandHandler>();

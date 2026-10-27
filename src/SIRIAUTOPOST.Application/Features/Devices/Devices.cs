@@ -1,5 +1,6 @@
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
+using SIRIAUTOPOST.Application.Features.Extension;
 using SIRIAUTOPOST.Application.Interfaces;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
 using SIRIAUTOPOST.Domain.Entities;
@@ -175,6 +176,52 @@ public sealed class UpdateDeviceCommandHandler(
         }
         var lineAcc = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
         return DeviceDto.From(device, fbAccount?.Id, now, await DeviceLineSummary.OfAsync(device, lineAcc, lineChats, now, ct));
+    }
+}
+
+/// <summary>
+/// "Change LINE OA": lets go of the browser's LINE Official Account so another one can be connected on it. The Line account
+/// stays (its link sets wait, and it comes back to whichever browser reports that OA next) but loses its browser; its customer
+/// chats are deleted like on unbinding, its unfinished chat posts fail, and the extension is told to forget the OA
+/// (<c>resetLine</c>) so its next heartbeat no longer reports it. Facebook is not touched.
+/// </summary>
+public sealed record DisconnectDeviceLineCommand(Guid WorkspaceId, Guid DeviceId) : ICommand<DeviceDto>;
+
+public sealed class DisconnectDeviceLineCommandHandler(
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ILineChatRepository lineChats,
+    IPostRepository posts, IExtensionRepository ext, IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<DisconnectDeviceLineCommand, DeviceDto>
+{
+    public async Task<DeviceDto> HandleAsync(DisconnectDeviceLineCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
+        var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
+        var now = clock.GetUtcNow();
+        var lineAcc = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
+        if (lineAcc is not null)
+        {
+            foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
+            {
+                if (p.AccountId != lineAcc.Id) continue;
+                p.Fail(FailureCode.Network, "ยกเลิกการเชื่อม LINE OA ระหว่างส่งข้อความ", now);
+                events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
+            }
+            foreach (var p in await posts.ListOpenByAccountAsync(lineAcc.Id, ct))
+            {
+                p.Fail(FailureCode.Session, "ยกเลิกการเชื่อม LINE OA ของเครื่องนี้แล้ว ต้องเชื่อม LINE OA ใหม่ก่อนจึงจะส่งต่อได้", now);
+                events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
+            }
+            lineAcc.Disconnect();
+            await lineChats.DeleteByAccountAsync(lineAcc.Id, ct); // customers' names go with the browser
+        }
+        device.ClearLineReady();
+        var cmd = DeviceCommand.Create(ws.Id, device.Id, "resetLine", "{}", now);
+        ext.Add(cmd);
+        events.Add(CommandEvents.Of(cmd, now));
+        events.Add(DevicePause.Changed(device, now));
+        await uow.SaveChangesAsync(ct);
+        var fbAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Fb, ct);
+        return DeviceDto.From(device, fbAccount?.Id, now, null);
     }
 }
 

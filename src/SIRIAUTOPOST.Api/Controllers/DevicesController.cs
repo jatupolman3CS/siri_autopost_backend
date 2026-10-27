@@ -31,6 +31,12 @@ public sealed class DevicesController : ControllerBase
         [FromServices] ICommandHandler<UpdateDeviceCommand, DeviceDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new UpdateDeviceCommand(wsId, deviceId, r.Name, r.JobsPaused), ct);
 
+    /// <summary>Lets go of the browser's LINE OA so another can be connected on it (admin; Facebook is untouched, the chats are deleted).</summary>
+    [HttpDelete("{deviceId:guid}/line")]
+    public Task<DeviceDto> DisconnectLine(
+        Guid wsId, Guid deviceId, [FromServices] ICommandHandler<DisconnectDeviceLineCommand, DeviceDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new DisconnectDeviceLineCommand(wsId, deviceId), ct);
+
     [HttpDelete("{deviceId:guid}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Revoke(

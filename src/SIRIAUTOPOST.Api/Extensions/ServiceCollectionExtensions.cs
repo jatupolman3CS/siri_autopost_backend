@@ -36,6 +36,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<ExtensionPackage>();
         services.AddSingleton<IExtensionPackage>(sp => sp.GetRequiredService<ExtensionPackage>());
         services.AddSingleton<IRequestTimings, RequestTimings>();
+        services.AddMemoryCache();
         services.AddScoped<ICurrentDevice, CurrentDevice>();
         services.AddJwtAuth(config);
 

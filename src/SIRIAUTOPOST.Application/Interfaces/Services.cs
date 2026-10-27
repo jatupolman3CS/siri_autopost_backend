@@ -45,7 +45,7 @@ public interface IRandomSource
     double NextDouble();
 }
 
-/// <summary>Fills a new workspace with sample social accounts and snippets so it can be tried right away.</summary>
+/// <summary>Fills a new workspace with sample data when Demo:SeedNewWorkspaces is on; by default it adds nothing.</summary>
 public interface IWorkspaceSeeder
 {
     Task SeedAsync(Workspace workspace, CancellationToken ct = default);

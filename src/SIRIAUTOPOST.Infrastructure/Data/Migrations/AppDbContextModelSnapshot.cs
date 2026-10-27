@@ -2595,6 +2595,37 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.User", b =>
                 {
+                    b.OwnsOne("SIRIAUTOPOST.Domain.ValueObjects.BillingProfile", "Billing", b1 =>
+                        {
+                            b1.Property<Guid>("UserId");
+
+                            b1.Property<string>("CardBrand");
+
+                            b1.Property<int?>("CardExpMonth");
+
+                            b1.Property<int?>("CardExpYear");
+
+                            b1.Property<string>("CardLast4");
+
+                            b1.Property<bool>("NotifyExpiring");
+
+                            b1.Property<bool>("NotifyFailed");
+
+                            b1.Property<bool>("NotifyRenewal");
+
+                            b1.HasKey("UserId");
+
+                            b1.ToTable("USERS");
+
+                            b1
+                                .ToJson("billing_profile")
+                                .HasColumnType("jsonb");
+
+                            b1.WithOwner()
+                                .HasForeignKey("UserId")
+                                .HasConstraintName("fk_users_users_id");
+                        });
+
                     b.OwnsOne("SIRIAUTOPOST.Domain.ValueObjects.LimitOverrides", "Limits", b1 =>
                         {
                             b1.Property<Guid>("UserId");
@@ -2625,6 +2656,9 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                                 .HasForeignKey("UserId")
                                 .HasConstraintName("fk_users_users_id");
                         });
+
+                    b.Navigation("Billing")
+                        .IsRequired();
 
                     b.Navigation("Limits")
                         .IsRequired();

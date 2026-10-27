@@ -28,6 +28,8 @@ public class User : Entity
     /// <summary>Platform admin's note about the customer.</summary>
     public string? Note { get; private set; }
     public LimitOverrides Limits { get; private set; } = new();
+    /// <summary>Billing notification preferences and the card on file (metadata only).</summary>
+    public BillingProfile Billing { get; private set; } = new();
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? LastSeenAt { get; private set; }
 

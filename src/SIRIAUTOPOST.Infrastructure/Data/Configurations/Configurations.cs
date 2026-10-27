@@ -23,6 +23,7 @@ public sealed class UserConfiguration : IEntityTypeConfiguration<User>
         // Webhooks find the customer by the Stripe id; NULLs (every user without one) do not clash in a unique index.
         b.HasIndex(x => x.StripeCustomerId).IsUnique();
         b.OwnsOne(x => x.Limits, o => o.ToJson("limit_overrides"));
+        b.OwnsOne(x => x.Billing, o => o.ToJson("billing_profile"));
     }
 }
 

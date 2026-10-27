@@ -12,6 +12,9 @@ namespace SIRIAUTOPOST.Api.Controllers;
 [Produces("application/json")]
 public sealed class BillingController : ControllerBase
 {
+    public sealed record NotificationsRequest(bool NotifyFailed, bool NotifyExpiring, bool NotifyRenewal);
+    public sealed record PaymentMethodRequest(string? Brand, string Last4, int ExpMonth, int ExpYear);
+
     /// <param name="Cycle">Billing cycle; omitted keeps the current one.</param>
     /// <param name="PromoCode">Applies to the first invoice of a new subscription only.</param>
     /// <param name="Method">The way to pay picked in the payment window when Stripe's own page is used (promptpay = a one-off page for one period).</param>
@@ -36,6 +39,41 @@ public sealed class BillingController : ControllerBase
     public Task<IReadOnlyList<TransactionDto>> Invoices(
         [FromServices] IQueryHandler<GetInvoicesQuery, IReadOnlyList<TransactionDto>> handler, CancellationToken ct) =>
         handler.HandleAsync(new GetInvoicesQuery(), ct);
+
+    [HttpGet("billing/profile")]
+    public Task<BillingProfileDto> Profile(
+        [FromServices] IQueryHandler<GetBillingProfileQuery, BillingProfileDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new GetBillingProfileQuery(), ct);
+
+    [HttpPut("billing/profile/notifications")]
+    public Task<BillingProfileDto> Notifications(
+        NotificationsRequest request,
+        [FromServices] ICommandHandler<UpdateBillingNotificationsCommand, BillingProfileDto> handler,
+        CancellationToken ct) =>
+        handler.HandleAsync(
+            new UpdateBillingNotificationsCommand(request.NotifyFailed, request.NotifyExpiring, request.NotifyRenewal), ct);
+
+    [HttpPut("billing/profile/payment-method")]
+    public Task<BillingProfileDto> SetPaymentMethod(
+        PaymentMethodRequest request,
+        [FromServices] ICommandHandler<SetPaymentMethodCommand, BillingProfileDto> handler,
+        CancellationToken ct) =>
+        handler.HandleAsync(
+            new SetPaymentMethodCommand(request.Brand, request.Last4, request.ExpMonth, request.ExpYear), ct);
+
+    [HttpDelete("billing/profile/payment-method")]
+    public Task<BillingProfileDto> RemovePaymentMethod(
+        [FromServices] ICommandHandler<RemovePaymentMethodCommand, BillingProfileDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new RemovePaymentMethodCommand(), ct);
+
+    [HttpGet("billing/invoices/{id:guid}/statement")]
+    [Produces("text/html")]
+    public async Task<ContentResult> Statement(
+        Guid id, [FromServices] IQueryHandler<GetStatementQuery, StatementDto> handler, CancellationToken ct)
+    {
+        var statement = await handler.HandleAsync(new GetStatementQuery(id), ct);
+        return Content(StatementHtml.Render(statement), "text/html; charset=utf-8");
+    }
 
     /// <summary>
     /// Chooses a plan. A paid plan for a customer with no subscription answers with the Stripe Checkout address

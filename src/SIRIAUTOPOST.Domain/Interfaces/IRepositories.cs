@@ -312,6 +312,7 @@ public interface IDeviceRepository
     Task<Device?> GetByIdAsync(Guid id, CancellationToken ct = default);
     Task<Device?> GetByKeyHashAsync(string keyHash, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
+    Task<int> CountSeenSinceAsync(DateTimeOffset since, CancellationToken ct = default);
     /// <summary>The names of the workspace's devices, optionally leaving one out (the one being renamed).</summary>
     Task<IReadOnlyList<string>> ListNamesAsync(Guid workspaceId, Guid? exceptId = null, CancellationToken ct = default);
     Task<IReadOnlyList<Device>> ListByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);

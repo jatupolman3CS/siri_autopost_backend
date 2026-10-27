@@ -38,6 +38,11 @@ public sealed record TransactionDto(
 
 public sealed record CardDto(string Brand, string Last4, int ExpMonth, int ExpYear);
 
+public sealed record PaymentMethodDto(string Brand, string Last4, int ExpMonth, int ExpYear, bool Expired, bool ExpiresSoon);
+
+public sealed record BillingProfileDto(
+    bool NotifyFailed, bool NotifyExpiring, bool NotifyRenewal, PaymentMethodDto? Card, bool PaymentsConnected);
+
 /// <summary>The signed-in customer's billing state, for the billing page.</summary>
 /// <param name="PaymentsEnabled">Stripe is configured; without it a paid plan cannot be bought.</param>
 /// <param name="HasSubscription">The plan is paid through a Stripe subscription (false on Free and on plans the admin granted).</param>
@@ -69,6 +74,15 @@ public sealed record UsageDto(int Accounts, int PostsLast24h, int Devices, int G
 public sealed record PlanChangeDto(UserDto User, string? CheckoutUrl);
 
 public sealed record UrlDto(string Url);
+
+public sealed record StatementDto(
+    Guid Id, DateTimeOffset CreatedAt, TransactionType Type, decimal Amount, PlanKey Plan, BillingCycle Cycle,
+    string? PromoCode, string CustomerName, string CustomerEmail);
+
+public sealed record PublicDayDto(string Date, int Sent, int Failed);
+
+public sealed record PublicStatsDto(
+    int PostsSent7d, int PostsFailed7d, double? SuccessRate7d, int DevicesActive24h, IReadOnlyList<PublicDayDto> Days);
 
 /// <param name="Enabled">The server has an AI key; without one the web app disables every AI button.</param>
 /// <param name="Allowed">The workspace owner's plan includes the AI writer.</param>

@@ -176,6 +176,14 @@ public class User : Entity
         Limits = limits;
     }
 
+    public void SetBillingNotifications(bool failed, bool expiring, bool renewal) =>
+        Billing = BillingProfile.WithNotifications(Billing, failed, expiring, renewal);
+
+    public void SetPaymentMethod(string? brand, string last4, int expMonth, int expYear, DateTimeOffset now) =>
+        Billing = BillingProfile.WithCard(Billing, brand, last4, expMonth, expYear, now);
+
+    public void RemovePaymentMethod() => Billing = BillingProfile.WithoutCard(Billing);
+
     // The features of a package are in PlanFeatures (Pro and above, bump and client reports only on the top plan).
 
     /// <summary>Advanced anti-ban needs Pro or above.</summary>

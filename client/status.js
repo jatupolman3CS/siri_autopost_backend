@@ -220,6 +220,7 @@ function renderLine() {
     }
   }
   show($('#btnLineEnable'), !enabled);
+  if (!enabled && c.linePendingLink && !$('#lineLink').value) $('#lineLink').value = c.linePendingLink;
   show($('#lineLinkRow'), !enabled);
   show($('#btnLineProbe'), enabled);
   show($('#btnLineSync'), ready);

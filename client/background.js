@@ -1733,6 +1733,26 @@ const remoteCommands = {
     await log('info', '[LINE] ยกเลิกการเชื่อม LINE OA ตามคำสั่งจากเว็บ: เชื่อม LINE OA ใหม่ได้ที่หน้าสถานะ');
     return { ok: true };
   },
+  // The web's "connect LINE OA": the person pasted https://chat.line.biz/<OA id>/ in the web app. Chrome grants chat.line.biz only
+  // inside a click on an extension page, so without that permission the status page opens with the link already in its box.
+  connectLine: async (a) => {
+    const c = await getCloud();
+    if (!c.enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+    const link = String((a && a.link) || '').trim();
+    if (!lineBotIdFromLink(link)) return { ok: false, error: 'ลิงก์ไม่ถูกต้อง: วางลิงก์ของ LINE OA เช่น https://chat.line.biz/Uxxxxxxxx/' };
+    if (!(await linePermitted())) {
+      await setCloud({ linePendingLink: link });
+      await openDashboard();
+      return { ok: false, needsPermission: true, error: 'ยังไม่ได้อนุญาตให้ส่วนขยายใช้ chat.line.biz: เปิดหน้าสถานะของส่วนขยายแล้วกด "ใช้ LINE OA ในเครื่องนี้" (ใส่ลิงก์ไว้ให้แล้ว)' };
+    }
+    const r = await lineEnable(link);
+    if (r.ok && !r.needsChoice) {
+      // The customer list is read right away (the 10-minute floor and the daily timer start over for the new OA).
+      await setCloud({ linePendingLink: '', lineSyncAt: 0, lineSyncNextAt: 0 });
+      enqueue(() => lineSyncChats({ trigger: 'web' })).catch(() => {});
+    }
+    return r;
+  },
   openLineSetup: async () => {
     if (!(await getCloud()).enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
     await openDashboard();
@@ -1963,6 +1983,7 @@ const DEFAULT_CLOUD = {
   // would lose its other keys on every patch. cloudForget resets all of it to these defaults (unbinding forgets LINE too).
   lineEnabled: false, // the person allowed chat.line.biz here (status page) and switched LINE on
   lineBotId: '',      // the OA this browser is logged in to (one OA per browser)
+  linePendingLink: '', // a link pasted on the web while chat.line.biz was not allowed yet: the status page shows it in its box
   lineAvoidBotId: '', // the OA the web just let go of: chat.line.biz reopens the last OA used, so it is not taken again by itself
   lineOaName: '',
   lineLoginLostAt: 0, // LINE wanted a login (a job or a probe found it): no LINE jobs until a probe finds the person logged in again
@@ -2494,7 +2515,7 @@ async function cloudLineRecovery(c, hb) {
   else await log('info', `[LINE] ยังไม่ได้ล็อกอิน LINE OA ในเครื่องนี้ รอรับงานอยู่ (ตรวจอีกครั้งตอน ${fmtDateTime((await getCloud()).lineLoginProbeAt)})`);
 }
 
-// The chat list is read about every 6 hours while LINE is ready (and once right after it is switched on).
+// The customer list is read about once a day while LINE is ready (and once right after it is switched on).
 async function lineAutoSync() {
   const c = await getCloud();
   if (!lineReady(c, await linePermitted()) || Date.now() < (c.lineSyncNextAt || 0)) return;

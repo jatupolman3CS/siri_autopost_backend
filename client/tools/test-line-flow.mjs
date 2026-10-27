@@ -154,7 +154,7 @@ const roster = new Map(r.json.items.map((c) => [c.name, c]));
 assert.equal(roster.size, CHATS.length);
 assert.deepEqual(roster.get('คุณสมชาย ใจดี').labels, ['VIP']);
 assert.equal(roster.get('คุณสมชาย ใจดี').url, `https://chat.line.biz/${LINE_BOT}/chat/${U('คุณสมชาย ใจดี')}`);
-assert.equal(roster.get('คุณมีข้อความใหม่').unread, true);
+assert.equal(roster.get('คุณมีข้อความใหม่').unread, false, 'the contacts page carries no unread flag: it is looked at live before a chat is opened');
 const cloudAfterSync = data.get('cloud');
 assert.equal(cloudAfterSync.lineChats, CHATS.length);
 assert.ok(cloudAfterSync.lineSyncedAt > 0);
@@ -423,7 +423,7 @@ assert.equal((await fbAccount()).health, 'relogin', 'Facebook still waits');
 page.loggedIn = true;
 await until(async () => (await fbAccount()).health === 'ok' && data.get('cloud').loginLostAt === 0, 'Facebook heals by itself');
 
-step('(m) the web\'s "sync LINE chats" button, the 6-hourly read and the 10-minute floor');
+step('(m) the web\'s "sync LINE chats" button, the daily read and the 10-minute floor');
 linePage.chats.push({ userId: lineUser(900), name: 'คุณจากปุ่มบนเว็บ', labels: [], lastMessageAt: new Date().toISOString(), unread: false });
 const countNow = async () => (await api('GET', devBase)).json[0].line.chatCount;
 // A complete read removes the chats the list no longer shows (the two hidden ones above) and adds the new one.
@@ -441,6 +441,8 @@ for (let i = 0; i < 40; i++) {
 assert.equal(cmdDone.status, 'done');
 assert.equal(cmdDone.result.ok, true, 'the command is answered at once');
 await until(async () => (await countNow()) === visibleChats(), 'the button read the list');
+assert.ok(linePage.contactReads > 0, 'the customers were read from the contacts page');
+assert.equal(linePage.chatListReads, 0, 'the chat list was not scrolled when the contacts page worked');
 tuning.lineSyncMinGapMs = 10 * 60000;
 const throttled = await bg('lineSyncChats');
 assert.equal(throttled.ok, false);
@@ -449,7 +451,38 @@ tuning.lineSyncMinGapMs = 0;
 linePage.chats.push({ userId: lineUser(901), name: 'คุณจากรอบ 6 ชั่วโมง', labels: [], lastMessageAt: null, unread: false });
 await local.set({ cloud: { ...data.get('cloud'), lineSyncNextAt: 1 } }); // the next automatic read is due
 await until(async () => (await countNow()) === visibleChats(), 'the automatic read');
-assert.ok(data.get('cloud').lineSyncNextAt > Date.now() + 5 * 3600000, 'the next one is about 6 hours away');
+assert.ok(data.get('cloud').lineSyncNextAt > Date.now() + 20 * 3600000, 'the next one is about a day away');
+
+step('(m2) when the contacts page shows no rows, the chat list is read instead');
+linePage.contactsOff = true;
+const listReadsBefore = linePage.chatListReads;
+const fallback = await bg('lineSyncChats');
+assert.equal(fallback.ok, true, fallback.error);
+assert.ok(linePage.chatListReads > listReadsBefore, 'the chat list was scrolled');
+linePage.contactsOff = false;
+
+step('(m3) the web pastes an OA link: the browser takes that OA and reads its customers right away');
+const contactReadsBefore = linePage.contactReads;
+async function webCommand(cmd, args) {
+  r = await api('POST', `${devBase}/${device.id}/commands`, { cmd, args });
+  assert.equal(r.status, 200, r.text);
+  let done;
+  for (let i = 0; i < 40; i++) {
+    await bg('cloudConfig', { mode: 'auto' });
+    done = (await api('GET', `${devBase}/${device.id}/commands/${r.json.id}`)).json;
+    if (done.status === 'done') break;
+    await sleep(250);
+  }
+  assert.equal(done.status, 'done', `${cmd} was answered`);
+  return done.result;
+}
+const bad = await webCommand('connectLine', { link: 'https://example.com/nothing' });
+assert.equal(bad.ok, false, 'an address that is not a LINE OA is refused');
+const good = await webCommand('connectLine', { link: `https://chat.line.biz/${LINE_BOT}/contact` });
+assert.equal(good.ok, true, good.error);
+assert.equal(data.get('cloud').lineBotId, LINE_BOT);
+assert.equal(data.get('cloud').lineEnabled, true);
+await until(async () => linePage.contactReads > contactReadsBefore, 'the customers were read from the contacts page');
 
 step('(l) several OAs on the account chooser: the person picks one on the status page');
 linePage.chooser = true;

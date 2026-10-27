@@ -110,6 +110,9 @@ const linePage = {
   chooser: false,      // chat.line.biz/ (no OA in the address) shows the chooser instead of an OA
   chats: [],           // { userId, name, labels, lastMessageAt, unread, hidden } (hidden = not in the list until it is searched)
   listComplete: true,  // the scan reached the end of the list
+  contactsOff: false,  // the contacts page (/<bot>/contact) shows no rows: the sync falls back to the chat list
+  contactReads: 0,     // reads of the contacts table
+  chatListReads: 0,    // scans of the chat list
   convo: {},           // userId -> { side: 'in' | 'out', time: 'HH:mm' | null, today: bool | null, unread: bool }
   autoReply: false,    // the OA's bot covers the box until "แชทแบบแมนนวล" is clicked
   composerDisabled: false,
@@ -160,7 +163,18 @@ const lineHandlers = {
           chatOpen: linePage.open != null, ready: linePage.loggedIn && !lineAtChooser(), accounts: lineAtChooser() ? linePage.accounts.length : 0,
         },
   lineListAccounts: () => ({ ok: true, accounts: linePage.accounts }),
-  lineListChats: () => ({
+  // The contacts page: one table row per customer, read in one go (the hidden chats are not on it either).
+  lineListContacts: () => {
+    if (linePage.contactsOff) return { ok: true, rowCount: 0, contacts: [], unstamped: 0, hasNext: false };
+    linePage.contactReads++;
+    const rows = linePage.chats.filter((c) => !c.hidden);
+    return {
+      ok: true, rowCount: rows.length, unstamped: 0, hasNext: false,
+      contacts: rows.map(({ userId, name, labels, lastMessageAt }) => ({ userId, name, labels: labels || [], lastMessageAt: lastMessageAt || null, blocked: false })),
+    };
+  },
+  lineNextContactsPage: () => ({ ok: true, clicked: false }),
+  lineListChats: () => (linePage.chatListReads++, {
     ok: true, done: true, rounds: 1, note: '', complete: linePage.listComplete,
     count: linePage.chats.filter((c) => !c.hidden).length,
     chats: linePage.chats.filter((c) => !c.hidden).map(({ userId, name, labels, lastMessageAt, unread }) => ({ userId, name, labels: labels || [], lastMessageAt: lastMessageAt || null, unread: !!unread })),

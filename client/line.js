@@ -762,6 +762,79 @@
   }
 
   // Scrolls the chat list a few rounds (a burst) and remembers every row it saw; the caller pauses between bursts.
+  // ---- the contacts page (รายชื่อติดต่อ, /<bot>/contact): one table row per customer ----
+  // The row carries no address or id; line-flow.js (stampContactRows, in the page's own world) copies the customer's id from the
+  // avatar component's props into `data-fbap-uid`, so reading the whole list opens no chat and marks nothing as read.
+  const THAI_MONTHS = { 'ม.ค.': 1, 'ก.พ.': 2, 'มี.ค.': 3, 'เม.ย.': 4, 'พ.ค.': 5, 'มิ.ย.': 6, 'ก.ค.': 7, 'ส.ค.': 8, 'ก.ย.': 9, 'ต.ค.': 10, 'พ.ย.': 11, 'ธ.ค.': 12 };
+  const EN_MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+
+  // "14 ต.ค. 2026" (or "Oct 14, 2026", "14 Oct 2026") -> an ISO time at midnight in Bangkok, else null.
+  function parseContactDate(text) {
+    const t = String(text || '').replace(/\s+/g, ' ').trim();
+    let d;
+    let mo;
+    let y;
+    let m = /(\d{1,2})\s+(\S+?)\s+(\d{4})/.exec(t);
+    if (m) {
+      d = Number(m[1]);
+      mo = THAI_MONTHS[m[2]] || EN_MONTHS[m[2].slice(0, 3).toLowerCase()];
+      y = Number(m[3]);
+    } else if ((m = /([A-Za-z]{3})[a-z]*\.?\s+(\d{1,2}),?\s+(\d{4})/.exec(t))) {
+      mo = EN_MONTHS[m[1].toLowerCase()];
+      d = Number(m[2]);
+      y = Number(m[3]);
+    }
+    if (!d || !mo || !y) return null;
+    if (y > 2400) y -= 543;
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${y}-${pad(mo)}-${pad(d)}T00:00:00+07:00`;
+  }
+
+  function findNextPage() {
+    const cands = [...document.querySelectorAll('a, button')].filter((e) => visible(e) && (e.closest('.pagination, nav, [class*="pagin" i]') || /page-link/.test(e.className || '')));
+    return cands.find((e) => {
+      const label = `${e.getAttribute('aria-label') || ''} ${e.textContent || ''}`.trim();
+      if (!/^(?:›|»|>|next|ถัดไป)$/i.test((e.textContent || '').trim()) && !/next|ถัดไป/i.test(label)) return false;
+      return !(e.disabled || e.getAttribute('aria-disabled') === 'true' || /disabled/.test(e.className || '') || (e.parentElement && /disabled/.test(e.parentElement.className || '')));
+    }) || null;
+  }
+
+  // Customers of the contacts table: [{ userId, name, labels, lastMessageAt, blocked }]; rows whose id could not be read are
+  // counted in `unstamped` (the caller then does not call the list complete).
+  function readContacts(m) {
+    if (m && m.scroll) window.scrollTo(0, document.documentElement.scrollHeight);
+    const rows = [...document.querySelectorAll('table tbody tr')];
+    const contacts = [];
+    let unstamped = 0;
+    const lines = (el) => String((el && el.innerText) || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    for (const tr of rows) {
+      const userId = tr.getAttribute('data-fbap-uid') || '';
+      if (!/^U[0-9a-f]{32}$/.test(userId)) {
+        unstamped++;
+        continue;
+      }
+      const cells = [...tr.children];
+      const name = lines(cells[0])[0] || '';
+      const labels = lines(cells[1]).filter((l) => !/ใส่แท็ก|add tag|^\+/i.test(l)).slice(0, 10);
+      const typeText = lines(cells[2]).join(' ');
+      contacts.push({
+        userId,
+        name: name.slice(0, 120),
+        labels,
+        lastMessageAt: parseContactDate(lines(cells[cells.length - 1])[0]),
+        blocked: /บล็อก|block/i.test(typeText),
+      });
+    }
+    return { ok: true, rowCount: rows.length, contacts, unstamped, hasNext: !!findNextPage() };
+  }
+
+  async function nextContactsPage() {
+    const b = findNextPage();
+    if (!b) return { ok: true, clicked: false };
+    b.click();
+    return { ok: true, clicked: true };
+  }
+
   async function listChats(m) {
     if (m.reset || !roster) {
       roster = { map: new Map(), rounds: 0, idle: 0, done: false, complete: false, filtered: false, note: '' };
@@ -1552,6 +1625,9 @@
     check: async () => pageCheck(),
     lineListAccounts: async () => ({ ok: true, accounts: listAccounts() }),
     lineListChats: async (m) => listChats(m || {}),
+    lineListContacts: async (m) => readContacts(m || {}),
+    lineNextContactsPage: async () => nextContactsPage(),
+    lineParseContactDate: async (m) => ({ ok: true, iso: parseContactDate(m.text) }),
     lineClickRow: async (m) => clickRow(m || {}),
     lineFocusSearch: async () => focusSearch(),
     lineChatState: async () => chatState(),

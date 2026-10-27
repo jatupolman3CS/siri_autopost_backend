@@ -662,4 +662,28 @@ public class LineChatEndpointsTests(ApiFactory factory)
         Assert.Equal(HttpStatusCode.Forbidden, (await viewer.DeleteAsync($"{shop.Api}/devices/{deviceId}/line")).StatusCode);
         Assert.NotNull((await shop.DeviceAsync()).Line);
     }
+
+    [Fact]
+    public async Task The_pasted_oa_link_reaches_the_browser_as_a_connectLine_command_after_the_old_oa_is_let_go_of()
+    {
+        using var shop = await factory.PairedLineShopAsync("pro", links: 1, posts: 1, botId: "@paste_old", oaName: "Old OA");
+        var deviceId = (await shop.DeviceAsync()).Id;
+        const string link = "https://chat.line.biz/Upastednewoa0123456789abcdef01/";
+
+        // What the web does when the person pastes another OA's link: let go of the old one, then send the command.
+        (await shop.Owner.DeleteAsync($"{shop.Api}/devices/{deviceId}/line")).EnsureSuccessStatusCode();
+        var sent = await shop.Owner.PostAsJsonAsync($"{shop.Api}/devices/{deviceId}/commands", new { cmd = "connectLine", args = new { link } }, Json);
+        Assert.Equal(HttpStatusCode.OK, sent.StatusCode);
+
+        // The browser gets them in this order (reset first, so the new OA is not refused as a second one), with the link intact.
+        var cmds = await factory.WithDbAsync(db => db.DeviceCommands.Where(c => c.DeviceId == deviceId).OrderBy(c => c.CreatedAt).ToListAsync());
+        Assert.Equal(["resetLine", "connectLine"], cmds.Select(c => c.Cmd).ToArray());
+        Assert.Contains(link, cmds[1].Args);
+
+        // A viewer cannot send it.
+        var (viewer, auth, _) = await factory.SignUpAsync();
+        (await shop.Owner.PostAsJsonAsync($"{shop.Api}/members", new { email = auth.User.Email, role = "viewer" }, Json)).EnsureSuccessStatusCode();
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await viewer.PostAsJsonAsync($"{shop.Api}/devices/{deviceId}/commands", new { cmd = "connectLine", args = new { link } }, Json)).StatusCode);
+    }
 }

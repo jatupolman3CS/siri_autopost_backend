@@ -39,8 +39,10 @@ export const TIMING = {
   imagesPerSend: 10, // pictures per click on "ส่ง" (assumption A8)
   syncBurstRounds: 25,
   syncBurstPause: [3000, 8000],
-  syncEveryMs: 6 * 3600000,
-  syncJitterMs: 30 * 60000,
+  syncEveryMs: 24 * 3600000, // the customer list is read once a day (the contacts page; the web button reads it on demand)
+  syncJitterMs: 60 * 60000,
+  contactPages: 400, // pages of the contacts table read at most in one go
+  contactPagePause: [1500, 3500],
 };
 
 // Contains-match on names with everything but letters and digits stripped: the header may decorate a name that the chat
@@ -112,10 +114,28 @@ export function createLineFlow(deps) {
     new MutationObserver(stamp).observe(document.body, { childList: true, subtree: true });
   }
 
+  // The contacts table (/<bot>/contact): the id of each customer is in the props of the avatar component of its row.
+  function stampContactRows() {
+    if (window.__fbapStampContacts) return;
+    window.__fbapStampContacts = true;
+    const re = /^U[0-9a-f]{32}$/;
+    const stamp = () => {
+      for (const tr of document.querySelectorAll('table tbody tr')) {
+        if (tr.hasAttribute('data-fbap-uid')) continue;
+        const av = tr.querySelector('.avatars');
+        const id = av && av.__vue__ && av.__vue__.$props && av.__vue__.$props.profiles && av.__vue__.$props.profiles.userId;
+        if (typeof id === 'string' && re.test(id)) tr.setAttribute('data-fbap-uid', id);
+      }
+    };
+    stamp();
+    new MutationObserver(stamp).observe(document.body, { childList: true, subtree: true });
+  }
+
   async function injectLine(tabId) {
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ['line.js'] });
       await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: stampChatRows }).catch(() => {});
+      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', func: stampContactRows }).catch(() => {});
     } catch (e) {
       throw new Error(`ส่วนขยายยังไม่ได้รับอนุญาตให้ใช้ chat.line.biz: กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยาย (${e?.message || e})`);
     }
@@ -510,6 +530,59 @@ export function createLineFlow(deps) {
 
   // ---------- roster sync ----------
 
+  // Reads the customers from the contacts page in one go (every page of the table): { chats, complete, note }, or null when
+  // that page gave no rows (the caller then reads the chat list instead). Nothing is clicked but the table's own "next page".
+  async function readContactsRoster(botId) {
+    const tabId = await openWorkerTab(`${OA_ORIGIN}${botId}/contact`, false, LOAD_FAIL);
+    await sleep(rand(2500, 4500));
+    await injectLine(tabId);
+    const end = Date.now() + TIMING.pageReadyMs;
+    let r;
+    for (;;) {
+      abortCheck();
+      r = await tabCmdOk(tabId, 'lineListContacts', {}, 20000);
+      if (r.rowCount > 0 || Date.now() >= end) break;
+      await sleep(rand(1000, 2000));
+    }
+    if (!r.rowCount) return null;
+    const map = new Map();
+    let complete = true;
+    let pages = 0;
+    for (;;) {
+      abortCheck();
+      // A lazily loaded table grows when scrolled: read until the number of rows stops growing.
+      let seen = r.rowCount;
+      for (let i = 0; i < 4; i++) {
+        await sleep(rand(800, 1600));
+        const more = await tabCmdOk(tabId, 'lineListContacts', { scroll: true }, 20000);
+        if (more.rowCount <= seen) break;
+        seen = more.rowCount;
+        r = more;
+      }
+      for (const c of r.contacts) if (!c.blocked && !map.has(c.userId)) map.set(c.userId, c);
+      if (r.unstamped > 0) complete = false;
+      pages++;
+      if (!r.hasNext) break;
+      if (pages >= TIMING.contactPages) {
+        complete = false;
+        break;
+      }
+      await sleep(rand(...TIMING.contactPagePause));
+      const n = await tabCmdOk(tabId, 'lineNextContactsPage', {}, 20000);
+      if (!n.clicked) break;
+      await sleep(rand(...TIMING.contactPagePause));
+      r = await tabCmdOk(tabId, 'lineListContacts', {}, 20000);
+    }
+    const chats = [...map.values()].slice(0, 5000).map((x) => ({
+      userId: x.userId,
+      name: x.name || '',
+      labels: x.labels || [],
+      lastMessageAt: x.lastMessageAt || undefined,
+      unread: false,
+    }));
+    return { chats, complete: complete && map.size <= 5000, note: `อ่านรายชื่อลูกค้าจากหน้ารายชื่อติดต่อ ${pages} หน้า` };
+  }
+
   // Reads the customers' chat list (names, labels, time of the last message, unread flag; never a message) and sends it to
   // the web app. Returns { ok, count, complete } or { ok: false, error, needsChoice?, login? }. The caller queues it in the
   // post queue under a deadline, so it never overlaps a post.
@@ -556,29 +629,45 @@ export function createLineFlow(deps) {
     if (!hb.lineAccountId) return fail('เว็บยังไม่ได้ผูกบัญชี LINE OA กับเครื่องนี้ (แพ็กเกจของเจ้าของเวิร์กสเปซอาจยังไม่รวมแชท LINE)');
     await setCloud({ lineNote: '' });
 
-    const tabId = await ensureLineTab(probe.botId, false);
-    await injectLine(tabId);
-    await waitLinePage(tabId);
-    let r = await tabCmdOk(tabId, 'lineListChats', { reset: true, rounds: TIMING.syncBurstRounds }, 180000);
-    while (!r.done) {
-      abortCheck();
-      await sleep(rand(...TIMING.syncBurstPause));
-      r = await tabCmdOk(tabId, 'lineListChats', { rounds: TIMING.syncBurstRounds }, 180000);
+    // The contacts page lists every customer once (name, tag, last chat date) and is read in one go; when it gives nothing,
+    // the chat list of the OA is scrolled instead (the way it was read before).
+    let r = null;
+    try {
+      r = await readContactsRoster(probe.botId);
+    } catch (e) {
+      if (e instanceof Aborted || e instanceof Fatal || e instanceof Blocked) throw e;
+      await log('warn', `[LINE] อ่านหน้ารายชื่อติดต่อไม่สำเร็จ จะอ่านจากรายชื่อแชทแทน: ${e?.message || e}`);
     }
-    const chats = (r.chats || []).slice(0, 5000).map((x) => ({
-      userId: x.userId,
-      name: x.name || '',
-      labels: x.labels || [],
-      lastMessageAt: x.lastMessageAt || undefined,
-      unread: !!x.unread,
-    }));
+    if (!r) {
+      const tabId = await ensureLineTab(probe.botId, false);
+      await injectLine(tabId);
+      await waitLinePage(tabId);
+      let c = await tabCmdOk(tabId, 'lineListChats', { reset: true, rounds: TIMING.syncBurstRounds }, 180000);
+      while (!c.done) {
+        abortCheck();
+        await sleep(rand(...TIMING.syncBurstPause));
+        c = await tabCmdOk(tabId, 'lineListChats', { rounds: TIMING.syncBurstRounds }, 180000);
+      }
+      r = {
+        chats: (c.chats || []).slice(0, 5000).map((x) => ({
+          userId: x.userId,
+          name: x.name || '',
+          labels: x.labels || [],
+          lastMessageAt: x.lastMessageAt || undefined,
+          unread: !!x.unread,
+        })),
+        complete: !!c.complete && (c.chats || []).length === c.count,
+        note: c.note || '',
+      };
+    }
+    const chats = r.chats;
     if (r.note) await log('info', `[LINE] ${r.note}`);
     let serverTotal;
     try {
       serverTotal = await cloudApi(await getCloud(), 'PUT', '/api/device/line/chats', {
         botId: probe.botId,
         oaName: probe.oaName || c.lineOaName || probe.botId,
-        complete: !!r.complete && chats.length === r.count,
+        complete: !!r.complete,
         chats,
       });
     } catch (e) {

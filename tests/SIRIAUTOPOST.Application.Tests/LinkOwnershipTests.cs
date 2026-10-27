@@ -18,7 +18,7 @@ public class LinkOwnershipTests
     }
 
     private static SetLink Link(LinkSet set, string url, DateTimeOffset? at = null) =>
-        SetLink.Create(Ws, set.Id, null, url, null, 0, at ?? Now);
+        SetLink.Create(Ws, set.Id, null, url, null, 0, at ?? Now, Platform.Fb);
 
     [Fact]
     public void A_set_belongs_to_the_extension_it_names_the_only_connected_one_or_nobody()
@@ -113,5 +113,30 @@ public class LinkOwnershipTests
         Assert.Equal((false, 2), (unnamed.RandomOrder, unnamed.DailyPerGroup)); // the rest of the set is kept
         Assert.NotEqual(shop.Id, named.PostAsAccountId);
         Assert.Equal(Platform.Fb, shop.Platform);
+    }
+
+    [Fact]
+    public void Channel_aware_refusal_and_pin_unassigned()
+    {
+        var lineAccount = SocialAccount.CreateLine(Ws, Guid.NewGuid(), "@linebot", "Official LINE", Now, 0);
+        var otherLine = SocialAccount.CreateLine(Ws, Guid.NewGuid(), "@otherbot", "Other LINE", Now, 1);
+        var lineSet = LinkSet.Create(Ws, "ชุดไลน์", lineAccount.Id, Now, channel: Platform.Line);
+        var otherSet = LinkSet.Create(Ws, "ชุดไลน์ 2", otherLine.Id, Now, channel: Platform.Line);
+        var chat = SetLink.Create(Ws, lineSet.Id, "ลูกค้าสมชาย", "https://chat.line.biz/linebot/chat/U1234567890abcdef1234567890abcdef", null, 0, Now, Platform.Line);
+
+        var map = OwnershipMap.Build([lineSet, otherSet], [chat], [lineAccount, otherLine]);
+        var ex = Assert.Throws<DomainException>(() =>
+            map.EnsureFree("https://chat.line.biz/linebot/chat/U1234567890abcdef1234567890abcdef", otherLine.Id, otherSet.Id, [lineAccount, otherLine], Platform.Line));
+        Assert.Contains("แชท ลูกค้าสมชาย", ex.Message);
+        Assert.Contains("ชุดไลน์", ex.Message);
+        Assert.Contains("Official LINE", ex.Message);
+
+        var unnamedLine = LinkSet.Create(Ws, "ชุดไลน์ว่าง", null, Now, channel: Platform.Line);
+        var unnamedFb = LinkSet.Create(Ws, "ชุดเฟซบุ๊กว่าง", null, Now, channel: Platform.Fb);
+
+        var pinnedLine = LinkOwnership.PinUnassigned([unnamedLine, unnamedFb], lineAccount.Id, Platform.Line);
+        Assert.Equal([unnamedLine], pinnedLine);
+        Assert.Equal(lineAccount.Id, unnamedLine.PostAsAccountId);
+        Assert.Null(unnamedFb.PostAsAccountId);
     }
 }

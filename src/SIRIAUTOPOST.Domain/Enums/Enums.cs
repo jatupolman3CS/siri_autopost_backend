@@ -9,6 +9,7 @@ namespace SIRIAUTOPOST.Domain.Enums;
 public enum Platform
 {
     Fb,
+    Line,
 }
 
 public enum PostStatus

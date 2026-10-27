@@ -235,7 +235,7 @@ public sealed record AdminRevokeDeviceCommand(Guid CustomerId, Guid DeviceId) : 
 
 public sealed class AdminRevokeDeviceCommandHandler(
     IUserRepository users, IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts,
-    IPostRepository posts, IPostBumpRepository bumps, IDeviceEventRepository events, AdminCustomers customers, AdminAudit audit,
+    IPostRepository posts, IPostBumpRepository bumps, IDeviceEventRepository events, ILineChatRepository lineChats, AdminCustomers customers, AdminAudit audit,
     IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<AdminRevokeDeviceCommand, CustomerDto>
 {
@@ -245,7 +245,7 @@ public sealed class AdminRevokeDeviceCommandHandler(
         var device = await devices.GetByIdAsync(c.DeviceId, ct);
         var ws = device is null ? null : await workspaces.GetByIdAsync(device.WorkspaceId, ct);
         if (device is null || ws?.OwnerId != user.Id) throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        await DeviceRevocation.RevokeAsync(device, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct);
+        await DeviceRevocation.RevokeAsync(device, "ผู้ดูแลแพลตฟอร์มยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct, lineChats);
         audit.Record(AuditAction.DeviceRevoked, user.Id, to: AdminAudit.Clip(device.Name));
         await uow.SaveChangesAsync(ct);
         await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);

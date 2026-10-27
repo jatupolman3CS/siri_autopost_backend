@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -12,7 +12,7 @@ internal sealed record ScheduleSpec(
     string Mode = "daily", string[]? Times = null, string Order = "rotate", string? StartDate = null, string OnceTime = "14:00",
     int EveryHours = 6, string FirstTime = "09:00", string DripFrom = "09:00", string DripTo = "21:00", int DripCount = 3,
     Dictionary<string, string[]>? Overrides = null, int Offset = 0, string? Name = null, int BumpHours = 0, int AutoDeleteDays = 0, bool StartNow = false,
-    object? Bump = null);
+    object? Bump = null, LineOptionsDto? LineOptions = null);
 
 /// <summary>
 /// A workspace the engine can run: an owner (Pro unless said otherwise) with a browser paired, a collection of posts and
@@ -71,13 +71,14 @@ internal sealed class Shop : IDisposable
         utcOffsetMinutes = spec.Offset,
         startNow = spec.StartNow,
         bump = spec.Bump,
+        lineOptions = spec.LineOptions,
     };
 
-    public Task<HttpResponseMessage> TryCreateScheduleAsync(ScheduleSpec? spec = null, HttpClient? as_ = null) =>
-        (as_ ?? Owner).PostAsJsonAsync($"{Api}/schedules", Body(spec ?? new ScheduleSpec()), Json);
+    public Task<HttpResponseMessage> TryCreateScheduleAsync(ScheduleSpec? spec = null, HttpClient? as_ = null, Guid? collection = null, Guid? set = null) =>
+        (as_ ?? Owner).PostAsJsonAsync($"{Api}/schedules", Body(spec ?? new ScheduleSpec(), collection, set), Json);
 
-    public async Task<ScheduleCreatedDto> CreateScheduleAsync(ScheduleSpec? spec = null) =>
-        await (await TryCreateScheduleAsync(spec)).ReadAsync<ScheduleCreatedDto>();
+    public async Task<ScheduleCreatedDto> CreateScheduleAsync(ScheduleSpec? spec = null, Guid? collection = null, Guid? set = null) =>
+        await (await TryCreateScheduleAsync(spec, collection: collection, set: set)).ReadAsync<ScheduleCreatedDto>();
 
     public async Task<List<ScheduleDto>> SchedulesAsync(HttpClient? as_ = null) =>
         (await (as_ ?? Owner).GetFromJsonAsync<List<ScheduleDto>>($"{Api}/schedules", Json))!;
@@ -114,8 +115,8 @@ internal sealed class Shop : IDisposable
 
     public async Task<PostDto> ReportAsync(
         Guid post, bool ok = true, bool awaitingApproval = false, bool needsLogin = false, bool blocked = false, string? error = null,
-        string? postUrl = null, string? shot = null) =>
-        await (await Device.PostAsJsonAsync($"/api/device/jobs/{post}/result", new { ok, awaitingApproval, needsLogin, blocked, error, postUrl, shot }, Json))
+        string? postUrl = null, string? shot = null, bool skip = false, int? deferMinutes = null, string? reason = null) =>
+        await (await Device.PostAsJsonAsync($"/api/device/jobs/{post}/result", new { ok, awaitingApproval, needsLogin, blocked, error, postUrl, shot, skip, deferMinutes, reason }, Json))
             .ReadAsync<PostDto>();
 
     /// <summary>The result of a bump job.</summary>
@@ -123,14 +124,24 @@ internal sealed class Shop : IDisposable
         await Device.PostAsJsonAsync($"/api/device/bumps/{bump}/result", new { ok, needsLogin, blocked, error }, Json);
 
     /// <summary>Claims the next post and reports it; null when there was none.</summary>
-    public async Task<PostDto?> RunNextAsync(bool ok = true, bool blocked = false, bool needsLogin = false, bool awaitingApproval = false, string? error = null)
+    public async Task<PostDto?> RunNextAsync(bool ok = true, bool blocked = false, bool needsLogin = false, bool awaitingApproval = false, string? error = null, bool skip = false, int? deferMinutes = null, string? reason = null)
     {
         var job = await ClaimAsync();
-        return job is null ? null : await ReportAsync(job.PostId, ok, awaitingApproval, needsLogin, blocked, error ?? (ok ? null : "ผิดพลาด"));
+        return job is null ? null : await ReportAsync(job.PostId, ok, awaitingApproval, needsLogin, blocked, error ?? (ok ? null : "ผิดพลาด"), skip: skip, deferMinutes: deferMinutes, reason: reason);
     }
 
     public async Task<DeviceStatusDto> HeartbeatAsync() =>
         await (await Device.PostAsJsonAsync("/api/device/heartbeat", new { version = "2.2.0" }, Json)).ReadAsync<DeviceStatusDto>();
+
+    /// <summary>The LINE OA the shop's browser reports (set by <c>PairedLineShopAsync</c>).</summary>
+    public string LineBotId { get; set; } = "";
+    public string LineOaName { get; set; } = "";
+
+    /// <summary>A heartbeat reporting the LINE OA ready again: LINE readiness lapses 5 minutes after the last one.</summary>
+    public async Task<DeviceStatusDto> LineHeartbeatAsync() =>
+        await (await Device.PostAsJsonAsync("/api/device/heartbeat",
+            new { version = "2.5.0", sessionOk = true, line = new { ready = true, botId = LineBotId, oaName = LineOaName }, lineSessionOk = true }, Json))
+            .ReadAsync<DeviceStatusDto>();
 
     public async Task<DeviceDto> DeviceAsync() =>
         (await Owner.GetFromJsonAsync<List<DeviceDto>>($"{Api}/devices", Json))!.Single();
@@ -257,4 +268,40 @@ internal static class EngineTestSupport
     }
 
     public static string ToLocalDay(DateTimeOffset at, int offsetMinutes) => at.ToOffset(TimeSpan.FromMinutes(offsetMinutes)).ToString("yyyy-MM-dd");
+
+    /// <summary>
+    /// A shop with a device paired that also has a LINE account and a LINE link set.
+    /// </summary>
+    public static async Task<Shop> PairedLineShopAsync(
+        this ApiFactory factory, string plan = "pro", int links = 2, int posts = 3, string botId = "@shop_bot", string oaName = "Shop OA")
+    {
+        var shop = await factory.ShopAsync(plan, links: 0, posts: posts);
+        shop.LineBotId = botId;
+        shop.LineOaName = oaName;
+        var hbRes = await shop.Device.PostAsJsonAsync("/api/device/heartbeat", new
+        {
+            version = "2.5.0",
+            sessionOk = true,
+            line = new { ready = true, botId, oaName },
+            lineSessionOk = true
+        }, ApiFactory.Json);
+        hbRes.EnsureSuccessStatusCode();
+
+        var setRes = await shop.Owner.PostAsJsonAsync($"{shop.Api}/link-sets", new
+        {
+            name = "ชุดแชท LINE",
+            channel = "line"
+        }, ApiFactory.Json);
+        shop.Set = await setRes.ReadAsync<LinkSetDto>();
+
+        var cleanBot = botId.TrimStart('@');
+        for (var i = 0; i < links; i++)
+        {
+            var userId = $"U{i:D32}";
+            var url = $"https://chat.line.biz/{cleanBot}/chat/{userId}";
+            await shop.Owner.AddLinkAsync(shop.Ws, shop.Set.Id, url, name: $"ลูกค้า {i + 1}");
+        }
+        await shop.RefreshSetAsync();
+        return shop;
+    }
 }

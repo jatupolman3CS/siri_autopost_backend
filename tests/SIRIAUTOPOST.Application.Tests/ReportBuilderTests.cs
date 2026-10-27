@@ -13,7 +13,7 @@ public class ReportBuilderTests
     private static readonly Guid Ws = Guid.NewGuid();
     private static readonly Guid Set = Guid.NewGuid();
 
-    private static SetLink Link(string name, string slug) => SetLink.Create(Ws, Set, name, $"https://www.facebook.com/groups/{slug}", "", 0, To);
+    private static SetLink Link(string name, string slug) => SetLink.Create(Ws, Set, name, $"https://www.facebook.com/groups/{slug}", "", 0, To, Platform.Fb);
 
     private static IReadOnlyDictionary<Guid, SetLink> Links(params SetLink[] links) => links.ToDictionary(l => l.Id);
 

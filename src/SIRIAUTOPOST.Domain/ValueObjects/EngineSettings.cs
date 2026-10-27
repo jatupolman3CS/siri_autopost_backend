@@ -3,12 +3,40 @@ using SIRIAUTOPOST.Domain.Exceptions;
 
 namespace SIRIAUTOPOST.Domain.ValueObjects;
 
-/// <summary>Maximum posts per day for each platform (Facebook only for now; stored workspaces may still hold the old keys of other networks, which are ignored).</summary>
+/// <summary>Maximum posts per day for each platform (Facebook and LINE OA customer chats).</summary>
 public class PlatformLimits
 {
-    public int Fb { get; set; } = 40;
+    public const int DefaultLine = 100;
 
-    public int For(Platform p) => Fb;
+    public int Fb { get; set; } = 40;
+    public int Line { get; set; } = DefaultLine;
+
+    /// <summary>
+    /// A row written before the LINE limit existed has no such key and reads as 0 (which would mean "send nothing"): the
+    /// migration backfills it, and this is the safety net for a row the migration did not reach.
+    /// </summary>
+    public int LineOrDefault => Line > 0 ? Line : DefaultLine;
+
+    public int For(Platform p) => p == Platform.Line ? LineOrDefault : Fb;
+}
+
+/// <summary>
+/// Settings for LINE OA customer-chat channel.
+/// </summary>
+public class LineChatAntiBanSettings
+{
+    public int MinGapSeconds { get; set; } = 45;
+    public int MaxGapSeconds { get; set; } = 120;
+
+    public LineChatAntiBanSettings Clone() => (LineChatAntiBanSettings)MemberwiseClone();
+
+    public void Validate()
+    {
+        if (MinGapSeconds is < 1 or > 3600 || MaxGapSeconds is < 1 or > 3600)
+            throw new DomainException("ระยะห่างระหว่างแชทต้องอยู่ระหว่าง 1–3600 วินาที");
+        if (MaxGapSeconds < MinGapSeconds)
+            throw new DomainException("ระยะห่างสูงสุดต้องไม่น้อยกว่าระยะห่างต่ำสุด");
+    }
 }
 
 /// <summary>
@@ -78,15 +106,18 @@ public class AntiBanSettings
     public static readonly string[] TypingSpeeds = ["slow", "normal", "fast"];
     /// <summary>The advanced numbers (Pro and above); see <see cref="AdvancedAntiBanSettings"/>.</summary>
     public AdvancedAntiBanSettings Advanced { get; set; } = new();
+    /// <summary>Settings for LINE OA customer chats.</summary>
+    public LineChatAntiBanSettings LineChat { get; set; } = new();
 
     public void Validate()
     {
         if (Min < MinDelayFloor || Max > MaxDelayCeiling || Min >= Max)
             throw new DomainException($"ช่วงหน่วงเวลาต้องอยู่ระหว่าง {MinDelayFloor}–{MaxDelayCeiling} นาที และค่าต่ำสุดต้องน้อยกว่าค่าสูงสุด");
-        if (Limits.Fb is < 1 or > MaxDailyLimit)
+        if (Limits.Fb is < 1 or > MaxDailyLimit || Limits.Line is < 1 or > MaxDailyLimit)
             throw new DomainException($"เพดานต่อวันต้องอยู่ระหว่าง 1–{MaxDailyLimit}");
         if (!TypingSpeeds.Contains(TypingSpeed)) throw new DomainException("ความเร็วในการพิมพ์ต้องเป็น ช้า ปกติ หรือเร็ว");
         Advanced.Validate();
+        LineChat.Validate();
     }
 }
 

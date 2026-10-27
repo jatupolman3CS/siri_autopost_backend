@@ -5,6 +5,8 @@ import { migrateSettings, activeGroups, usablePosts, campaignProblem, fmtDateTim
 
 const $ = (sel) => document.querySelector(sel);
 const CAPTURE_PERM = { origins: ['<all_urls>'] };
+// chat.line.biz: Chrome grants a host permission only inside a click on an extension page, so the button below asks for it.
+const LINE_PERM = { origins: ['https://chat.line.biz/*'] };
 
 let data = { settings: migrateSettings(null), state: {}, logs: [], cloud: {}, online: {} };
 // Set when this page has just paired the browser: the page then says "connected" and nothing else.
@@ -151,6 +153,123 @@ $('#btnSync').addEventListener('click', async () => {
   } finally {
     btn.disabled = false;
   }
+});
+
+// ---------- LINE OA ----------
+
+let lineChoicesKey = '';
+
+function lineMessage(text) {
+  const el = $('#lineMsg');
+  el.textContent = text || '';
+  el.hidden = !text;
+}
+
+function lineJobText(job) {
+  if (!job) return '';
+  const result = job.defer ? `เลื่อนออกไป (${job.reason || '-'})` : job.skip ? `ข้าม (${job.reason || '-'})` : job.ok ? 'สำเร็จ' : `ไม่สำเร็จ: ${job.error || '-'}`;
+  return `${fmtDateTime(job.at)} ${result} (${job.group})`;
+}
+
+function renderLine() {
+  const c = data.cloud;
+  const paired = !!c.enabled;
+  show($('#lineCard'), paired && !pairRequest());
+  if (!paired) return;
+  const enabled = !!c.lineEnabled;
+  const waiting = enabled && !!c.lineLoginLostAt;
+  const choosing = enabled && !c.lineBotId && (c.lineChoices || []).length > 0;
+  const ready = enabled && !!c.lineBotId && !waiting;
+  const badge = $('#lineBadge');
+  badge.className = 'badge' + (ready ? ' on' : waiting ? ' bad' : '');
+  badge.textContent = !enabled ? 'ปิดอยู่' : waiting ? 'รอล็อกอิน LINE OA' : choosing ? 'รอเลือก LINE OA' : ready ? 'พร้อม' : 'กำลังตรวจสอบ';
+  facts($('#lineFacts'), enabled
+    ? [
+        ['LINE OA', c.lineOaName || c.lineBotId || ''],
+        ['รายชื่อแชท', c.lineSyncedAt ? `${c.lineChats || 0} แชท (ซิงก์ล่าสุด ${fmtDateTime(c.lineSyncedAt)})` : 'ยังไม่ได้ซิงก์'],
+        ['งาน LINE ล่าสุด', lineJobText(c.lineLastJob)],
+        ['LINE', waiting ? `ยังไม่ได้ล็อกอินในเครื่องนี้ (ตั้งแต่ ${fmtDateTime(c.lineLoginLostAt)}): เปิด chat.line.biz ใน Chrome นี้แล้วล็อกอิน ระบบจะรับงานต่อเองภายในไม่กี่นาที${c.lineLoginProbeAt ? ` (ตรวจครั้งถัดไป ${fmtDateTime(c.lineLoginProbeAt)})` : ''}` : ''],
+      ]
+    : []);
+  const note = [c.lineNote, c.lineError].filter(Boolean).join(' · ');
+  show($('#lineNote'), enabled && !!note);
+  $('#lineNote').textContent = note ? `⚠ ${note}` : '';
+  const choices = $('#lineChoices');
+  show(choices, choosing);
+  // Rebuilt only when the list changes: this runs every second and a button replaced under the pointer would miss its click.
+  const choicesKey = choosing ? JSON.stringify(c.lineChoices) : '';
+  if (choicesKey !== lineChoicesKey) {
+    lineChoicesKey = choicesKey;
+    choices.textContent = '';
+  }
+  if (choosing && !choices.hasChildNodes()) {
+    const p = document.createElement('span');
+    p.textContent = 'พบ LINE OA หลายบัญชี เลือกบัญชีที่ใช้ในเครื่องนี้:';
+    choices.append(p);
+    for (const o of c.lineChoices) {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn small';
+      b.textContent = o.name || o.botId;
+      b.addEventListener('click', async () => {
+        lineMessage('กำลังตรวจ LINE OA...');
+        const r = await bg('lineChoose', { botId: o.botId });
+        lineMessage(r?.ok ? '' : r?.error || 'ไม่สำเร็จ');
+      });
+      choices.append(b);
+    }
+  }
+  show($('#btnLineEnable'), !enabled);
+  show($('#btnLineProbe'), enabled);
+  show($('#btnLineSync'), ready);
+}
+
+$('#btnLineEnable').addEventListener('click', async () => {
+  const btn = $('#btnLineEnable');
+  btn.disabled = true;
+  lineMessage('กำลังขออนุญาต...');
+  let granted = false;
+  try {
+    granted = await chrome.permissions.request(LINE_PERM);
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    lineMessage('ไม่ได้รับอนุญาต: ส่วนขยายต้องได้รับอนุญาตให้เปิดหน้า chat.line.biz ก่อนจึงจะส่งแชทได้');
+    btn.disabled = false;
+    return;
+  }
+  lineMessage('กำลังตรวจการล็อกอิน LINE OA ในหน้าต่างทำงาน...');
+  const r = await bg('lineEnable');
+  lineMessage(r?.ok ? (r.needsChoice ? '' : 'เปิดใช้ LINE OA แล้ว รายชื่อแชทจะถูกซิงก์ขึ้นเว็บภายในไม่กี่นาที') : r?.error || 'ไม่สำเร็จ');
+  btn.disabled = false;
+});
+
+$('#btnLineProbe').addEventListener('click', async () => {
+  const btn = $('#btnLineProbe');
+  btn.disabled = true;
+  lineMessage('กำลังตรวจการล็อกอิน LINE OA...');
+  const r = await bg('lineProbe');
+  lineMessage(r?.ok ? 'ล็อกอิน LINE OA แล้ว' : r?.error || 'ไม่สำเร็จ');
+  btn.disabled = false;
+});
+
+$('#btnLineSync').addEventListener('click', async () => {
+  const btn = $('#btnLineSync');
+  btn.disabled = true;
+  lineMessage('กำลังอ่านรายชื่อแชท LINE (ใช้เวลาสักครู่)...');
+  try {
+    const r = await bg('lineSyncChats');
+    lineMessage(r?.ok ? `ซิงก์แล้ว ${r.count} แชท` : r?.error || 'ไม่สำเร็จ');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+$('#btnLineFloatingTool')?.addEventListener('click', async () => {
+  lineMessage('กำลังเปิดเครื่องมือช่วยส่งในแท็บ LINE OA...');
+  const r = await bg('lineInjectFloatingTool');
+  lineMessage(r?.ok ? 'เปิดเครื่องมือในแท็บ LINE OA เรียบร้อยแล้ว (กลับไปดูที่แท็บ LINE OA)' : r?.error || 'ไม่สำเร็จ');
 });
 
 // ---------- run ----------
@@ -307,7 +426,7 @@ function renderLegacy() {
 function renderAll() {
   // Right after pairing the page shows the success card and nothing else.
   if (justPaired && data.cloud.enabled) {
-    for (const id of ['#pairCard', '#unpairedCard', '#linkCard', '#runCard', '#logCard', '#legacyNote']) show($(id), false);
+    for (const id of ['#pairCard', '#unpairedCard', '#linkCard', '#lineCard', '#runCard', '#logCard', '#legacyNote']) show($(id), false);
     show($('#pairDone'), true);
     const badge = $('#linkBadge');
     badge.className = 'badge on';
@@ -317,6 +436,7 @@ function renderAll() {
   show($('#pairDone'), false);
   renderPair();
   renderLink();
+  renderLine();
   renderRun();
   renderLogs();
   renderLegacy();
@@ -344,6 +464,7 @@ setInterval(() => {
   if (justPaired) return;
   renderRun();
   renderLink();
+  renderLine();
 }, 1000);
 
 load();

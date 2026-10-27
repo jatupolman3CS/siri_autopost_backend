@@ -40,7 +40,7 @@ internal static class LinkSetLookups
     /// </summary>
     public static void EnsureSetFree(OwnershipMap map, LinkSet set, IEnumerable<SetLink> setLinks, Guid owner, IReadOnlyList<SocialAccount> accounts)
     {
-        var clashes = setLinks.Where(l => l.IsUsable).Select(l => (Link: l, Held: map.ConflictFor(l.Url, owner, set.Id))).Where(x => x.Held is not null).ToList();
+        var clashes = setLinks.Where(l => l.IsUsable).Select(l => (Link: l, Held: map.ConflictFor(l.Url, owner, set.Id, set.Channel))).Where(x => x.Held is not null).ToList();
         if (clashes.Count == 0) return;
         var more = clashes.Count > 1 ? $" (และอีก {clashes.Count - 1} กลุ่ม)" : "";
         throw new DomainException(OwnershipMap.Refusal(clashes[0].Link.Url, clashes[0].Held!, accounts) + more);
@@ -52,16 +52,17 @@ internal static class LinkSetLookups
     {
         var accountList = await accounts.ListAsync(set.WorkspaceId, ct);
         if (LinkOwnership.OwnerOf(set, accountList) is not { } owner) return; // nobody posts this set yet: the extension chosen later is checked then
-        (await OwnershipAsync(sets, links, accountList, set.WorkspaceId, ct)).EnsureFree(url, owner, set.Id, accountList);
+        (await OwnershipAsync(sets, links, accountList, set.WorkspaceId, ct)).EnsureFree(url, owner, set.Id, accountList, set.Channel);
     }
 
     /// <summary>The next position for a link at the end of the set.</summary>
     public static async Task<int> NextLinkOrderAsync(ISetLinkRepository links, Guid setId, CancellationToken ct) =>
         await links.MaxSortOrderAsync(setId, ct) + 1;
 
-    public static void EnsureRoomForLinks(int existing, int adding)
+    public static void EnsureRoomForLinks(int existing, int adding, Platform channel = Platform.Fb)
     {
-        if (existing + adding > LinkSet.MaxLinks) throw new DomainException($"ชุดลิงก์เก็บได้ไม่เกิน {LinkSet.MaxLinks} ลิงก์ต่อชุด");
+        var max = LinkSet.MaxLinksFor(channel);
+        if (existing + adding > max) throw new DomainException($"ชุดลิงก์เก็บได้ไม่เกิน {max} ลิงก์ต่อชุด");
     }
 
     /// <summary>Announces a link that changed health, when a browser posts the set (otherwise there is nobody to tell).</summary>
@@ -89,26 +90,44 @@ public sealed class GetLinkSetsQueryHandler(
     }
 }
 
-public sealed record CreateLinkSetCommand(Guid WorkspaceId, string Name, Guid? PostAsAccountId) : ICommand<LinkSetDto>;
+public sealed record CreateLinkSetCommand(Guid WorkspaceId, string Name, Guid? PostAsAccountId, Platform? Channel = null) : ICommand<LinkSetDto>;
 
 public sealed class CreateLinkSetCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, IAccountRepository accounts, ISetLinkRepository links,
+    IWorkspaceRepository workspaces, IUserRepository users, ILinkSetRepository sets, IAccountRepository accounts, ISetLinkRepository links,
     IScheduleRepository schedules, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreateLinkSetCommand, LinkSetDto>
 {
     public async Task<LinkSetDto> HandleAsync(CreateLinkSetCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         if (await sets.CountAsync(c.WorkspaceId, ct) >= LinkSet.MaxPerWorkspace)
             throw new DomainException($"สร้างชุดลิงก์ได้ไม่เกิน {LinkSet.MaxPerWorkspace} ชุดต่อเวิร์กสเปซ");
+
         var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
-        LinkSetAccounts.EnsureValid(c.PostAsAccountId, [], accountList);
+        var channel = c.Channel ?? (accountList.Any(a => a.Platform == Platform.Line)
+            ? throw new DomainException("กรุณาระบุช่องทางของชุดลิงก์ (Facebook หรือ LINE)")
+            : Platform.Fb);
+
+        if (channel == Platform.Line)
+        {
+            await users.RequireLineChatAsync(ws, ct);
+        }
+
+        LinkSetAccounts.EnsureValid(c.PostAsAccountId, [], accountList, channel);
+        if (c.PostAsAccountId is { } pickedId)
+        {
+            var picked = accountList.FirstOrDefault(a => a.Id == pickedId);
+            if (picked is null || picked.Platform != channel)
+                throw new DomainException($"ส่วนขยายที่เลือกไม่ใช่บัญชี {(channel == Platform.Line ? "LINE" : "Facebook")}");
+        }
+
         // A set belongs to one extension from the start: the only connected one is named for the person, and with
         // several the person has to choose (no "first one" guess that sends this set's groups to the wrong machine).
-        var postAs = c.PostAsAccountId ?? LinkOwnership.OnlyConnected(accountList)?.Id;
-        if (postAs is null && accountList.Count(a => a.Platform == Platform.Fb && a.IsConnected) >= 2)
+        var postAs = c.PostAsAccountId ?? LinkOwnership.OnlyConnected(accountList, channel)?.Id;
+        if (postAs is null && accountList.Count(a => a.Platform == channel && a.IsConnected) >= 2)
             throw new DomainException(LinkSetAccounts.NoChoice);
-        var set = LinkSet.Create(c.WorkspaceId, c.Name, postAs, clock.GetUtcNow(), await sets.MaxSortOrderAsync(c.WorkspaceId, ct) + 1);
+
+        var set = LinkSet.Create(c.WorkspaceId, c.Name, postAs, clock.GetUtcNow(), await sets.MaxSortOrderAsync(c.WorkspaceId, ct) + 1, channel);
         sets.Add(set);
         await uow.SaveChangesAsync(ct);
         return await LinkSetLookups.ViewAsync(set, links, schedules, ct);
@@ -120,29 +139,49 @@ public sealed class CreateLinkSetCommandHandler(
 /// queued for the future are removed (or, for an account that was only added, the schedules fill in what is missing).
 /// </summary>
 public sealed record UpdateLinkSetCommand(
-    Guid WorkspaceId, Guid LinkSetId, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds, bool? RandomOrder = null, int? DailyPerGroup = null)
+    Guid WorkspaceId, Guid LinkSetId, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds, bool? RandomOrder = null, int? DailyPerGroup = null, Platform? Channel = null)
     : ICommand<LinkSetDto>;
 
 public sealed class UpdateLinkSetCommandHandler(
-    IWorkspaceRepository workspaces, ILinkSetRepository sets, IAccountRepository accounts, ISetLinkRepository links,
+    IWorkspaceRepository workspaces, IUserRepository users, ILinkSetRepository sets, IAccountRepository accounts, ISetLinkRepository links,
     IScheduleRepository schedules, ScheduleSync sync, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateLinkSetCommand, LinkSetDto>
 {
     public async Task<LinkSetDto> HandleAsync(UpdateLinkSetCommand c, CancellationToken ct = default)
     {
-        await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
+
+        if (c.Channel.HasValue && c.Channel.Value != set.Channel)
+        {
+            var setLinks = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
+            var setSchedules = await schedules.ListByLinkSetAsync(c.WorkspaceId, set.Id, ct);
+            if (setLinks.Count > 0 || setSchedules.Count > 0)
+                throw new DomainException("ไม่สามารถเปลี่ยนช่องทางของชุดเป้าหมายที่มีลิงก์หรือตารางเวลาแล้ว");
+            if (c.Channel.Value == Platform.Line)
+                await users.RequireLineChatAsync(ws, ct);
+            set.SetChannel(c.Channel.Value);
+        }
+
         var accountIds = (c.AccountIds ?? []).Distinct().ToList();
         // One set, one extension: a set cannot post through other accounts' extensions any more.
         if (accountIds.Count > 0) throw new DomainException(LinkSetAccounts.OtherAccountsRetired);
         var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
-        LinkSetAccounts.EnsureValid(c.PostAsAccountId, accountIds, accountList);
+        LinkSetAccounts.EnsureValid(c.PostAsAccountId, accountIds, accountList, set.Channel);
+
+        if (c.PostAsAccountId is { } pickedId)
+        {
+            var picked = accountList.FirstOrDefault(a => a.Id == pickedId);
+            if (picked is null || picked.Platform != set.Channel)
+                throw new DomainException($"ส่วนขยายที่เลือกไม่ใช่บัญชี {(set.Channel == Platform.Line ? "LINE" : "Facebook")}");
+        }
+
         var (poster, others) = (set.PostAsAccountId, set.AccountIds.ToList());
         var (order, perGroup) = (set.RandomOrder, set.DailyPerGroup);
         set.Update(c.Name, c.PostAsAccountId, accountIds, c.RandomOrder, c.DailyPerGroup);
         // One set, one extension (2026-10-10): "no choice" is only possible while a single extension is connected, and
         // handing the set to another extension is refused while one of its groups belongs to a third.
-        if (set.PostAsAccountId is null && accountList.Count(a => a.Platform == Platform.Fb && a.IsConnected) >= 2)
+        if (set.PostAsAccountId is null && accountList.Count(a => a.Platform == set.Channel && a.IsConnected) >= 2)
             throw new DomainException(LinkSetAccounts.NoChoice);
         if (poster != set.PostAsAccountId && LinkOwnership.OwnerOf(set, accountList) is { } owner)
             LinkSetLookups.EnsureSetFree(
@@ -179,7 +218,7 @@ public sealed class HandOverLinkSetCommandHandler(
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
-        var target = accountList.FirstOrDefault(a => a.Id == c.ToAccountId && a.Platform == Platform.Fb)
+        var target = accountList.FirstOrDefault(a => a.Id == c.ToAccountId && a.Platform == set.Channel)
             ?? throw new NotFoundException("ส่วนขยาย", c.ToAccountId);
         if (target.DeviceId is not { } toDevice || !target.IsConnected)
             throw new DomainException("ส่วนขยายปลายทางยังไม่ได้เชื่อมกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อน");
@@ -272,15 +311,15 @@ public sealed class AddLinkCommandHandler(
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var existing = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
-        LinkSetLookups.EnsureRoomForLinks(existing.Count, 1);
-        await quotas.EnsureGroupsAsync(c.WorkspaceId, 1, ct);
-        var link = SetLink.Create(c.WorkspaceId, set.Id, c.Name, c.Url, c.Code, c.DailyMax ?? 0, clock.GetUtcNow(),
+        LinkSetLookups.EnsureRoomForLinks(existing.Count, 1, set.Channel);
+        if (set.Channel != Platform.Line) await quotas.EnsureGroupsAsync(c.WorkspaceId, 1, ct);
+        var link = SetLink.Create(c.WorkspaceId, set.Id, c.Name, c.Url, c.Code, c.DailyMax ?? 0, clock.GetUtcNow(), set.Channel,
             existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1);
         if (link.IsUsable) await LinkSetLookups.EnsureLinkFreeAsync(sets, links, accounts, set, link.Url, ct); // one group, one extension
         links.Add(link);
         if (link.IsUsable) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct); // the set's schedules make its posts at the next top-up
         await uow.SaveChangesAsync(ct);
-        return SetLinkDto.From(link, link.IsValid && existing.Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
+        return SetLinkDto.From(link, link.IsValid && existing.Any(l => LinkAddress.Same(set.Channel, l.Url, link.Url)));
     }
 }
 
@@ -317,7 +356,7 @@ public sealed class UpdateLinkCommandHandler(
         else if (link.IsUsable && !usable) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
         await uow.SaveChangesAsync(ct);
         var others = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
-        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
+        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => LinkAddress.Same(set.Channel, l.Url, link.Url)));
     }
 }
 
@@ -359,12 +398,12 @@ public sealed class EnableLinkCommandHandler(
         if (link.IsUsable) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct); // back in the set: its schedules make its posts again
         await uow.SaveChangesAsync(ct);
         var others = await links.ListBySetAsync(c.WorkspaceId, set.Id, ct);
-        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => FacebookGroupUrl.Same(l.Url, link.Url)));
+        return SetLinkDto.From(link, link.IsValid && others.TakeWhile(l => l.Id != link.Id).Any(l => LinkAddress.Same(set.Channel, l.Url, link.Url)));
     }
 }
 
 /// <summary>
-/// Pasted lines "address | code". Blank lines are skipped, an address that is not a Facebook group counts as invalid, an
+/// Pasted lines "address | code". Blank lines are skipped, an address that is not valid for the channel counts as invalid, an
 /// address already in the set counts as a duplicate (and its code is updated when another non-empty code is given).
 /// </summary>
 public sealed record BulkAddLinksCommand(Guid WorkspaceId, Guid LinkSetId, string Text) : ICommand<BulkLinksResultDto>;
@@ -380,7 +419,7 @@ public sealed class BulkAddLinksCommandHandler(
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
         var now = clock.GetUtcNow();
         var existing = (await links.ListBySetAsync(c.WorkspaceId, set.Id, ct)).ToList();
-        var byUrl = new Dictionary<string, SetLink>(FacebookGroupUrl.Comparer);
+        var byUrl = new Dictionary<string, SetLink>(LinkAddress.Comparer(set.Channel));
         foreach (var l in existing) byUrl.TryAdd(l.Url, l);
         // One group, one extension: an address another extension's set already holds is left out and reported.
         var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
@@ -397,7 +436,7 @@ public sealed class BulkAddLinksCommandHandler(
             var line = raw.Trim();
             if (line.Length == 0) continue;
             var parts = line.Split('|').Select(p => p.Trim()).ToArray();
-            var url = FacebookGroupUrl.Normalize(parts[0]);
+            var url = LinkAddress.Normalize(set.Channel, parts[0]);
             var code = parts.Length > 1 ? parts[1] : "";
             if (url is null || !SetLink.Fits(url, code)) { invalid++; continue; }
             if (byUrl.TryGetValue(url, out var old))
@@ -411,25 +450,137 @@ public sealed class BulkAddLinksCommandHandler(
                 }
                 continue;
             }
-            if (map?.ConflictFor(url, owner!.Value, set.Id) is { } held)
+            if (map?.ConflictFor(url, owner!.Value, set.Id, set.Channel) is { } held)
             {
                 conflicts++;
                 conflictNote ??= OwnershipMap.Refusal(url, held, accountList);
                 continue;
             }
-            var link = SetLink.Create(c.WorkspaceId, set.Id, null, url, code, 0, now, order++);
+            var link = SetLink.Create(c.WorkspaceId, set.Id, null, url, code, 0, now, set.Channel, order++);
             byUrl[url] = link;
             created.Add(link);
             added++;
         }
-        LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
-        await quotas.EnsureGroupsAsync(c.WorkspaceId, created.Count, ct);
+        LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count, set.Channel);
+        if (set.Channel != Platform.Line) await quotas.EnsureGroupsAsync(c.WorkspaceId, created.Count, ct);
         links.AddRange(created);
         // A link with a new code posts differently from now on; new links are posted to at the next top-up.
         if (recodedLinks.Count > 0) await sync.LinksChangedAsync(c.WorkspaceId, set.Id, recodedLinks, now, ct);
         else if (created.Count > 0) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
         await uow.SaveChangesAsync(ct);
         return new BulkLinksResultDto(added, duplicates, recoded, invalid, await LinkSetLookups.ViewAsync(set, links, schedules, ct), conflicts, conflictNote);
+    }
+}
+
+public sealed record ImportLineChatsCommand(
+    Guid WorkspaceId, Guid LinkSetId, Guid AccountId, IReadOnlyList<Guid>? ChatIds = null, FromLineChatsFilter? Filter = null, bool AllMatching = false)
+    : ICommand<BulkLinksResultDto>;
+
+public sealed class ImportLineChatsCommandHandler(
+    IWorkspaceRepository workspaces, IUserRepository users, ILinkSetRepository sets, ISetLinkRepository links,
+    ILineChatRepository lineChats, IAccountRepository accounts, IScheduleRepository schedules, ScheduleSync sync,
+    ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<ImportLineChatsCommand, BulkLinksResultDto>
+{
+    public async Task<BulkLinksResultDto> HandleAsync(ImportLineChatsCommand c, CancellationToken ct = default)
+    {
+        var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
+        await users.RequireLineChatAsync(ws, ct);
+        var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
+        if (set.Channel != Platform.Line)
+            throw new DomainException("ชุดลิงก์นี้ไม่ใช่ชุดแชท LINE");
+
+        var account = await accounts.GetAsync(c.WorkspaceId, c.AccountId, ct)
+            ?? throw new NotFoundException("บัญชี", c.AccountId);
+        if (account.Platform != Platform.Line)
+            throw new DomainException("บัญชีที่เลือกไม่ใช่บัญชี LINE");
+
+        var accountList = await accounts.ListAsync(c.WorkspaceId, ct);
+        var owner = LinkOwnership.OwnerOf(set, accountList);
+        if (owner is not null && owner.Value != account.Id)
+            throw new DomainException("บัญชี LINE ที่เลือกไม่ตรงกับส่วนขยายของชุดลิงก์นี้");
+
+        IReadOnlyList<LineChat> candidateChats;
+        if (!c.AllMatching && (c.ChatIds is null || c.ChatIds.Count == 0))
+            throw new DomainException("ยังไม่ได้เลือกแชทที่จะนำเข้า");
+        if (c.AllMatching)
+        {
+            var all = await lineChats.ListByAccountAsync(account.Id, ct);
+            var candidate = all.AsEnumerable();
+            if (c.Filter is { } f)
+            {
+                if (!string.IsNullOrWhiteSpace(f.Q))
+                {
+                    var term = f.Q.Trim();
+                    candidate = candidate.Where(x => x.Name.Contains(term, StringComparison.OrdinalIgnoreCase) || x.UserId.Contains(term, StringComparison.OrdinalIgnoreCase));
+                }
+                if (!string.IsNullOrWhiteSpace(f.Label))
+                {
+                    var lbl = f.Label.Trim();
+                    candidate = candidate.Where(x => x.Labels.Any(l => string.Equals(l, lbl, StringComparison.OrdinalIgnoreCase)));
+                }
+                if (f.ActiveWithinDays.HasValue && f.ActiveWithinDays.Value > 0)
+                {
+                    var cutoff = clock.GetUtcNow().AddDays(-f.ActiveWithinDays.Value);
+                    candidate = candidate.Where(x => x.LastMessageAt != null && x.LastMessageAt.Value >= cutoff);
+                }
+            }
+            candidateChats = candidate.ToList();
+        }
+        else
+        {
+            var fetched = await lineChats.GetManyAsync(c.WorkspaceId, c.ChatIds!, ct);
+            candidateChats = fetched.Where(x => x.AccountId == account.Id).ToList();
+        }
+
+        var existing = (await links.ListBySetAsync(c.WorkspaceId, set.Id, ct)).ToList();
+        var byUrl = new Dictionary<string, SetLink>(LineChatUrl.Comparer);
+        foreach (var l in existing) byUrl.TryAdd(l.Url, l);
+
+        var map = owner is null ? null : await LinkSetLookups.OwnershipAsync(sets, links, accountList, c.WorkspaceId, ct);
+        var (added, duplicates, skippedDoNotSend, conflicts) = (0, 0, 0, 0);
+        string? conflictNote = null;
+        var order = existing.Count == 0 ? 0 : existing.Max(l => l.SortOrder) + 1;
+        var created = new List<SetLink>();
+        var now = clock.GetUtcNow();
+
+        foreach (var chat in candidateChats)
+        {
+            if (chat.DoNotSend)
+            {
+                skippedDoNotSend++;
+                continue;
+            }
+
+            var url = LineChatUrl.Build(account.Handle, chat.UserId);
+            if (byUrl.ContainsKey(url))
+            {
+                duplicates++;
+                continue;
+            }
+
+            if (owner is { } o && map?.ConflictFor(url, o, set.Id, Platform.Line) is { } held)
+            {
+                conflicts++;
+                conflictNote ??= OwnershipMap.Refusal(url, held, accountList);
+                continue;
+            }
+
+            var link = SetLink.Create(c.WorkspaceId, set.Id, chat.Name, url, null, 0, now, Platform.Line, order++);
+            byUrl[url] = link;
+            created.Add(link);
+            added++;
+        }
+
+        LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count, Platform.Line);
+        links.AddRange(created);
+        if (created.Count > 0) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
+        await uow.SaveChangesAsync(ct);
+
+        return new BulkLinksResultDto(
+            added, duplicates, 0, 0,
+            await LinkSetLookups.ViewAsync(set, links, schedules, ct),
+            conflicts, conflictNote, skippedDoNotSend);
     }
 }
 
@@ -459,6 +610,9 @@ public sealed class ImportAccountGroupsCommandHandler(
     {
         await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var set = await LinkSetLookups.RequireAsync(sets, c.WorkspaceId, c.LinkSetId, ct);
+        if (set.Channel == Platform.Line)
+            throw new DomainException("ไม่สามารถนำเข้ากลุ่ม Facebook เข้าชุดลิงก์ LINE ได้");
+
         var account = await accounts.GetAsync(c.WorkspaceId, c.AccountId, ct) ?? throw new NotFoundException("บัญชี", c.AccountId);
         var groups = new Dictionary<string, GroupLink>(FacebookGroupUrl.Comparer);
         foreach (var g in account.GroupLinks)
@@ -476,12 +630,12 @@ public sealed class ImportAccountGroupsCommandHandler(
         foreach (var pick in c.Urls.Select(u => FacebookGroupUrl.Normalize(u)))
         {
             if (pick is null || !SetLink.Fits(pick, null) || !groups.TryGetValue(pick, out var group) || !have.Add(pick)) continue;
-            map?.EnsureFree(pick, owner, set.Id, accountList);
+            map?.EnsureFree(pick, owner, set.Id, accountList, set.Channel);
             // The extension names a group by its address when it has no name: let the address give the name instead.
             var name = group.Name == group.Url || group.Name.Length > SetLink.MaxNameLength ? null : group.Name;
-            created.Add(SetLink.Create(c.WorkspaceId, set.Id, name, pick, null, 0, now, order++));
+            created.Add(SetLink.Create(c.WorkspaceId, set.Id, name, pick, null, 0, now, set.Channel, order++));
         }
-        LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count);
+        LinkSetLookups.EnsureRoomForLinks(existing.Count, created.Count, set.Channel);
         await quotas.EnsureGroupsAsync(c.WorkspaceId, created.Count, ct);
         links.AddRange(created);
         if (created.Count > 0) await sync.LinksAddedAsync(c.WorkspaceId, set.Id, ct);
@@ -540,10 +694,11 @@ public sealed class ImportLinksCsvCommandHandler(
                 byName[setName] = set;
                 createdSets++;
             }
+            if (set.Channel == Platform.Line) { invalid++; continue; } // chats come from the synced roster, not from a CSV of Facebook addresses
             var urls = urlsOf.TryGetValue(set.Id, out var u) ? u : urlsOf[set.Id] = new HashSet<string>(FacebookGroupUrl.Comparer);
             if (urls.Contains(url)) continue; // already in the set: skipped, not an error
             var owner = LinkOwnership.OwnerOf(set, accountList);
-            if (owner is { } o && (map.ConflictFor(url, o, set.Id) ?? (givenTo.TryGetValue(url, out var earlier) && earlier.Owner != o ? earlier : null)) is { } held)
+            if (owner is { } o && (map.ConflictFor(url, o, set.Id, set.Channel) ?? (givenTo.TryGetValue(url, out var earlier) && earlier.Owner != o ? earlier : null)) is { } held)
             {
                 conflicts++;
                 conflictNote ??= OwnershipMap.Refusal(url, held, accountList);
@@ -552,7 +707,7 @@ public sealed class ImportLinksCsvCommandHandler(
             urls.Add(url);
             var order = orders.GetValueOrDefault(set.Id);
             orders[set.Id] = order + 1;
-            var newLink = SetLink.Create(c.WorkspaceId, set.Id, name, url, row.Code, 0, now, order);
+            var newLink = SetLink.Create(c.WorkspaceId, set.Id, name, url, row.Code, 0, now, set.Channel, order);
             newLinks.Add(newLink);
             if (owner is { } given && newLink.IsUsable) givenTo.TryAdd(url, new GroupHolder(set, newLink, given));
             addedLinks++;

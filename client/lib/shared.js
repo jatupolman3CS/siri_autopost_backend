@@ -181,6 +181,16 @@ export function normalizeGroupUrl(raw) {
   return t ? t.url : null;
 }
 
+// A LINE Official Account customer chat: https://chat.line.biz/<botId>/chat/<userId> -> { botId, userId, url } with the
+// canonical address (scheme, no "www.", no trailing slash/query/fragment; the typed case is kept), or null. Mirrors
+// LineChatUrl in the API (Domain/Services/LineChatUrl.cs) and lineChatTarget in the web app (core/flow/line-chats.ts):
+// keep the three in step. The id patterns are assumption A1 of the LINE spec: one constant, easy to tighten.
+const LINE_CHAT_RE = /^(?:https?:\/\/)?(?:www\.)?chat\.line\.biz\/([A-Za-z0-9_-]{5,64})\/chat\/([A-Za-z0-9_-]{10,64})(?:[/?#].*)?$/i;
+export function lineChatTarget(raw) {
+  const m = LINE_CHAT_RE.exec(String(raw || '').trim());
+  return m ? { botId: m[1], userId: m[2], url: `https://chat.line.biz/${m[1]}/chat/${m[2]}` } : null;
+}
+
 export function parseGroups(text) {
   const valid = [];
   const invalid = [];

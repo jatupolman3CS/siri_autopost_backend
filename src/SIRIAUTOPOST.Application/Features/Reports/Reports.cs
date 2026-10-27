@@ -84,8 +84,8 @@ public sealed class ReportComposer(IPostRepository posts, ISetLinkRepository lin
     {
         var to = clock.GetUtcNow();
         var from = to.AddDays(-days);
-        var outcomes = await posts.ListOutcomesAsync(workspaceId, from, to, ct);
-        var byId = (await links.ListAsync(workspaceId, ct)).ToDictionary(l => l.Id);
+        var outcomes = (await posts.ListOutcomesAsync(workspaceId, from, to, ct)).Where(o => o.Platform != Platform.Line).ToList();
+        var byId = (await links.ListAsync(workspaceId, ct)).Where(l => l.Channel != Platform.Line).ToDictionary(l => l.Id);
         var report = ReportBuilder.Build(days, from, to, outcomes, byId);
 
         // The most used posts that still exist (a deleted collection post has no text to show).

@@ -96,6 +96,165 @@ const contentHandlers = {
   },
 };
 
+// The LINE Official Account page (chat.line.biz), as line.js would answer for it. A test sets the fields it needs:
+// who is logged in, which customers have chats, how each conversation looks (who wrote last, when, unread), whether the OA's
+// auto-reply covers the box, whether the box is dead. It never holds message text of a customer: only what the extension sent.
+const lineUser = (n) => 'U' + String(n).padStart(32, '0'); // "U" + 32 characters, like a LINE user id
+const LINE_BOT = 'Ubbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const linePage = {
+  loggedIn: true,
+  hang: false,         // the tab never answers
+  botId: LINE_BOT,
+  oaName: 'ร้านทดสอบ LINE',
+  accounts: [],        // offered on the OA chooser when no OA is picked: [{ botId, name }]
+  chooser: false,      // chat.line.biz/ (no OA in the address) shows the chooser instead of an OA
+  chats: [],           // { userId, name, labels, lastMessageAt, unread, hidden } (hidden = not in the list until it is searched)
+  listComplete: true,  // the scan reached the end of the list
+  convo: {},           // userId -> { side: 'in' | 'out', time: 'HH:mm' | null, today: bool | null, unread: bool }
+  autoReply: false,    // the OA's bot covers the box until "แชทแบบแมนนวล" is clicked
+  composerDisabled: false,
+  noComposer: false,
+  cannotSend: false,
+  blocked: false,      // a rate-limit / captcha notice is on the page
+  failedCount: 0,      // red "send failed" markers in the conversation
+  headerName: null,    // overrides the header (a wrong customer)
+  open: null,          // userId of the open chat
+  target: 'composer',  // what insert/newline/... type into: 'composer' or 'search'
+  search: '',
+  text: '',
+  attached: [],
+  sent: [],            // { userId, text, files }: what was sent, in order
+  opened: [],          // every chat opened (clicked or by address), in order
+  switched: [],        // chats put in manual mode
+  manual: new Set(),
+  failNextSend: false, // the next send leaves a red marker and the text in the box
+  inserts: 0,          // keystroke-sized pieces typed into the box (a pasted text counts in setTexts)
+  setTexts: 0,
+};
+const lineHost = (url) => {
+  try {
+    return new URL(url).hostname === 'chat.line.biz';
+  } catch {
+    return false;
+  }
+};
+const lineChat = () => linePage.chats.find((c) => c.userId === linePage.open);
+const lineConvo = (id) => ({ side: 'in', time: null, today: false, unread: false, ...(linePage.convo[id] || {}) });
+const lineCovered = () => linePage.open != null && linePage.autoReply && !linePage.manual.has(linePage.open);
+const lineEdit = (fn) => ((linePage.target === 'search' ? (linePage.search = fn(linePage.search)) : (linePage.text = fn(linePage.text))), { ok: true });
+const lineAtChooser = () => {
+  try {
+    return linePage.chooser && new URL(tabUrls.at(-1)).pathname === '/';
+  } catch {
+    return false;
+  }
+};
+const lineHandlers = {
+  ping: () => ({ ok: true }),
+  check: () =>
+    linePage.hang
+      ? new Promise(() => {})
+      : {
+          ok: true, title: 'LINE Official Account Manager', login: !linePage.loggedIn, checkpoint: false, canSwitch: false,
+          botId: linePage.loggedIn && !lineAtChooser() ? linePage.botId : '', oaName: linePage.loggedIn && !lineAtChooser() ? linePage.oaName : '',
+          chatOpen: linePage.open != null, ready: linePage.loggedIn && !lineAtChooser(), accounts: lineAtChooser() ? linePage.accounts.length : 0,
+        },
+  lineListAccounts: () => ({ ok: true, accounts: linePage.accounts }),
+  lineListChats: () => ({
+    ok: true, done: true, rounds: 1, note: '', complete: linePage.listComplete,
+    count: linePage.chats.filter((c) => !c.hidden).length,
+    chats: linePage.chats.filter((c) => !c.hidden).map(({ userId, name, labels, lastMessageAt, unread }) => ({ userId, name, labels: labels || [], lastMessageAt: lastMessageAt || null, unread: !!unread })),
+  }),
+  lineClickRow: (m) => {
+    if (linePage.open === m.userId) return { ok: true, already: true, found: true, unread: false };
+    const c = linePage.chats.find((x) => x.userId === m.userId);
+    const shown = c && (!c.hidden || (!c.noSearch && linePage.search && c.name.includes(linePage.search))); // hidden: only a search finds it
+    if (!shown) return { ok: true, notFound: true, found: false };
+    const unread = lineConvo(c.userId).unread;
+    if (m.click === false) return { ok: true, found: true, unread };
+    linePage.open = c.userId;
+    linePage.opened.push(c.userId);
+    linePage.text = '';
+    linePage.attached = [];
+    if (linePage.convo[c.userId]) linePage.convo[c.userId].unread = false; // opening a chat reads it
+    return { ok: true, found: true, unread };
+  },
+  lineFocusSearch: () => ((linePage.target = 'search'), (linePage.search = ''), { ok: true }),
+  lineFocusComposer: () => ((linePage.target = 'composer'), { ok: true }),
+  discard: (m) => {
+    if (m.search) linePage.search = '';
+    if (m.composer) {
+      linePage.text = '';
+      linePage.attached = [];
+    }
+    linePage.target = 'composer';
+    return { ok: true };
+  },
+  lineChatState: () => {
+    const id = linePage.open;
+    const cv = id ? lineConvo(id) : lineConvo('-');
+    const covered = lineCovered();
+    const mine = linePage.sent.filter((s) => s.userId === id).length;
+    return {
+      ok: true, open: id != null, userId: id || '', headerName: id ? (linePage.headerName ?? lineChat()?.name ?? '') : '',
+      composerFound: id != null && !linePage.noComposer, composerReady: id != null && !linePage.composerDisabled && !covered,
+      composerEmpty: linePage.text === '', composerDisabled: linePage.composerDisabled, overlay: covered, manualButton: covered, autoReplyBar: covered,
+      cannotSend: linePage.cannotSend, bubbleCount: 3 + mine, lastBubbleSide: cv.side, lastBubbleTime: cv.time, lastBubbleToday: cv.today,
+      unreadInList: cv.unread, outgoingCount: 1 + mine, incomingCount: 2,
+      sendEnabled: (linePage.text !== '' || linePage.attached.length > 0) && !linePage.composerDisabled, uploading: false,
+      sendFailed: linePage.failedCount > 0, failedCount: linePage.failedCount, blocked: linePage.blocked,
+    };
+  },
+  lineManualSwitch: () => {
+    if (!lineCovered()) return { ok: true, clicked: false };
+    linePage.manual.add(linePage.open);
+    linePage.switched.push(linePage.open);
+    return { ok: true, clicked: true };
+  },
+  lineSend: (m) => {
+    if (m.expectUserId && m.expectUserId !== linePage.open) return { ok: false, error: 'แชทที่เปิดไม่ตรงกับลูกค้าในงาน ยกเลิกการส่ง' };
+    if (lineCovered() || (linePage.text === '' && !linePage.attached.length)) return { ok: false, error: 'ปุ่ม "ส่ง" ยังกดไม่ได้' };
+    if (linePage.failNextSend) {
+      linePage.failNextSend = false;
+      linePage.failedCount += 1;
+      return { ok: true };
+    }
+    linePage.sent.push({ userId: linePage.open, text: linePage.text, files: linePage.attached.map((f) => f.name) });
+    linePage.text = '';
+    linePage.attached = [];
+    return { ok: true };
+  },
+  insert: (m) => (linePage.target === 'composer' && linePage.inserts++, lineEdit((t) => t + m.text)),
+  paste: (m) => lineEdit((t) => t + m.text),
+  newline: () => lineEdit((t) => t + '\n'),
+  backspace: () => lineEdit((t) => Array.from(t).slice(0, -1).join('')),
+  setText: (m) => (linePage.target === 'composer' && linePage.setTexts++, lineEdit(() => m.text)),
+  getText: () => ({ ok: true, open: true, text: linePage.target === 'search' ? linePage.search : linePage.text }),
+  attachImages: async (m) => {
+    const keys = m.imageIds.map((id) => (String(id).includes(':') ? id : 'img:' + id));
+    linePage.attached = keys.map((k) => data.get(k)).filter(Boolean);
+    return linePage.attached.length ? { ok: true, method: 'input' } : { ok: false, error: 'ไม่พบไฟล์รูปในที่เก็บข้อมูล' };
+  },
+  blockCheck: () => ({ ok: true, blocked: linePage.blocked, text: linePage.blocked ? 'Too many requests' : '' }),
+  scroll: () => ({ ok: true }),
+  scrollTop: () => ({ ok: true }),
+  scrollBottom: () => ({ ok: true }),
+};
+// A navigation to a chat's address opens that chat (the fallback when a chat is not in the list).
+function lineNavigated(url) {
+  const m = /\/chat\/([A-Za-z0-9_-]{10,64})/.exec(String(url));
+  if (!m || !lineHost(url)) return;
+  linePage.open = m[1];
+  linePage.opened.push(m[1]);
+  linePage.text = '';
+  linePage.attached = [];
+}
+
+const granted = new Set(); // host permissions the person gave (chrome.permissions.contains answers from it)
+function grantPermission(origin) {
+  granted.add(origin);
+}
+
 let windowId = 1;
 const tabUrls = []; // addresses background.js sent tabs to
 globalThis.chrome = {
@@ -119,9 +278,12 @@ globalThis.chrome = {
   tabs: {
     query: async () => [],
     create: async () => ({}),
-    get: async (id) => ({ id, windowId }),
+    get: async (id) => ({ id, windowId, url: tabUrls.at(-1) }),
     update: async (id, props = {}) => {
-      if (props.url) tabUrls.push(props.url);
+      if (props.url) {
+        tabUrls.push(props.url);
+        lineNavigated(props.url);
+      }
       // A navigation: loading, then complete.
       setTimeout(() => {
         for (const fn of [...listeners.updated]) fn(id, { status: 'loading' });
@@ -132,7 +294,8 @@ globalThis.chrome = {
     remove: async () => {},
     onUpdated: event(listeners.updated),
     sendMessage: async (_tabId, msg) => {
-      const h = contentHandlers[msg.cmd];
+      // The one worker tab shows whatever it was last sent to: chat.line.biz answers like line.js, anything else like content.js.
+      const h = (lineHost(tabUrls.at(-1)) ? lineHandlers : contentHandlers)[msg.cmd];
       return h ? h(msg) : { ok: false, error: 'unknown command: ' + msg.cmd };
     },
     captureVisibleTab: async () => null,
@@ -144,7 +307,7 @@ globalThis.chrome = {
     update: async () => ({}),
   },
   scripting: { executeScript: async () => [] },
-  permissions: { contains: async () => false },
+  permissions: { contains: async (q) => (q.origins || []).every((o) => granted.has(o) || granted.has('<all_urls>')) },
 };
 
 // Waits are real in background.js (it imitates a person); shorten them for the test.
@@ -192,5 +355,5 @@ export function setToken(t) {
 
 export {
   API, ADMIN, GROUP, BARE, data, local, listeners, alarms, page, tabUrls, bg, api, step, sleep, realSetTimeout,
-  migrateSettings, newCampaign, background,
+  migrateSettings, newCampaign, background, linePage, lineUser, LINE_BOT, grantPermission,
 };

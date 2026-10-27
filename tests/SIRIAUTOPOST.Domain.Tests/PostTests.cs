@@ -195,4 +195,51 @@ public class PostTests
         p.ResolveWaiting(skip, Now);
         Assert.Equal(expected, p.Status);
     }
+
+    [Fact]
+    public void Defer_moves_claimed_post_back_to_queued_with_incremented_defer_count()
+    {
+        var p = Queued();
+        p.Claim(Guid.NewGuid(), Now);
+        Assert.Equal(PostStatus.Posting, p.Status);
+        Assert.Equal(0, p.DeferCount);
+
+        var newTime = Now.AddMinutes(30);
+        p.Defer(newTime, Now);
+
+        Assert.Equal(PostStatus.Queued, p.Status);
+        Assert.Equal(newTime, p.ScheduledAt);
+        Assert.Null(p.ClaimedByDeviceId);
+        Assert.Null(p.ClaimedAt);
+        Assert.Equal(1, p.DeferCount);
+    }
+
+    [Fact]
+    public void Defer_refuses_posts_that_are_not_posting()
+    {
+        var p = Queued();
+        Assert.Throws<DomainException>(() => p.Defer(Now.AddMinutes(30), Now));
+    }
+
+    [Fact]
+    public void SkipClaimed_skips_posting_post_and_clears_claim()
+    {
+        var p = Queued();
+        p.Claim(Guid.NewGuid(), Now);
+        Assert.Equal(PostStatus.Posting, p.Status);
+
+        p.SkipClaimed("ลูกค้าคุยอยู่ตลอด จึงข้ามแชทนี้", Now);
+
+        Assert.Equal(PostStatus.Skipped, p.Status);
+        Assert.Equal("ลูกค้าคุยอยู่ตลอด จึงข้ามแชทนี้", p.FailureDetail);
+        Assert.Null(p.ClaimedByDeviceId);
+        Assert.Null(p.ClaimedAt);
+    }
+
+    [Fact]
+    public void SkipClaimed_refuses_posts_that_are_not_posting()
+    {
+        var p = Queued();
+        Assert.Throws<DomainException>(() => p.SkipClaimed("reason", Now));
+    }
 }

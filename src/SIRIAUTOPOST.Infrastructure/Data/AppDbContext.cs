@@ -41,6 +41,7 @@ public class AppDbContext(DbContextOptions<AppDbContext> options, IDeviceEventBu
     public DbSet<SetLink> SetLinks => Set<SetLink>();
     public DbSet<Schedule> Schedules => Set<Schedule>();
     public DbSet<ReportShare> ReportShares => Set<ReportShare>();
+    public DbSet<LineChat> LineChats => Set<LineChat>();
 
     // Picks up every IEntityTypeConfiguration in Data/Configurations.
     protected override void OnModelCreating(ModelBuilder modelBuilder) =>

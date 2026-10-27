@@ -75,21 +75,35 @@ public sealed class AccountRepository(AppDbContext db) : IAccountRepository
         db.Accounts.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
 
     public Task<SocialAccount?> GetByDeviceAsync(Guid deviceId, CancellationToken ct = default) =>
-        db.Accounts.FirstOrDefaultAsync(x => x.DeviceId == deviceId, ct);
+        GetByDeviceAsync(deviceId, Platform.Fb, ct);
 
+    public Task<SocialAccount?> GetByDeviceAsync(Guid deviceId, Platform platform, CancellationToken ct = default) =>
+        db.Accounts.FirstOrDefaultAsync(x => x.DeviceId == deviceId && x.Platform == platform, ct);
+
+    public async Task<IReadOnlyList<SocialAccount>> ListByDeviceAsync(Guid deviceId, CancellationToken ct = default) =>
+        await db.Accounts.Where(x => x.DeviceId == deviceId).OrderBy(x => x.Platform).ThenBy(x => x.SortOrder).ToListAsync(ct);
+
+    public Task<SocialAccount?> FindByHandleAsync(Guid workspaceId, Platform platform, string handle, CancellationToken ct = default) =>
+        db.Accounts.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Platform == platform && x.Handle == handle, ct);
     public Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default) =>
         db.Accounts.CountAsync(x => x.WorkspaceId == workspaceId, ct);
 
-    public Task<int> CountConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
+    public Task<int> CountConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default) =>
+        CountConnectedAsync(workspaceIds, Platform.Fb, ct);
+
+    public Task<int> CountConnectedAsync(IEnumerable<Guid> workspaceIds, Platform platform, CancellationToken ct = default)
     {
         var ids = workspaceIds.ToList();
-        return db.Accounts.CountAsync(x => ids.Contains(x.WorkspaceId) && x.DeviceId != null, ct);
+        return db.Accounts.CountAsync(x => ids.Contains(x.WorkspaceId) && x.DeviceId != null && x.Platform == platform, ct);
     }
 
-    public async Task<IReadOnlyList<SocialAccount>> ListConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
+    public Task<IReadOnlyList<SocialAccount>> ListConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default) =>
+        ListConnectedAsync(workspaceIds, Platform.Fb, ct);
+
+    public async Task<IReadOnlyList<SocialAccount>> ListConnectedAsync(IEnumerable<Guid> workspaceIds, Platform platform, CancellationToken ct = default)
     {
         var ids = workspaceIds.ToList();
-        return await db.Accounts.Where(x => ids.Contains(x.WorkspaceId) && x.DeviceId != null).ToListAsync(ct);
+        return await db.Accounts.Where(x => ids.Contains(x.WorkspaceId) && x.DeviceId != null && x.Platform == platform).ToListAsync(ct);
     }
 
     public void Add(SocialAccount account) => db.Accounts.Add(account);
@@ -399,12 +413,19 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
     public Task<int> CountPublishedInWorkspaceSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default) =>
         Real.CountAsync(x => x.WorkspaceId == workspaceId && x.PublishedAt != null && x.PublishedAt >= since, ct);
 
-    public async Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default)
+    public Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default) =>
+        CountOutcomesSinceAsync(workspaceId, since, null, ct);
+    public async Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, Platform? platform, CancellationToken ct = default)
     {
-        var rows = await Real
+        var q = Real
             .Where(x => x.WorkspaceId == workspaceId && !x.IsTest && x.UpdatedAt >= since &&
                         x.ClaimedAt != null && (x.FailureCode == null || x.FailureCode != FailureCode.Quota) &&
-                        (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed))
+                        (x.Status == PostStatus.Success || x.Status == PostStatus.Pending || x.Status == PostStatus.Failed));
+        if (platform.HasValue)
+        {
+            q = q.Where(x => x.Platform == platform.Value);
+        }
+        var rows = await q
             .GroupBy(x => x.Status)
             .Select(g => new { Status = g.Key, Count = g.Count() })
             .ToListAsync(ct);
@@ -929,7 +950,7 @@ public sealed class SetLinkRepository(AppDbContext db) : ISetLinkRepository
     public Task<int> CountByWorkspacesAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default)
     {
         var ids = workspaceIds.ToList();
-        return db.SetLinks.CountAsync(x => ids.Contains(x.WorkspaceId), ct);
+        return db.SetLinks.CountAsync(x => ids.Contains(x.WorkspaceId) && x.Channel != Platform.Line, ct); // chats are not "groups" (decision D6)
     }
 
     public async Task<int> MaxSortOrderAsync(Guid linkSetId, CancellationToken ct = default) =>
@@ -995,4 +1016,165 @@ public sealed class ReportShareRepository(AppDbContext db) : IReportShareReposit
     public void Add(ReportShare share) => db.ReportShares.Add(share);
 
     public void Remove(ReportShare share) => db.ReportShares.Remove(share);
+}
+
+public sealed class LineChatRepository(AppDbContext db) : ILineChatRepository
+{
+    public async Task<IReadOnlyList<LineChat>> ListByAccountAsync(Guid accountId, CancellationToken ct = default) =>
+        await db.LineChats.AsNoTracking().Where(x => x.AccountId == accountId).OrderBy(x => x.Name).ToListAsync(ct);
+
+    public async Task<(IReadOnlyList<LineChat> Items, int Total, IReadOnlyList<string> Labels)> PageAsync(
+        LineChatFilter filter, CancellationToken ct = default)
+    {
+        var q = db.LineChats.AsNoTracking().Where(x => x.WorkspaceId == filter.WorkspaceId);
+
+        if (filter.AccountId.HasValue)
+            q = q.Where(x => x.AccountId == filter.AccountId.Value);
+
+        if (!string.IsNullOrWhiteSpace(filter.Q))
+        {
+            // % and _ typed by a person are letters, not wildcards.
+            var term = filter.Q.Trim().Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_");
+            q = q.Where(x => EF.Functions.ILike(x.Name, $"%{term}%", "\\") || EF.Functions.ILike(x.UserId, $"%{term}%", "\\"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(filter.Label))
+        {
+            // The labels are a json list: matched in memory over (id, labels) of the account's roster (5,000 rows at most).
+            var label = filter.Label.Trim();
+            var withLabels = await q.Select(x => new { x.Id, x.Labels }).ToListAsync(ct);
+            var labelIds = withLabels
+                .Where(r => r.Labels.Any(l => string.Equals(l, label, StringComparison.OrdinalIgnoreCase)))
+                .Select(r => r.Id)
+                .ToList();
+            q = q.Where(x => labelIds.Contains(x.Id));
+        }
+
+        if (filter.ActiveWithinDays.HasValue && filter.ActiveWithinDays.Value > 0)
+        {
+            var cutoff = DateTimeOffset.UtcNow.AddDays(-filter.ActiveWithinDays.Value);
+            q = q.Where(x => x.LastMessageAt != null && x.LastMessageAt.Value >= cutoff);
+        }
+
+        if (filter.DoNotSend.HasValue)
+        {
+            q = q.Where(x => x.DoNotSend == filter.DoNotSend.Value);
+        }
+
+        var total = await q.CountAsync(ct);
+
+        var page = Math.Max(1, filter.Page);
+        var pageSize = Math.Clamp(filter.PageSize, 1, 200);
+
+        var items = await q
+            .OrderBy(x => x.LastMessageAt == null) // customers with no known time come last (PostgreSQL sorts NULL first when descending)
+            .ThenByDescending(x => x.LastMessageAt)
+            .ThenBy(x => x.Name)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(ct);
+
+        var labelsQuery = db.LineChats.AsNoTracking().Where(x => x.WorkspaceId == filter.WorkspaceId);
+        if (filter.AccountId.HasValue)
+            labelsQuery = labelsQuery.Where(x => x.AccountId == filter.AccountId.Value);
+
+        var allLabels = (await labelsQuery
+            .Select(x => x.Labels)
+            .ToListAsync(ct))
+            .SelectMany(l => l)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(l => l)
+            .ToList();
+
+        return (items, total, allLabels);
+    }
+
+    public Task<LineChat?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default) =>
+        db.LineChats.FirstOrDefaultAsync(x => x.WorkspaceId == workspaceId && x.Id == id, ct);
+
+    public async Task<IReadOnlyList<LineChat>> GetManyAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default)
+    {
+        var idList = ids.Distinct().ToList();
+        return await db.LineChats.Where(x => x.WorkspaceId == workspaceId && idList.Contains(x.Id)).ToListAsync(ct);
+    }
+
+    public Task<LineChat?> FindAsync(Guid accountId, string userId, CancellationToken ct = default) =>
+        db.LineChats.FirstOrDefaultAsync(x => x.AccountId == accountId && x.UserId == userId, ct);
+
+    public async Task<IReadOnlyDictionary<Guid, int>> LinkedSetCountsAsync(IEnumerable<Guid> chatIds, CancellationToken ct = default)
+    {
+        var idList = chatIds.Distinct().ToList();
+        if (idList.Count == 0) return new Dictionary<Guid, int>();
+
+        var chats = await db.LineChats.AsNoTracking()
+            .Where(c => idList.Contains(c.Id))
+            .Select(c => new { c.Id, c.WorkspaceId, c.ChatUrl })
+            .ToListAsync(ct);
+
+        if (chats.Count == 0) return new Dictionary<Guid, int>();
+
+        var urls = chats.Select(c => c.ChatUrl.ToLower()).Distinct().ToList();
+        var wsIds = chats.Select(c => c.WorkspaceId).Distinct().ToList();
+
+        var setLinks = await db.SetLinks.AsNoTracking()
+            .Where(l => wsIds.Contains(l.WorkspaceId) && l.Channel == Platform.Line && urls.Contains(l.Url.ToLower()))
+            .Select(l => new { l.WorkspaceId, Url = l.Url.ToLower(), l.LinkSetId })
+            .Distinct()
+            .ToListAsync(ct);
+
+        var result = new Dictionary<Guid, int>();
+        foreach (var c in chats)
+        {
+            var cUrl = c.ChatUrl.ToLower();
+            var count = setLinks.Count(l => l.WorkspaceId == c.WorkspaceId && l.Url == cUrl);
+            result[c.Id] = count;
+        }
+
+        return result;
+    }
+
+    public Task<DateTimeOffset?> MaxSyncedAtAsync(Guid accountId, CancellationToken ct = default) =>
+        db.LineChats.Where(x => x.AccountId == accountId).MaxAsync(x => (DateTimeOffset?)x.SyncedAt, ct);
+
+    public async Task ReplaceForAccountAsync(
+        Guid accountId, IEnumerable<LineChat> incoming, bool complete, DateTimeOffset now, CancellationToken ct = default)
+    {
+        var incomingList = incoming.ToList();
+        var incomingUserIds = incomingList.Select(x => x.UserId).ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        var existing = await db.LineChats.Where(x => x.AccountId == accountId).ToListAsync(ct);
+        var existingByUser = existing.ToDictionary(x => x.UserId, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var inc in incomingList)
+        {
+            if (existingByUser.TryGetValue(inc.UserId, out var chat))
+            {
+                chat.Upsert(inc.Name, inc.ChatUrl, inc.Labels, inc.LastMessageAt, inc.Unread, now);
+            }
+            else
+            {
+                db.LineChats.Add(inc);
+            }
+        }
+
+        if (complete)
+        {
+            var toRemove = existing.Where(x => !incomingUserIds.Contains(x.UserId) && !x.DoNotSend).ToList();
+            if (toRemove.Count > 0)
+            {
+                db.LineChats.RemoveRange(toRemove);
+            }
+        }
+    }
+
+    public async Task DeleteByAccountAsync(Guid accountId, CancellationToken ct = default)
+    {
+        var chats = await db.LineChats.Where(x => x.AccountId == accountId).ToListAsync(ct);
+        if (chats.Count > 0) db.LineChats.RemoveRange(chats);
+    }
+
+    public Task<int> CountByAccountAsync(Guid accountId, CancellationToken ct = default) =>
+        db.LineChats.CountAsync(x => x.AccountId == accountId, ct);
+
+    public void Add(LineChat chat) => db.LineChats.Add(chat);
 }

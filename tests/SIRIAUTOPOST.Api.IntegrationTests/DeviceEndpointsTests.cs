@@ -660,7 +660,7 @@ public class DeviceEndpointsTests(ApiFactory factory)
         // The same group in the other extension's set, as data from before the rule had it (the API would refuse it now).
         await factory.WithDbAsync(async db =>
         {
-            db.SetLinks.Add(SIRIAUTOPOST.Domain.Entities.SetLink.Create(p.Ws, office.Id, null, PlantsUrl, null, 0, DateTimeOffset.UtcNow.AddDays(1)));
+            db.SetLinks.Add(SIRIAUTOPOST.Domain.Entities.SetLink.Create(p.Ws, office.Id, null, PlantsUrl, null, 0, DateTimeOffset.UtcNow.AddDays(1), SIRIAUTOPOST.Domain.Enums.Platform.Fb));
             await db.SaveChangesAsync();
         });
         foreach (var set in new[] { shop, office })
@@ -722,7 +722,7 @@ public class DeviceEndpointsTests(ApiFactory factory)
         {
             var row = SIRIAUTOPOST.Domain.Entities.LinkSet.Create(p.Ws, "ไม่มีเครื่อง", null, DateTimeOffset.UtcNow, 60);
             db.LinkSets.Add(row);
-            db.SetLinks.Add(SIRIAUTOPOST.Domain.Entities.SetLink.Create(p.Ws, row.Id, null, PlantsUrl, null, 0, DateTimeOffset.UtcNow));
+            db.SetLinks.Add(SIRIAUTOPOST.Domain.Entities.SetLink.Create(p.Ws, row.Id, null, PlantsUrl, null, 0, DateTimeOffset.UtcNow, SIRIAUTOPOST.Domain.Enums.Platform.Fb));
             await db.SaveChangesAsync();
             return row.Id;
         });

@@ -8,6 +8,27 @@ namespace SIRIAUTOPOST.Domain.Entities;
 // "ตารางโพสต์": pairs one collection with one link set and says when to post. The schedule never posts by itself: it
 // materialises ordinary queued Posts a fortnight ahead (in its own local calendar, UtcOffsetMinutes), which the
 // paired browser claims through the device job API.
+public class LineOptions
+{
+    public string AllowedFrom { get; set; } = "09:00";
+    public string AllowedTo { get; set; } = "20:00";
+    public int SkipIfActiveMinutes { get; set; } = 30;
+    public bool SplitBubbles { get; set; }
+    public bool ImagesFirst { get; set; }
+
+    public void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(AllowedFrom) || string.IsNullOrWhiteSpace(AllowedTo))
+            throw new DomainException("กรุณาระบุช่วงเวลาที่อนุญาตให้ส่งแชท");
+        if (AllowedFrom == AllowedTo)
+            throw new DomainException("เวลาเริ่มต้นและเวลาสิ้นสุดต้องไม่ตรงกัน");
+        _ = TimeOfDay.Parse(AllowedFrom) ?? throw new DomainException("เวลาเริ่มต้นไม่ถูกต้อง");
+        _ = TimeOfDay.Parse(AllowedTo) ?? throw new DomainException("เวลาสิ้นสุดไม่ถูกต้อง");
+        if (SkipIfActiveMinutes is < 5 or > 240)
+            throw new DomainException("เวลาข้ามแชทที่ลูกค้าคุยอยู่ต้องอยู่ระหว่าง 5–240 นาที");
+    }
+}
+
 public class Schedule : Entity
 {
     public const int MaxNameLength = 120;
@@ -99,6 +120,36 @@ public class Schedule : Entity
     public bool StartNow { get; private set; }
     /// <summary>The start-now round is not queued yet. Cleared by the run that queues it, so pausing and resuming never repeats it.</summary>
     public bool NowPending { get; private set; }
+    public LineOptions? LineOptions { get; private set; }
+
+    /// <summary>
+    /// The options of a schedule over a LINE set. A schedule that holds none (a restored file without them) is NOT
+    /// unrestricted: it gets the defaults (09:00-20:00), so no chat is ever messaged at night by accident.
+    /// </summary>
+    public LineOptions EffectiveLineOptions => LineOptions ?? new LineOptions();
+
+    public bool AllowsLineAt(DateTimeOffset utc)
+    {
+        var opt = EffectiveLineOptions;
+        var local = utc.ToOffset(TimeSpan.FromMinutes(UtcOffsetMinutes));
+        var minutes = local.Hour * 60 + local.Minute;
+        var a = TimeOfDay.Parse(opt.AllowedFrom) ?? 0;
+        var b = TimeOfDay.Parse(opt.AllowedTo) ?? 24 * 60 - 1;
+        return a <= b ? minutes >= a && minutes <= b : minutes >= a || minutes <= b;
+    }
+
+    /// <summary>
+    /// The next moment (UTC) the allowed hours open, counted from <paramref name="utc"/>: the start of today's window when
+    /// it has not begun yet, else tomorrow's. Only meaningful while <see cref="AllowsLineAt"/> is false.
+    /// </summary>
+    public DateTimeOffset NextLineWindowOpen(DateTimeOffset utc)
+    {
+        var offset = TimeSpan.FromMinutes(UtcOffsetMinutes);
+        var local = utc.ToOffset(offset);
+        var from = TimeOfDay.Parse(EffectiveLineOptions.AllowedFrom) ?? 0;
+        var today = new DateTimeOffset(local.Year, local.Month, local.Day, 0, 0, 0, offset).AddMinutes(from);
+        return (today <= local ? today.AddDays(1) : today).ToUniversalTime();
+    }
 
     private Schedule() { } // EF Core
 
@@ -111,7 +162,7 @@ public class Schedule : Entity
         int everyHours, string? firstTime, DateOnly startDate, string? onceTime, PostOrder order, string? dripFrom, string? dripTo,
         int dripCount, int bumpHours, int autoDeleteDays, IReadOnlyDictionary<string, IReadOnlyList<string>>? overrides,
         int utcOffsetMinutes, DateTimeOffset now, bool startNow = false, PostRepeat repeat = PostRepeat.Recent, BumpPlan? bump = null,
-        int groupGapMinutes = 0)
+        int groupGapMinutes = 0, LineOptions? lineOptions = null)
     {
         EnsureGroupGap(groupGapMinutes);
         var n = (name ?? "").Trim();
@@ -148,7 +199,7 @@ public class Schedule : Entity
         if (drip && TimeOfDay.Parse(from)! > TimeOfDay.Parse(to)!)
             throw new DomainException("เวลาเริ่มช่วงต้องไม่เกินเวลาสิ้นสุด");
 
-        return new Schedule
+        var schedule = new Schedule
         {
             WorkspaceId = workspaceId,
             Name = n,
@@ -175,6 +226,12 @@ public class Schedule : Entity
             StartNow = startNow,
             NowPending = startNow,
         };
+        if (lineOptions is not null)
+        {
+            lineOptions.Validate();
+            schedule.LineOptions = lineOptions;
+        }
+        return schedule;
     }
 
     /// <summary>"Today" in a calendar that is <paramref name="utcOffsetMinutes"/> ahead of UTC.</summary>

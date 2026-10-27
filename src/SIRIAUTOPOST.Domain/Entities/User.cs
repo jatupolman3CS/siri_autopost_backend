@@ -193,4 +193,7 @@ public class User : Entity
 
     /// <summary>Bumping posts (commenting on them again later) is a top-plan feature.</summary>
     public bool HasBump => PlanFeatures.Has(Plan, PlanFeatures.Bump);
+
+    /// <summary>LINE OA customer chats need Pro or above.</summary>
+    public bool HasLineChat => PlanFeatures.Has(Plan, PlanFeatures.LineChat);
 }

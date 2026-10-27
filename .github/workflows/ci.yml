@@ -104,7 +104,7 @@ jobs:
         with:
           node-version: 24
       - name: Check the extension's scripts parse
-        run: for f in client/*.js client/lib/*.js client/tools/*.mjs; do node --check "$f"; done
+        run: for f in client/*.js client/lib/*.js client/tools/*.mjs client/tools/*.js; do node --check "$f"; done
       - name: Typing like a person (faked Chrome and web API: no server needed)
         run: node client/tools/test-typing.mjs
       - name: Start the API (Development settings, fresh database)
@@ -119,6 +119,8 @@ jobs:
         run: node client/tools/test-cloud.mjs http://localhost:5100
       - name: A web schedule alone hands work to an extension with no campaign setup
         run: node client/tools/test-schedule-flow.mjs http://localhost:5100
+      - name: LINE OA chats (faked Chrome and chat.line.biz) - roster, send, defer, skip, login lost, quiet hours, device rest
+        run: node client/tools/test-line-flow.mjs http://localhost:5100
       - name: The extension on its own (alarm only, restart, a lost Facebook login, a browser paired again, a hung job)
         # Step 4 (two extensions, unbound and paired again) waits out the engine's 2-minute gap; the API integration tests cover it.
         env:

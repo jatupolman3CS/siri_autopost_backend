@@ -56,7 +56,7 @@ public sealed class GetBackupQueryHandler(
         var backupSets = allSets.Select((s, i) => new BackupLinkSetDto(
             setNames[i], s.PostAsAccountId, s.AccountIds,
             linksBy[s.Id].Select(l => new BackupLinkDto(l.Name, l.Url, l.Code, l.DailyMax, l.Enabled)).ToList(),
-            s.RandomOrder, s.DailyPerGroup)).ToList();
+            s.RandomOrder, s.DailyPerGroup, s.Channel)).ToList();
 
         var backupSchedules = new List<BackupScheduleDto>();
         foreach (var s in await schedules.ListAsync(ws.Id, ct))
@@ -72,7 +72,7 @@ public sealed class GetBackupQueryHandler(
             backupSchedules.Add(new BackupScheduleDto(
                 s.Name, cName, lName, s.Mode, s.Times, s.EveryHours, s.FirstTime, s.StartDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
                 s.OnceTime, s.Order, s.DripFrom, s.DripTo, s.DripCount, s.BumpHours, s.AutoDeleteDays, overrides, s.Active, s.UtcOffsetMinutes, s.Repeat,
-                BumpPlanDto.From(s.Bump), s.GroupGapMinutes));
+                BumpPlanDto.From(s.Bump), s.GroupGapMinutes, s.LineOptions is null ? null : LineOptionsDto.From(s.LineOptions)));
         }
 
         var n = ws.Notifications;
@@ -140,11 +140,14 @@ public sealed class RestoreBackupCommandHandler(
         RequireUnique(b.LinkSets.Select(x => x.Name), "ชื่อชุดลิงก์");
 
         var owner = await users.OwnerOfAsync(ws, ct);
+        if (!owner.HasLineChat && b.LinkSets.Any(s => s.Channel == Platform.Line))
+            throw new DomainException("ไฟล์สำรองมีชุดลิงก์แชท LINE แต่แพ็กเกจปัจจุบันไม่รองรับแชท LINE (ใช้ได้ในแพ็กเกจ Pro ขึ้นไป)");
         var now = clock.GetUtcNow();
         var library = (await media.ListAsync(ws.Id, ct)).Select(m => m.Id).ToHashSet(); // a file the library no longer has is dropped
         var accountList = await accounts.ListAsync(ws.Id, ct);
         var known = accountList.Select(a => a.Id).ToHashSet();
         var facebook = accountList.Where(a => a.Platform == Platform.Fb).Select(a => a.Id).ToHashSet();
+        var lineAccounts = accountList.Where(a => a.Platform == Platform.Line).Select(a => a.Id).ToHashSet();
 
         // ---- build the new parts in memory (nothing is touched until they all pass) ----
         var newCollections = new Dictionary<string, PostCollection>(StringComparer.Ordinal);
@@ -192,15 +195,15 @@ public sealed class RestoreBackupCommandHandler(
             var bs = b.LinkSets[i];
             // The extension of the file when this workspace still has it; else the only connected one (a set belongs to
             // an extension from the start), else nobody: with several the person picks, and nothing posts meanwhile.
-            var postAs = (bs.PostAsAccountId is { } id && facebook.Contains(id) ? id : (Guid?)null) ?? LinkOwnership.OnlyConnected(accountList)?.Id;
-            var set = LinkSet.Create(ws.Id, bs.Name, postAs, now, i);
+            var postAs = (bs.PostAsAccountId is { } id && (bs.Channel == Platform.Line ? lineAccounts.Contains(id) : facebook.Contains(id)) ? id : (Guid?)null) ?? LinkOwnership.OnlyConnected(accountList, bs.Channel)?.Id;
+            var set = LinkSet.Create(ws.Id, bs.Name, postAs, now, i, channel: bs.Channel);
             set.Update(bs.Name, postAs, (bs.AccountIds ?? []).Where(known.Contains), bs.RandomOrder, bs.DailyPerGroup);
-            if (bs.Links.Count > LinkSet.MaxLinks) throw new DomainException($"ชุดลิงก์ \"{bs.Name}\" มีลิงก์เกิน {LinkSet.MaxLinks} ลิงก์");
+            if (bs.Links.Count > LinkSet.MaxLinksFor(set.Channel)) throw new DomainException($"ชุดลิงก์ \"{bs.Name}\" มีลิงก์เกิน {LinkSet.MaxLinksFor(set.Channel)} ลิงก์");
             var own = new List<SetLink>();
             for (var k = 0; k < bs.Links.Count; k++)
             {
                 var bl = bs.Links[k];
-                var link = SetLink.Create(ws.Id, set.Id, bl.Name, bl.Url, bl.Code, bl.DailyMax, now, k);
+                var link = SetLink.Create(ws.Id, set.Id, bl.Name, bl.Url, bl.Code, bl.DailyMax, now, set.Channel, k);
                 if (!bl.Enabled) link.DisableManually();
                 own.Add(link);
             }
@@ -224,7 +227,8 @@ public sealed class RestoreBackupCommandHandler(
                 ws.Id, bsc.Name, collection.Id, set.Id, bsc.Mode, bsc.Times, bsc.EveryHours, bsc.FirstTime, start, bsc.OnceTime, bsc.Order,
                 bsc.DripFrom, bsc.DripTo, bsc.DripCount, bsc.BumpHours, bsc.AutoDeleteDays,
                 TranslateOverrides(bsc.Overrides, set, linksOfSet[set.Id]), bsc.UtcOffsetMinutes, now.AddMilliseconds(newSchedules.Count), repeat: bsc.Repeat,
-                bump: bump, groupGapMinutes: Math.Clamp(bsc.GroupGapMinutes, 0, Schedule.MaxGroupGapMinutes));
+                bump: bump, groupGapMinutes: Math.Clamp(bsc.GroupGapMinutes, 0, Schedule.MaxGroupGapMinutes),
+                lineOptions: set.Channel == Platform.Line ? bsc.LineOptions?.ToOptions() ?? new LineOptions() : null); // a LINE schedule always has allowed hours
             if (!bsc.Active) schedule.SetActive(false);
             newSchedules.Add(schedule);
         }

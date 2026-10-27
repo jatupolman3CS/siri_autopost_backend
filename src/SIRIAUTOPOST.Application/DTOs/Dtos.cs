@@ -93,11 +93,11 @@ public sealed record AuthResultDto(string Token, DateTimeOffset ExpiresAt, UserD
 /// <param name="Bump">The owner's plan includes bumping posts.</param>
 public sealed record WorkspaceDto(
     Guid Id, string Name, int Posts7, int Members, WorkspaceRole Role, LimitsDto Limits, bool AdvancedAntiBan, bool Notifications,
-    bool AutoReply, bool ClientReports, bool Ai, bool Bump)
+    bool AutoReply, bool ClientReports, bool Ai, bool Bump, bool LineChat = false)
 {
     public static WorkspaceDto From(Workspace w, int posts7, int members, WorkspaceRole role, LimitsDto limits, User owner) =>
         new(w.Id, w.Name, posts7, members, role, limits, owner.HasAdvancedAntiBan, owner.HasNotifications, owner.HasAutoReply, owner.HasClientReports,
-            owner.HasAi, owner.HasBump);
+            owner.HasAi, owner.HasBump, owner.HasLineChat);
 }
 
 /// <param name="Connected">Posts through a paired browser (false for the demo accounts).</param>
@@ -127,13 +127,14 @@ public sealed record PostDto(
     string? Code,
     string? TargetUrl,
     bool IsTest,
-    bool Rushed = false)
+    bool Rushed = false,
+    int DeferCount = 0)
 {
     /// <summary><c>Rushed</c>: asked to post now and still waiting for its browser to take it.</summary>
     public static PostDto From(Post p) =>
         new(p.Id, p.AccountId, p.Platform, p.Target, p.Content, p.MediaIds, p.ScheduledAt, p.Status, p.FailureCode,
             p.FailureDetail, p.PublishedAt, p.ScheduleId, p.CollectionPostId, p.LinkId, p.Code, p.TargetUrl, p.IsTest,
-            p.RushedAt is not null && p.Status == PostStatus.Queued);
+            p.RushedAt is not null && p.Status == PostStatus.Queued, p.DeferCount);
 }
 
 public sealed record ScheduleResultDto(int Created, DateTimeOffset FirstAt, DateTimeOffset LastAt);
@@ -158,11 +159,18 @@ public sealed record SnippetDto(Guid Id, string Title, string Text, int UsedCoun
     public static SnippetDto From(Snippet s) => new(s.Id, s.Title, s.Text, s.UsedCount, s.Active);
 }
 
-public sealed record PlatformLimitsDto(int Fb)
+public sealed record PlatformLimitsDto(int Fb, int? Line = null)
 {
-    public static PlatformLimitsDto From(PlatformLimits l) => new(l.Fb);
+    public static PlatformLimitsDto From(PlatformLimits l) => new(l.Fb, l.LineOrDefault);
 
-    public PlatformLimits ToSettings() => new() { Fb = Fb };
+    public PlatformLimits ToSettings() => new() { Fb = Fb, Line = Line ?? 100 };
+}
+
+public sealed record LineChatAntiBanDto(int MinGapSeconds = 45, int MaxGapSeconds = 120)
+{
+    public static LineChatAntiBanDto From(LineChatAntiBanSettings s) => new(s.MinGapSeconds, s.MaxGapSeconds);
+
+    public LineChatAntiBanSettings ToSettings() => new() { MinGapSeconds = MinGapSeconds, MaxGapSeconds = MaxGapSeconds };
 }
 
 /// <summary>The advanced anti-ban numbers (Pro and above; lower plans keep the stored values).</summary>
@@ -183,17 +191,18 @@ public sealed record AdvancedAntiBanDto(
 /// <param name="TypingSpeed">slow, normal or fast: how fast the extension types (an old client may omit it: normal).</param>
 public sealed record AntiBanDto(
     int Min, int Max, PlatformLimitsDto Limits, bool Typing, bool Scroll, bool Shuffle, bool AutoPause, bool Warmup, AdvancedAntiBanDto Advanced,
-    string TypingSpeed = "normal")
+    string TypingSpeed = "normal", LineChatAntiBanDto? LineChat = null)
 {
     public static AntiBanDto From(AntiBanSettings s) =>
         new(s.Min, s.Max, PlatformLimitsDto.From(s.Limits), s.Typing, s.Scroll, s.Shuffle, s.AutoPause, s.Warmup,
-            AdvancedAntiBanDto.From(s.Advanced), s.TypingSpeed);
+            AdvancedAntiBanDto.From(s.Advanced), s.TypingSpeed, LineChatAntiBanDto.From(s.LineChat));
 
     public AntiBanSettings ToSettings() => new()
     {
         Min = Min, Max = Max, Limits = Limits.ToSettings(),
         Typing = Typing, Scroll = Scroll, Shuffle = Shuffle, AutoPause = AutoPause, Warmup = Warmup, TypingSpeed = TypingSpeed ?? "normal",
         Advanced = Advanced?.ToSettings() ?? new AdvancedAntiBanSettings(), // an old client may omit it
+        LineChat = LineChat?.ToSettings() ?? new LineChatAntiBanSettings(),
     };
 }
 
@@ -230,13 +239,25 @@ public sealed record ExtensionStateDto(bool Online, int Affected);
 /// <param name="JobsPaused">Set in the web app: the browser takes no posts scheduled on the web.</param>
 /// <param name="AutoPausedUntil">The engine paused the browser itself (Facebook blocked it, or posts kept failing) until then; null when it is not paused.</param>
 /// <param name="AutoPauseReason">Why, in Thai, while <paramref name="AutoPausedUntil"/> is set.</param>
+public sealed record DeviceLineSummaryDto(
+    Guid AccountId,
+    string Name,
+    string Handle,
+    string BotId,
+    bool Ready,
+    DateTimeOffset? ReadyAt,
+    DateTimeOffset? RestUntil,
+    DateTimeOffset? SyncedAt,
+    int ChatCount,
+    bool SessionLost = false);
+
 public sealed record DeviceDto(
     Guid Id, string Name, string Browser, string Version, DateTimeOffset CreatedAt, DateTimeOffset? LastSeenAt, bool Online, Guid? AccountId,
-    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null)
+    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null, DeviceLineSummaryDto? Line = null)
 {
-    public static DeviceDto From(Device d, Guid? accountId, DateTimeOffset now) =>
+    public static DeviceDto From(Device d, Guid? accountId, DateTimeOffset now, DeviceLineSummaryDto? line = null) =>
         new(d.Id, d.Name, d.Browser, d.Version, d.CreatedAt, d.LastSeenAt, d.IsOnline(now), accountId, d.JobsPaused,
-            d.IsAutoPaused(now) ? d.AutoPausedUntil : null, d.IsAutoPaused(now) ? d.AutoPauseReason : null);
+            d.IsAutoPaused(now) ? d.AutoPausedUntil : null, d.IsAutoPaused(now) ? d.AutoPauseReason : null, line);
 }
 
 /// <param name="MaxDevices">The owner's plan limit; null = unlimited.</param>
@@ -251,11 +272,15 @@ public sealed record PairResultDto(string DeviceKey, Guid DeviceId, string Devic
 /// <param name="SessionLost">The account waits for a Facebook login (a job found the browser logged out): it gets no jobs until the extension reports a login again (heartbeat <c>sessionOk</c>) or the web's "sign in again" is pressed.</param>
 public sealed record DeviceStatusDto(
     Guid DeviceId, string DeviceName, Guid WorkspaceId, string WorkspaceName, Guid? AccountId, int Groups, bool Online, AntiBanDto AntiBan,
-    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null, bool SessionLost = false);
+    bool JobsPaused, DateTimeOffset? AutoPausedUntil = null, string? AutoPauseReason = null, bool SessionLost = false,
+    bool LineSessionLost = false, Guid? LineAccountId = null, string? LineNote = null);
 
+public sealed record LineHeartbeatDto(bool Ready, string? BotId = null, string? OaName = null);
 public sealed record GroupLinkDto(string Name, string Url);
 
 public sealed record JobMediaDto(Guid Id, string Name, string ContentType);
+
+public sealed record LineJobOptionsDto(int SkipIfActiveMinutes, bool ImagesFirst, string AllowedFrom, string AllowedTo);
 
 /// <summary>
 /// One job for the extension to do now: a post to publish in one Facebook group or page (<paramref name="Kind"/> "post"), or
@@ -267,7 +292,8 @@ public sealed record JobMediaDto(Guid Id, string Name, string ContentType);
 /// <param name="Shot">Take a picture of the posting window when done and send it with the result (a Telegram message with a screenshot is wanted).</param>
 public sealed record JobDto(
     Guid PostId, string GroupName, string GroupUrl, string Content, IReadOnlyList<JobMediaDto> Media, AntiBanDto AntiBan,
-    string Kind = "post", string TargetKind = "group", string? PageTags = null, bool Shot = false);
+    string Kind = "post", string TargetKind = "group", string? PageTags = null, bool Shot = false,
+    string Channel = "fb", IReadOnlyList<string>? Bubbles = null, LineJobOptionsDto? Line = null);
 
 /// <param name="Id">The membership; null for the owner.</param>
 /// <param name="Active">Joined (false: invited, waiting for that email to sign up).</param>

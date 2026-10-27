@@ -28,9 +28,9 @@ public static class ScheduleTargets
     public static IReadOnlyList<ScheduleTarget> Resolve(LinkSet set, IReadOnlyList<SetLink> links, IReadOnlyList<SocialAccount> accounts)
     {
         var poster = LinkSetAccounts.PostingAccount(set, accounts);
-        var linkAccount = poster is { IsConnected: true, Platform: Platform.Fb } ? poster : null;
+        var linkAccount = poster is { IsConnected: true } && poster.Platform == set.Channel ? poster : null;
         var list = new List<ScheduleTarget>();
-        var seen = new HashSet<string>(FacebookGroupUrl.Comparer);
+        var seen = new HashSet<string>(LinkAddress.Comparer(set.Channel));
         foreach (var link in links)
         {
             if (!link.IsUsable || !seen.Add(link.Url)) continue;
@@ -215,7 +215,9 @@ public sealed class ScheduleMaterializer(
                 if (cp is null) continue;
                 if (cp.Settings.MaxPerDay > 0) perDay[(cp.Id, day)] = perDay.GetValueOrDefault((cp.Id, day)) + 1;
                 var code = t.Link?.Code;
-                var text = PostComposer.ComposeFull(cp.Text, code, cp.SettingsIn(collection), random.NextDouble);
+                var text = set.Channel == Platform.Line
+                    ? PostComposer.ComposeFull(cp.Text, code, new CollectionSettings(), random.NextDouble, ComposeMode.Chat, t.Link?.Name)
+                    : PostComposer.ComposeFull(cp.Text, code, cp.SettingsIn(collection), random.NextDouble);
                 var target = t.Link is { } l ? l.Name : t.Account!.DefaultTarget;
                 created.Add(Post.FromSchedule(
                     ws.Id, t.Account!, target, text, cp.MediaIds, when, now, s.Id, cp.Id, t.Link?.Id, t.TargetKey, slotKey, t.Link?.Url, code));
@@ -240,7 +242,8 @@ public sealed class ScheduleMaterializer(
         var spread = s.GroupGapMinutes > 0;
         DateOnly? lineDay = null;
         DateTimeOffset? lineEnd = null; // when the last post of the day's line is planned
-        double GapSeconds() => ScheduleSpacing.GapSeconds(s, anti, random.NextDouble);
+        var isLine = set.Channel == Platform.Line;
+        double GapSeconds() => ScheduleSpacing.GapSeconds(s, anti, random.NextDouble, set.Channel);
         void OnLine(DateOnly day)
         {
             if (lineDay == day) return;
@@ -269,6 +272,15 @@ public sealed class ScheduleMaterializer(
                 var earliest = previous.AddSeconds(GapSeconds());
                 if (earliest > first) first = earliest;
             }
+            if (isLine && s.LineOptions is not null && !s.AllowsLineAt(first))
+            {
+                var localFirst = first.ToOffset(TimeSpan.FromMinutes(s.UtcOffsetMinutes));
+                var dayOfFirst = DateOnly.FromDateTime(localFirst.DateTime);
+                var minutesFirst = localFirst.Hour * 60 + localFirst.Minute;
+                var fromMinutes = TimeOfDay.Parse(s.LineOptions.AllowedFrom) ?? 0;
+                var targetDay = minutesFirst < fromMinutes ? dayOfFirst : dayOfFirst.AddDays(1);
+                first = s.ToUtc(targetDay, s.LineOptions.AllowedFrom).AddMinutes(random.NextDouble() * 15);
+            }
             var at = first;
             var fresh = new List<(ScheduleTarget Target, DateTimeOffset At)>();
             for (var i = 0; i < members.Count; i++)
@@ -276,6 +288,12 @@ public sealed class ScheduleMaterializer(
                 if (i > 0) at = at.AddSeconds(GapSeconds());
                 // A start-now round begins a few seconds after the click, not on the very second.
                 else if (firstIsNow) at = at.AddSeconds(Math.Round(2 + random.NextDouble() * 18));
+                if (isLine && s.LineOptions is not null && !s.AllowsLineAt(at))
+                {
+                    var localAt = at.ToOffset(TimeSpan.FromMinutes(s.UtcOffsetMinutes));
+                    var nextDay = DateOnly.FromDateTime(localAt.DateTime).AddDays(1);
+                    at = s.ToUtc(nextDay, s.LineOptions.AllowedFrom);
+                }
                 if (at > now && !existing.Contains((members[i].TargetKey, slotKey))) fresh.Add((members[i], at));
             }
             if (members.Count > 0) lineEnd = at;

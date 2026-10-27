@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Mvc;
 using SIRIAUTOPOST.Application.DTOs;
 using SIRIAUTOPOST.Application.Features.LinkSets;
 using SIRIAUTOPOST.Application.Interfaces.Messaging;
+using SIRIAUTOPOST.Domain.Enums;
 
 namespace SIRIAUTOPOST.Api.Controllers;
 
@@ -11,16 +12,16 @@ namespace SIRIAUTOPOST.Api.Controllers;
 [Produces("application/json")]
 public sealed class LinkSetsController : ControllerBase
 {
-    public sealed record CreateLinkSetRequest(string Name, Guid? PostAsAccountId);
+    public sealed record CreateLinkSetRequest(string Name, Guid? PostAsAccountId, Platform? Channel = null);
 
     public sealed record SetActiveRequest(bool Active);
 
-    /// <param name="AccountId">The Facebook account (extension) that takes the set over; it must be paired to a browser.</param>
+    /// <param name="AccountId">The account (extension) that takes the set over; it must be paired to a browser.</param>
     public sealed record HandOverRequest(Guid AccountId);
     /// <param name="RandomOrder">Null keeps the stored value.</param>
     /// <param name="DailyPerGroup">Posts a day per group (0-50, 0 = no limit from the set); null keeps the stored value.</param>
     public sealed record UpdateLinkSetRequest(
-        string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds, bool? RandomOrder = null, int? DailyPerGroup = null);
+        string Name, Guid? PostAsAccountId, IReadOnlyList<Guid>? AccountIds, bool? RandomOrder = null, int? DailyPerGroup = null, Platform? Channel = null);
 
     /// <summary>A blank or invalid address is allowed: the row is created invalid so the web app can add an empty row.</summary>
     public sealed record AddLinkRequest(string? Name, string? Url, string? Code, int? DailyMax);
@@ -41,12 +42,12 @@ public sealed class LinkSetsController : ControllerBase
     [HttpPost("link-sets")]
     public Task<LinkSetDto> Create(
         Guid wsId, CreateLinkSetRequest r, [FromServices] ICommandHandler<CreateLinkSetCommand, LinkSetDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new CreateLinkSetCommand(wsId, r.Name, r.PostAsAccountId), ct);
+        handler.HandleAsync(new CreateLinkSetCommand(wsId, r.Name, r.PostAsAccountId, r.Channel), ct);
 
     [HttpPut("link-sets/{id:guid}")]
     public Task<LinkSetDto> Update(
         Guid wsId, Guid id, UpdateLinkSetRequest r, [FromServices] ICommandHandler<UpdateLinkSetCommand, LinkSetDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new UpdateLinkSetCommand(wsId, id, r.Name, r.PostAsAccountId, r.AccountIds, r.RandomOrder, r.DailyPerGroup), ct);
+        handler.HandleAsync(new UpdateLinkSetCommand(wsId, id, r.Name, r.PostAsAccountId, r.AccountIds, r.RandomOrder, r.DailyPerGroup, r.Channel), ct);
 
     /// <summary>
     /// Hands the set to another extension in the middle of the day: it is posted by the new extension from now on and its
@@ -105,6 +106,13 @@ public sealed class LinkSetsController : ControllerBase
     public Task<BulkLinksResultDto> Bulk(
         Guid wsId, Guid id, BulkLinksRequest r, [FromServices] ICommandHandler<BulkAddLinksCommand, BulkLinksResultDto> handler, CancellationToken ct) =>
         handler.HandleAsync(new BulkAddLinksCommand(wsId, id, r.Text), ct);
+
+    /// <summary>Imports chats of a LINE account into a LINE link set.</summary>
+    [HttpPost("link-sets/{id:guid}/links/from-line-chats")]
+    public Task<BulkLinksResultDto> ImportLineChats(
+        Guid wsId, Guid id, ImportLineChatsRequest r,
+        [FromServices] ICommandHandler<ImportLineChatsCommand, BulkLinksResultDto> handler, CancellationToken ct) =>
+        handler.HandleAsync(new ImportLineChatsCommand(wsId, id, r.AccountId, r.ChatIds, r.Filter, r.AllMatching), ct);
 
     /// <summary>Adds groups a connected account synced (skipping the ones the set has).</summary>
     [HttpPost("link-sets/{id:guid}/links/import")]

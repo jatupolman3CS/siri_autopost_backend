@@ -77,14 +77,15 @@ public static class PlanFeatures
     public const string Ai = "ai";
     public const string Bump = "bump";
     public const string ClientReports = "client_reports";
+    public const string LineChat = "line_chat";
 
     /// <summary>Every feature key, in the order the plan cards list them.</summary>
-    public static readonly IReadOnlyList<string> All = [AdvancedAntiBan, Notifications, AutoReply, Ai, Bump, ClientReports];
+    public static readonly IReadOnlyList<string> All = [AdvancedAntiBan, Notifications, AutoReply, Ai, Bump, ClientReports, LineChat];
 
     public static IReadOnlyList<string> For(PlanKey plan) => plan switch
     {
         PlanKey.Free or PlanKey.Basic => [],
-        PlanKey.Pro => [AdvancedAntiBan, Notifications, AutoReply, Ai],
+        PlanKey.Pro => [AdvancedAntiBan, Notifications, AutoReply, Ai, LineChat],
         _ => All,
     };
 

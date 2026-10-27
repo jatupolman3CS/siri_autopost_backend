@@ -24,7 +24,7 @@ public sealed class SchedulesController : ControllerBase
     /// <param name="Text">Replaces the post's text.</param>
     /// <param name="DeviceId">The extension that sends it (a workspace may have several); null = the one the link set names.</param>
     public sealed record TestPostRequest(
-        Guid LinkSetId, Guid? LinkId, Guid? AccountId, Guid CollectionId, Guid? CollectionPostId, string? Text, Guid? DeviceId = null);
+        Guid? LinkSetId, Guid? LinkId, Guid? AccountId, Guid CollectionId, Guid? CollectionPostId, string? Text, Guid? DeviceId = null, Guid? ChatId = null);
 
     /// <param name="Url">A Facebook group or page address.</param>
     /// <param name="MediaIds">Library images to attach (at most 10).</param>
@@ -94,7 +94,7 @@ public sealed class SchedulesController : ControllerBase
     [HttpPost("test-post")]
     public Task<PostDto> TestPost(
         Guid wsId, TestPostRequest r, [FromServices] ICommandHandler<CreateTestPostCommand, PostDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new CreateTestPostCommand(wsId, r.LinkSetId, r.LinkId, r.AccountId, r.CollectionId, r.CollectionPostId, r.Text, r.DeviceId), ct);
+        handler.HandleAsync(new CreateTestPostCommand(wsId, r.LinkSetId, r.LinkId, r.AccountId, r.CollectionId, r.CollectionPostId, r.Text, r.DeviceId, r.ChatId), ct);
 
     /// <summary>One real post from a typed address, text and library images, due now: tests that the jobs really reach an extension.</summary>
     [HttpPost("test-post/manual")]

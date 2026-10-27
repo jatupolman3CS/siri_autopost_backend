@@ -58,7 +58,8 @@ public sealed class ScheduleViews(
             s.BumpHours, s.AutoDeleteDays,
             s.Overrides.ToDictionary(kv => kv.Key, kv => (IReadOnlyList<string>)kv.Value),
             s.Active, s.UtcOffsetMinutes, s.Slots(), targetCount, perDay, usablePosts, todayCount, nextRunAt, s.StartNow, s.Repeat,
-            BumpPlanDto.From(s.Bump), s.GroupGapMinutes);
+            BumpPlanDto.From(s.Bump), s.GroupGapMinutes,
+            s.LineOptions != null ? LineOptionsDto.From(s.LineOptions) : null);
 }
 
 public sealed record GetSchedulesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<ScheduleDto>>;
@@ -84,7 +85,7 @@ public sealed record CreateScheduleCommand(Guid WorkspaceId, SaveScheduleRequest
 
 public sealed class CreateScheduleCommandHandler(
     IWorkspaceRepository workspaces, IScheduleRepository schedules, ICollectionRepository collections, ICollectionPostRepository collectionPosts,
-    ILinkSetRepository linkSets, ISetLinkRepository setLinks, IAccountRepository accounts, IUserRepository users, IMediaRepository media,
+    ILinkSetRepository linkSets, ISetLinkRepository setLinks, IAccountRepository accounts, IDeviceRepository devices, IUserRepository users, IMediaRepository media,
     ScheduleTopUp topUp, ScheduleViews views, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreateScheduleCommand, ScheduleCreatedDto>
 {
@@ -114,10 +115,39 @@ public sealed class CreateScheduleCommandHandler(
                 : "ชุดโพสต์นี้ยังไม่มีโพสต์ เพิ่มโพสต์ก่อนสร้างตาราง");
         var accountList = await accounts.ListAsync(ws.Id, ct);
         var poster = LinkSetAccounts.PostingAccount(set, accountList);
-        if (poster is null || poster.Platform != Platform.Fb) throw new DomainException(LinkSetAccounts.NoPosterReason(accountList));
-        if (!poster.IsConnected) throw new DomainException($"บัญชี {poster.Name} ยังไม่ได้เชื่อมกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อนสร้างตารางโพสต์");
+        LineOptions? lineOptions = null;
+        if (set.Channel == Platform.Line)
+        {
+            await users.RequireLineChatAsync(ws, ct);
+            if (r.BumpHours > 0) throw new DomainException("แชท LINE ยังไม่รองรับการดันโพสต์");
+            if (poster is null || poster.Platform != Platform.Line)
+                throw new DomainException(LinkSetAccounts.NoPosterReason(accountList, Platform.Line));
+            if (!poster.IsConnected)
+                throw new DomainException($"บัญชี {poster.Name} ยังไม่ได้เชื่อมกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อนสร้างตารางโพสต์");
+
+            var device = poster.DeviceId.HasValue ? await devices.GetAsync(ws.Id, poster.DeviceId.Value, ct) : null;
+            if (device is null || !device.IsLineReady(now))
+                throw new DomainException("ส่วนขยายของบัญชี LINE ยังไม่พร้อมใช้งาน (เปิด chat.line.biz ในเบราว์เซอร์แล้วตรวจสอบการเชื่อมต่อ)");
+
+            lineOptions = r.LineOptions?.ToOptions() ?? new LineOptions();
+            if (lineOptions.AllowedFrom == lineOptions.AllowedTo)
+                throw new DomainException("เวลาเริ่มและเวลาสิ้นสุดช่วงส่งต้องไม่เป็นเวลาเดียวกัน");
+            if (lineOptions.SkipIfActiveMinutes is < 5 or > 240)
+                throw new DomainException("ระยะเวลาตรวจจับความเคลื่อนไหวลูกค้าต้องอยู่ระหว่าง 5–240 นาที");
+        }
+        else
+        {
+            if (r.LineOptions is not null)
+                throw new DomainException("ตัวเลือกแชท LINE ใช้ได้กับชุดลิงก์ LINE เท่านั้น");
+            if (poster is null || poster.Platform != Platform.Fb)
+                throw new DomainException(LinkSetAccounts.NoPosterReason(accountList, Platform.Fb));
+            if (!poster.IsConnected)
+                throw new DomainException($"บัญชี {poster.Name} ยังไม่ได้เชื่อมกับเครื่อง ผูกเครื่องในหน้าทีมและเวิร์กสเปซก่อนสร้างตารางโพสต์");
+        }
+
         var targets = ScheduleTargets.Resolve(set, await setLinks.ListBySetAsync(ws.Id, set.Id, ct), accountList);
-        if (targets.Count == 0) throw new DomainException("ชุดลิงก์นี้ยังไม่มีกลุ่มที่เปิดใช้งานและลิงก์ถูกต้อง หรือบัญชีอื่นให้โพสต์");
+        if (targets.Count == 0)
+            throw new DomainException(set.Channel == Platform.Line ? "ชุดลิงก์นี้ยังไม่มีแชทที่เปิดใช้งาน" : "ชุดลิงก์นี้ยังไม่มีกลุ่มที่เปิดใช้งานและลิงก์ถูกต้อง หรือบัญชีอื่นให้โพสต์");
 
         // Times for a target that is not in the set mean nothing: leave them out.
         var known = targets.Select(t => t.OverrideKey).ToHashSet();
@@ -144,7 +174,8 @@ public sealed class CreateScheduleCommandHandler(
         }
         var schedule = Schedule.Create(
             ws.Id, name, collection.Id, set.Id, r.Mode, r.Times, r.EveryHours, r.FirstTime, start, r.OnceTime, r.Order, r.DripFrom, r.DripTo,
-            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat, bump, r.GroupGapMinutes);
+            r.DripCount, r.BumpHours, r.AutoDeleteDays, overrides, r.UtcOffsetMinutes, now, r.StartNow, r.Repeat, bump, r.GroupGapMinutes,
+            set.Channel == Platform.Line ? lineOptions : null);
         var made = MaterializeResult.None;
         // One creation of a workspace at a time (the limit of schedules is counted under the lock); the generation joins this transaction.
         await uow.ExecuteInTransactionAsync($"schedules:{ws.Id:N}", async () =>
@@ -242,7 +273,8 @@ public sealed class SetScheduleGapCommandHandler(
         var open = await posts.ListOpenByScheduleAsync(schedule.Id, ct);
         var account = open.FirstOrDefault(p => p.Status == PostStatus.Queued)?.AccountId;
         var lastBegan = account is { } id ? await posts.LastClaimedAtAsync(id, ct) : null;
-        ScheduleSpacing.Reflow(schedule, open, now, lastBegan, () => ScheduleSpacing.GapSeconds(schedule, ws.AntiBan, random.NextDouble));
+        var channel = open.FirstOrDefault()?.Platform ?? Platform.Fb;
+        ScheduleSpacing.Reflow(schedule, open, now, lastBegan, () => ScheduleSpacing.GapSeconds(schedule, ws.AntiBan, random.NextDouble, channel));
         await uow.SaveChangesAsync(ct);
         return await views.BuildOneAsync(schedule, now, ct);
     }
@@ -303,12 +335,12 @@ public sealed class GetBestTimesQueryHandler(
 /// </summary>
 /// <param name="DeviceId">The extension (browser) that sends it, when the workspace has several; null = the one the link set names.</param>
 public sealed record CreateTestPostCommand(
-    Guid WorkspaceId, Guid LinkSetId, Guid? LinkId, Guid? AccountId, Guid CollectionId, Guid? CollectionPostId, string? Text,
-    Guid? DeviceId = null) : ICommand<PostDto>;
+    Guid WorkspaceId, Guid? LinkSetId, Guid? LinkId, Guid? AccountId, Guid CollectionId, Guid? CollectionPostId, string? Text,
+    Guid? DeviceId = null, Guid? ChatId = null) : ICommand<PostDto>;
 
 public sealed class CreateTestPostCommandHandler(
     IWorkspaceRepository workspaces, ILinkSetRepository linkSets, ISetLinkRepository setLinks, IAccountRepository accounts,
-    ICollectionRepository collections, ICollectionPostRepository collectionPosts, IPostRepository postRepo, IDeviceEventRepository events,
+    ILineChatRepository lineChats, ICollectionRepository collections, ICollectionPostRepository collectionPosts, IPostRepository postRepo, IDeviceEventRepository events,
     IRandomSource random, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<CreateTestPostCommand, PostDto>
 {
@@ -316,32 +348,63 @@ public sealed class CreateTestPostCommandHandler(
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Editor, ct);
         var collection = await collections.GetAsync(ws.Id, c.CollectionId, ct) ?? throw new NotFoundException("ชุดโพสต์", c.CollectionId);
-        var set = await linkSets.GetAsync(ws.Id, c.LinkSetId, ct) ?? throw new NotFoundException("ชุดลิงก์", c.LinkSetId);
         var accountList = await accounts.ListAsync(ws.Id, ct);
 
         SocialAccount account;
         SetLink? link = null;
-        if (c.LinkId is null && c.AccountId is { } accountId)
+        string? targetName = null;
+        string? targetUrl = null;
+        string? code = null;
+        bool isLine = false;
+
+        if (c.ChatId is { } chatId)
         {
-            account = accountList.FirstOrDefault(a => a.Id == accountId) ?? throw new NotFoundException("บัญชี", accountId);
+            var chat = await lineChats.GetAsync(ws.Id, chatId, ct)
+                ?? throw new NotFoundException("แชท LINE", chatId);
+            account = c.DeviceId is { } dev
+                ? TestDevices.AccountOf(accountList, dev, Platform.Line)
+                : (accountList.FirstOrDefault(a => a.Id == chat.AccountId && a.Platform == Platform.Line)
+                   ?? throw new NotFoundException("บัญชี LINE", chat.AccountId));
+            if (!account.IsConnected)
+                throw new DomainException($"บัญชี {account.Name} ยังไม่ได้เชื่อมกับเครื่อง จับคู่เครื่องในหน้าทีมและเวิร์กสเปซก่อน");
+            targetName = chat.Name;
+            targetUrl = chat.ChatUrl;
+            isLine = true;
         }
         else
         {
-            var links = await setLinks.ListBySetAsync(ws.Id, set.Id, ct);
-            if (c.LinkId is { } linkId)
+            var set = c.LinkSetId.HasValue ? await linkSets.GetAsync(ws.Id, c.LinkSetId.Value, ct) : null;
+            if (set is null) throw new NotFoundException("ชุดลิงก์", c.LinkSetId ?? Guid.Empty);
+            isLine = set.Channel == Platform.Line;
+
+            if (c.LinkId is null && c.AccountId is { } accountId)
             {
-                link = links.FirstOrDefault(l => l.Id == linkId) ?? throw new NotFoundException("ลิงก์กลุ่ม", linkId);
-                if (!link.IsValid) throw new DomainException("ลิงก์นี้ไม่ใช่ลิงก์กลุ่ม Facebook ที่ถูกต้อง");
-                if (!link.Enabled) throw new DomainException("กลุ่มนี้ถูกปิดอยู่ เปิดใช้งานกลุ่มก่อนทดสอบ");
+                account = accountList.FirstOrDefault(a => a.Id == accountId) ?? throw new NotFoundException("บัญชี", accountId);
             }
             else
             {
-                link = ScheduleTargets.Resolve(set, links, accountList).FirstOrDefault(t => t.Link is not null)?.Link;
-                if (link is null) throw new DomainException("ชุดลิงก์นี้ยังไม่มีกลุ่มที่ใช้ทดสอบได้ เลือกกลุ่มหรือบัญชีที่จะทดสอบ");
+                var links = await setLinks.ListBySetAsync(ws.Id, set.Id, ct);
+                if (c.LinkId is { } linkId)
+                {
+                    link = links.FirstOrDefault(l => l.Id == linkId) ?? throw new NotFoundException(isLine ? "แชท LINE" : "ลิงก์กลุ่ม", linkId);
+                    if (!link.IsValid)
+                        throw new DomainException(isLine ? "ลิงก์นี้ไม่ใช่ลิงก์แชท LINE ที่ถูกต้อง" : "ลิงก์นี้ไม่ใช่ลิงก์กลุ่ม Facebook ที่ถูกต้อง");
+                    if (!link.Enabled)
+                        throw new DomainException(isLine ? "แชทนี้ถูกปิดอยู่ เปิดใช้งานก่อนทดสอบ" : "กลุ่มนี้ถูกปิดอยู่ เปิดใช้งานกลุ่มก่อนทดสอบ");
+                }
+                else
+                {
+                    link = ScheduleTargets.Resolve(set, links, accountList).FirstOrDefault(t => t.Link is not null)?.Link;
+                    if (link is null)
+                        throw new DomainException(isLine ? "ชุดลิงก์นี้ยังไม่มีแชทที่ใช้ทดสอบได้ เลือกแชทที่จะทดสอบ" : "ชุดลิงก์นี้ยังไม่มีกลุ่มที่ใช้ทดสอบได้ เลือกกลุ่มหรือบัญชีที่จะทดสอบ");
+                }
+                account = c.DeviceId is { } chosen
+                    ? TestDevices.AccountOf(accountList, chosen, set.Channel)
+                    : LinkSetAccounts.PostingAccount(set, accountList) ?? throw new DomainException(LinkSetAccounts.NoPosterReason(accountList, set.Channel));
             }
-            account = c.DeviceId is { } chosen
-                ? TestDevices.AccountOf(accountList, chosen)
-                : LinkSetAccounts.PostingAccount(set, accountList) ?? throw new DomainException(LinkSetAccounts.NoPosterReason(accountList));
+            targetName = link is null ? account.DefaultTarget : link.Name;
+            targetUrl = link?.Url;
+            code = link?.Code;
         }
 
         var all = await collectionPosts.ListByCollectionAsync(ws.Id, collection.Id, ct);
@@ -359,12 +422,13 @@ public sealed class CreateTestPostCommandHandler(
         var text = string.IsNullOrWhiteSpace(c.Text) ? picked?.Text : c.Text.Trim();
         if (text is null) throw new DomainException("ชุดโพสต์นี้ยังไม่มีโพสต์ที่ใช้ได้ ใส่ข้อความที่ต้องการทดสอบ");
 
-        var code = link?.Code;
-        var composed = PostComposer.ComposeFull(text, code, picked?.SettingsIn(collection) ?? collection.Settings, random.NextDouble);
+        var composed = isLine
+            ? PostComposer.ComposeFull(text, code, new CollectionSettings(), random.NextDouble, ComposeMode.Chat, targetName)
+            : PostComposer.ComposeFull(text, code, picked?.SettingsIn(collection) ?? collection.Settings, random.NextDouble);
         var now = clock.GetUtcNow();
         var post = Post.Test(
-            ws.Id, account, link is null ? account.DefaultTarget : link.Name, composed, picked?.MediaIds ?? [], now, picked?.Id, link?.Id,
-            link?.Url, code);
+            ws.Id, account, targetName ?? account.DefaultTarget, composed, picked?.MediaIds ?? [], now, picked?.Id, link?.Id,
+            targetUrl, code);
         postRepo.Add(post);
         if (account.DeviceId is { } deviceId) events.Add(DeviceEvents.PostChanged(ws.Id, deviceId, post, now));
         await uow.SaveChangesAsync(ct);
@@ -375,20 +439,20 @@ public sealed class CreateTestPostCommandHandler(
 /// <summary>Which browser a test post goes to when the workspace has more than one extension.</summary>
 internal static class TestDevices
 {
-    /// <summary>The Facebook account of the chosen device; 404 when the workspace has no such device, 422 when it has no account.</summary>
-    public static SocialAccount AccountOf(IReadOnlyList<SocialAccount> accounts, Guid deviceId) =>
-        accounts.FirstOrDefault(a => a.DeviceId == deviceId) ?? throw new NotFoundException("ส่วนขยาย", deviceId);
+    /// <summary>The account of the chosen device and platform; 404 when not found.</summary>
+    public static SocialAccount AccountOf(IReadOnlyList<SocialAccount> accounts, Guid deviceId, Platform platform = Platform.Fb) =>
+        accounts.FirstOrDefault(a => a.DeviceId == deviceId && a.Platform == platform) ?? throw new NotFoundException("ส่วนขยาย", deviceId);
 
     /// <summary>
     /// The account that sends a test with no device named: when only one extension is connected it, else the person must
-    /// choose (a test that goes to an arbitrary browser would say nothing about the one they meant to try).
+    /// choose.
     /// </summary>
-    public static SocialAccount Default(IReadOnlyList<SocialAccount> accounts)
+    public static SocialAccount Default(IReadOnlyList<SocialAccount> accounts, Platform platform = Platform.Fb)
     {
-        var connected = accounts.Where(a => a.IsConnected).ToList();
+        var connected = accounts.Where(a => a.Platform == platform && a.IsConnected).ToList();
         return connected.Count switch
         {
-            0 => throw new DomainException(CreateScheduleCommandHandler.NoDevice),
+            0 => throw new DomainException(platform == Platform.Line ? LinkSetAccounts.NoLineDevice : CreateScheduleCommandHandler.NoDevice),
             1 => connected[0],
             _ => throw new DomainException("มีส่วนขยายมากกว่า 1 เครื่อง เลือกส่วนขยายที่จะส่งงานทดสอบก่อน"),
         };

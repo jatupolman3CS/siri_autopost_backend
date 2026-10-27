@@ -75,12 +75,21 @@ public sealed class SaveScheduleRequestValidator : AbstractValidator<SaveSchedul
         RuleFor(x => x.UtcOffsetMinutes).InclusiveBetween(-840, 840).WithMessage("เขตเวลาไม่ถูกต้อง");
         RuleFor(x => x.GroupGapMinutes).InclusiveBetween(0, Schedule.MaxGroupGapMinutes)
             .WithMessage($"ระยะห่างต่อกลุ่มต้องอยู่ระหว่าง 0–{Schedule.MaxGroupGapMinutes} นาที");
-        RuleFor(x => x.Overrides).Must(o => o is null || o.Count <= LinkSet.MaxLinks + LinkSet.MaxAccounts)
+        RuleFor(x => x.Overrides).Must(o => o is null || o.Count <= LinkSet.MaxLinksFor(Platform.Line) + LinkSet.MaxAccounts)
             .WithMessage("ตั้งเวลาเฉพาะกลุ่มได้ไม่เกินจำนวนกลุ่มในชุด");
         RuleFor(x => x.Overrides).Must(o => o is null || o.Keys.All(ScheduleRules.IsOverrideKey))
             .WithMessage("ชื่อเวลาเฉพาะกลุ่มไม่ถูกต้อง");
         RuleFor(x => x.Overrides).Must(o => o is null || o.Values.All(ScheduleRules.IsTimeList))
             .WithMessage($"เวลาเฉพาะกลุ่มต้องเป็นรูปแบบ HH:mm และเลือกได้ไม่เกิน {Schedule.MaxTimes} เวลา");
+
+        RuleFor(x => x.LineOptions!.AllowedFrom).Must(TimeOfDay.IsValid).When(x => x.LineOptions is not null)
+            .WithMessage("เวลาเริ่มช่วงอนุญาตส่งไม่ถูกต้อง ใช้รูปแบบ HH:mm");
+        RuleFor(x => x.LineOptions!.AllowedTo).Must(TimeOfDay.IsValid).When(x => x.LineOptions is not null)
+            .WithMessage("เวลาสิ้นสุดช่วงอนุญาตส่งไม่ถูกต้อง ใช้รูปแบบ HH:mm");
+        RuleFor(x => x.LineOptions).Must(opt => opt!.AllowedFrom != opt.AllowedTo).When(x => x.LineOptions is not null)
+            .WithMessage("เวลาเริ่มและเวลาสิ้นสุดช่วงส่งต้องไม่เป็นเวลาเดียวกัน");
+        RuleFor(x => x.LineOptions!.SkipIfActiveMinutes).InclusiveBetween(5, 240).When(x => x.LineOptions is not null)
+            .WithMessage("ระยะเวลาตรวจจับความเคลื่อนไหวลูกค้าต้องอยู่ระหว่าง 5–240 นาที");
     }
 }
 

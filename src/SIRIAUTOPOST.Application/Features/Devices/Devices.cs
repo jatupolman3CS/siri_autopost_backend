@@ -16,19 +16,29 @@ namespace SIRIAUTOPOST.Application.Features.Devices;
 public sealed record GetDevicesQuery(Guid WorkspaceId) : IQuery<IReadOnlyList<DeviceDto>>;
 
 public sealed class GetDevicesQueryHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ICurrentUser current, TimeProvider clock)
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ILineChatRepository lineChats, ICurrentUser current, TimeProvider clock)
     : IQueryHandler<GetDevicesQuery, IReadOnlyList<DeviceDto>>
 {
     public async Task<IReadOnlyList<DeviceDto>> HandleAsync(GetDevicesQuery q, CancellationToken ct = default)
     {
         var ws = await workspaces.RequireAsync(q.WorkspaceId, current, WorkspaceRole.Viewer, ct);
-        var byDevice = (await accounts.ListAsync(ws.Id, ct))
-            .Where(a => a.DeviceId is not null)
+        var accList = await accounts.ListAsync(ws.Id, ct);
+        var fbByDevice = accList
+            .Where(a => a.DeviceId is not null && a.Platform == Platform.Fb)
             .ToDictionary(a => a.DeviceId!.Value, a => a.Id);
+        var lineByDevice = accList
+            .Where(a => a.DeviceId is not null && a.Platform == Platform.Line)
+            .ToDictionary(a => a.DeviceId!.Value, a => a);
         var now = clock.GetUtcNow();
-        return (await devices.ListAsync(ws.Id, ct))
-            .Select(d => DeviceDto.From(d, byDevice.TryGetValue(d.Id, out var acc) ? acc : null, now))
-            .ToList();
+        var deviceList = await devices.ListAsync(ws.Id, ct);
+        var dtos = new List<DeviceDto>();
+        foreach (var d in deviceList)
+        {
+            var fbId = fbByDevice.TryGetValue(d.Id, out var fId) ? (Guid?)fId : null;
+            lineByDevice.TryGetValue(d.Id, out var lineAcc);
+            dtos.Add(DeviceDto.From(d, fbId, now, await DeviceLineSummary.OfAsync(d, lineAcc, lineChats, now, ct)));
+        }
+        return dtos;
     }
 }
 
@@ -61,7 +71,7 @@ public sealed class CreatePairingCodeCommandHandler(
 public sealed record RevokeDeviceCommand(Guid WorkspaceId, Guid DeviceId) : ICommand<Unit>;
 
 public sealed class RevokeDeviceCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps,
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ILineChatRepository lineChats, IPostRepository posts, IPostBumpRepository bumps,
     IDeviceEventRepository events, INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<RevokeDeviceCommand, Unit>
 {
@@ -69,7 +79,7 @@ public sealed class RevokeDeviceCommandHandler(
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        var cancelled = await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct);
+        var cancelled = await DeviceRevocation.RevokeAsync(device, "ยกเลิกการผูกอุปกรณ์ระหว่างโพสต์", accounts, posts, bumps, devices, events, clock.GetUtcNow(), ct, lineChats);
         await uow.SaveChangesAsync(ct);
         await events.PruneAsync(device.Id, DeviceRevocation.KeepEvents, ct);
         await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DeviceUnbound(device, cancelled)], ct);
@@ -88,10 +98,14 @@ internal static class DeviceRevocation
     /// <summary>Disconnects the account, fails its unfinished posts and removes the device. The caller saves. Returns how many posts it cancelled.</summary>
     public static async Task<int> RevokeAsync(
         Device device, string whilePostingDetail, IAccountRepository accounts, IPostRepository posts, IPostBumpRepository bumps,
-        IDeviceRepository devices, IDeviceEventRepository events, DateTimeOffset now, CancellationToken ct)
+        IDeviceRepository devices, IDeviceEventRepository events, DateTimeOffset now, CancellationToken ct, ILineChatRepository lineChats)
     {
-        var account = await accounts.GetByDeviceAsync(device.Id, ct);
-        account?.Disconnect();
+        var deviceAccounts = await accounts.ListByDeviceAsync(device.Id, ct);
+        foreach (var acc in deviceAccounts)
+        {
+            acc.Disconnect();
+            if (acc.Platform == Platform.Line) await lineChats.DeleteByAccountAsync(acc.Id, ct); // customers' names go with the browser
+        }
         var cancelled = 0;
         foreach (var p in await posts.ListClaimedByAsync(device.Id, ct))
         {
@@ -99,16 +113,19 @@ internal static class DeviceRevocation
             events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
             cancelled++;
         }
-        if (account is not null)
+        foreach (var acc in deviceAccounts)
         {
-            foreach (var p in await posts.ListOpenByAccountAsync(account.Id, ct))
+            foreach (var p in await posts.ListOpenByAccountAsync(acc.Id, ct))
             {
                 p.Fail(FailureCode.Session, QueuedDetail, now);
                 events.Add(DeviceEvents.PostChanged(device.WorkspaceId, device.Id, p, now));
                 cancelled++;
             }
-            // Comments that were to bump its posts have no browser to make them any more.
-            foreach (var b in await bumps.ListOpenByAccountAsync(account.Id, ct)) b.Skip(QueuedDetail, now);
+            if (acc.Platform == Platform.Fb)
+            {
+                // Comments that were to bump its posts have no browser to make them any more.
+                foreach (var b in await bumps.ListOpenByAccountAsync(acc.Id, ct)) b.Skip(QueuedDetail, now);
+            }
         }
         devices.Remove(device);
         events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Revoked, new { name = device.Name }, now));
@@ -123,7 +140,7 @@ internal static class DeviceRevocation
 public sealed record UpdateDeviceCommand(Guid WorkspaceId, Guid DeviceId, string? Name, bool? JobsPaused) : ICommand<DeviceDto>;
 
 public sealed class UpdateDeviceCommandHandler(
-    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, IPostRepository posts, IDeviceEventRepository events,
+    IWorkspaceRepository workspaces, IDeviceRepository devices, IAccountRepository accounts, ILineChatRepository lineChats, IPostRepository posts, IDeviceEventRepository events,
     INotificationDispatcher notifier, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UpdateDeviceCommand, DeviceDto>
 {
@@ -131,7 +148,7 @@ public sealed class UpdateDeviceCommandHandler(
     {
         var ws = await workspaces.RequireAsync(c.WorkspaceId, current, WorkspaceRole.Admin, ct);
         var device = await devices.GetAsync(ws.Id, c.DeviceId, ct) ?? throw new NotFoundException("อุปกรณ์", c.DeviceId);
-        var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        var fbAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Fb, ct);
         if (c.Name is not null)
         {
             // Extensions of one workspace must have different names: they are told apart by name when posting.
@@ -139,7 +156,7 @@ public sealed class UpdateDeviceCommandHandler(
             if (wanted.Length > 0 && (await devices.ListNamesAsync(ws.Id, device.Id, ct)).Any(n => Device.SameName(n, wanted)))
                 throw new DomainException($"มีส่วนขยายชื่อ \"{wanted}\" อยู่ในบัญชีนี้แล้ว ตั้งชื่อที่ไม่ซ้ำกัน");
             device.Rename(c.Name);
-            account?.FollowDevice(device);
+            fbAccount?.FollowDevice(device);
         }
         var now = clock.GetUtcNow();
         var pauseChanged = false;
@@ -153,10 +170,25 @@ public sealed class UpdateDeviceCommandHandler(
         await uow.SaveChangesAsync(ct);
         if (pauseChanged)
         {
-            var waiting = account is null ? 0 : (await posts.ListOpenByAccountAsync(account.Id, ct)).Count;
+            var waiting = fbAccount is null ? 0 : (await posts.ListOpenByAccountAsync(fbAccount.Id, ct)).Count;
             await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DeviceJobsPaused(device, device.JobsPaused, waiting)], ct);
         }
-        return DeviceDto.From(device, account?.Id, now);
+        var lineAcc = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
+        return DeviceDto.From(device, fbAccount?.Id, now, await DeviceLineSummary.OfAsync(device, lineAcc, lineChats, now, ct));
+    }
+}
+
+/// <summary>The one place that turns a device's Line account into the summary the web shows (list, update).</summary>
+internal static class DeviceLineSummary
+{
+    public static async Task<DeviceLineSummaryDto?> OfAsync(Device d, SocialAccount? lineAcc, ILineChatRepository lineChats, DateTimeOffset now, CancellationToken ct)
+    {
+        if (lineAcc is null) return null;
+        var chatCount = await lineChats.CountByAccountAsync(lineAcc.Id, ct);
+        var maxSynced = await lineChats.MaxSyncedAtAsync(lineAcc.Id, ct);
+        return new DeviceLineSummaryDto(
+            lineAcc.Id, lineAcc.Name, lineAcc.Handle, d.LineBotId ?? lineAcc.Handle, d.IsLineReady(now), d.LineReadyAt,
+            lineAcc.RestUntil, maxSynced, chatCount, lineAcc.Health == AccountHealth.Relogin);
     }
 }
 
@@ -287,8 +319,14 @@ public sealed class PairDeviceCommandHandler(
             events.Add(DeviceEvents.PostChanged(old.WorkspaceId, old.Id, p, now));
         }
         foreach (var b in await bumps.ListClaimedByAsync(old.Id, ct)) b.Fail("ส่วนขยายจับคู่ใหม่ระหว่างดันโพสต์", now);
-        var oldAccount = await accounts.GetByDeviceAsync(old.Id, ct);
-        if (oldAccount is not null && oldAccount != kept) oldAccount.Disconnect(); // an account the new pairing does not take over
+        var oldAccounts = await accounts.ListByDeviceAsync(old.Id, ct);
+        foreach (var oldAcc in oldAccounts)
+        {
+            if (oldAcc != kept)
+            {
+                oldAcc.Disconnect(); // a Line account keeps its chats: the same OA reconnects to the new browser (see the heartbeat)
+            }
+        }
         devices.Remove(old);
         events.Add(DeviceEvents.Make(old.WorkspaceId, old.Id, DeviceEventType.Revoked, new { name = old.Name }, now));
     }
@@ -308,7 +346,7 @@ public sealed class PairDeviceCommandHandler(
 /// whose account waits for a login (the engine hands it nothing) is healthy again from then on, with nobody pressing
 /// "sign in again" on the web. Null or false changes nothing.
 /// </param>
-public sealed record DeviceHeartbeatCommand(string? Version, bool? SessionOk = null) : ICommand<DeviceStatusDto>;
+public sealed record DeviceHeartbeatCommand(string? Version, bool? SessionOk = null, LineHeartbeatDto? Line = null, bool? LineSessionOk = null) : ICommand<DeviceStatusDto>;
 
 public sealed class DeviceHeartbeatCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
@@ -322,23 +360,110 @@ public sealed class DeviceHeartbeatCommandHandler(
         if (device.Seen(c.Version, now))
             events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         var pauseEnded = DevicePause.Settle(device, events, now, out var pauseReason);
-        var account = await accounts.GetByDeviceAsync(device.Id, ct);
-        // The extension saw Facebook logged in again: the account that waited for a login takes jobs again.
-        if (c.SessionOk == true && account is { Health: AccountHealth.Relogin })
+        var fbAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Fb, ct);
+        if (c.SessionOk == true && fbAccount is { Health: AccountHealth.Relogin })
         {
-            account.MarkHealthy();
-            events.Add(DevicePause.Changed(device, now)); // the web's account list reads the new health
+            fbAccount.MarkHealthy();
+            events.Add(DevicePause.Changed(device, now));
         }
-        await uow.SaveChangesAsync(ct);
+
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
-        if (pauseEnded) await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DevicePauseEnded(device, pauseReason)], ct);
-        // "Paused" is also what a suspended, banned or paused customer's device is told, and a device the engine
-        // paused itself (a Facebook block, posts that kept failing): it gets no jobs.
         var owner = await users.OwnerOfAsync(ws, ct);
+
+        SocialAccount? lineAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
+        string? lineNote = null;
+        bool lineSessionLost = false;
+
+        if (owner.HasLineChat && c.Line is { } lineReq)
+        {
+            if (lineReq.Ready && !string.IsNullOrWhiteSpace(lineReq.BotId))
+            {
+                var cleanBotId = lineReq.BotId.Trim();
+                var cleanOaName = string.IsNullOrWhiteSpace(lineReq.OaName) ? cleanBotId : lineReq.OaName.Trim();
+
+                if (lineAccount is null)
+                {
+                    await uow.ExecuteInTransactionAsync($"device:line:{device.Id:N}", async () =>
+                    {
+                        lineAccount = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct);
+                        if (lineAccount is null)
+                        {
+                            var existingWithHandle = await accounts.FindByHandleAsync(ws.Id, Platform.Line, cleanBotId, ct);
+                            // An OA another extension still reports for is refused (nothing flips between two devices every 30 s); an OA
+                            // whose browser was unbound, re-paired or has stopped reporting is taken over, chats and history included.
+                            var heldByLiveDevice = false;
+                            if (existingWithHandle?.DeviceId is { } holderId && holderId != device.Id)
+                            {
+                                var holder = await devices.GetAsync(ws.Id, holderId, ct);
+                                heldByLiveDevice = holder is not null && holder.IsLineReady(now);
+                            }
+                            if (existingWithHandle is not null && heldByLiveDevice)
+                            {
+                                lineNote = "บัญชี LINE OA นี้ผูกอยู่กับเครื่องอื่นในเวิร์กสเปซแล้ว";
+                            }
+                            else if (existingWithHandle is not null)
+                            {
+                                existingWithHandle.ReattachLine(device.Id, cleanOaName);
+                                lineAccount = existingWithHandle;
+                                device.SetLineReady(cleanBotId, now);
+                            }
+                            else
+                            {
+                                var totalAccs = await accounts.CountAsync(ws.Id, ct);
+                                lineAccount = SocialAccount.CreateLine(ws.Id, device.Id, cleanBotId, cleanOaName, now, totalAccs);
+                                accounts.Add(lineAccount);
+                                device.SetLineReady(cleanBotId, now);
+                            }
+                            // Saved INSIDE the lock: a heartbeat that waits for it must find this account, or two
+                            // concurrent heartbeats of one device would each create a Line account.
+                            await uow.SaveChangesAsync(ct);
+                        }
+                    }, ct);
+                }
+                else
+                {
+                    if (!string.Equals(lineAccount.Handle, cleanBotId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        lineNote = "เครื่องนี้ผูกกับ LINE OA อื่นอยู่แล้ว ไม่สามารถเปลี่ยน LINE OA ได้";
+                    }
+                    else
+                    {
+                        device.SetLineReady(cleanBotId, now);
+                        var expectedName = $"LINE · {cleanOaName}";
+                        if (expectedName.Length > 120) expectedName = expectedName[..120];
+                        if (lineAccount.Name != expectedName) lineAccount.RenameLine(cleanOaName); // a rename never undoes a rest or a login loss
+                    }
+                }
+            }
+            else
+            {
+                device.ClearLineReady();
+            }
+        }
+
+        if (c.LineSessionOk == true && lineAccount is { Health: AccountHealth.Relogin })
+        {
+            lineAccount.MarkHealthy();
+            events.Add(DevicePause.Changed(device, now));
+        }
+
+        if (lineAccount is { Health: AccountHealth.Relogin })
+        {
+            lineSessionLost = true;
+        }
+
+        await uow.SaveChangesAsync(ct);
+        if (pauseEnded) await EngineNotices.SendAsync(notifier, ws.Id, [EngineNotices.DevicePauseEnded(device, pauseReason)], ct);
+
         var auto = device.IsAutoPaused(now);
-        return new DeviceStatusDto(device.Id, device.Name, ws.Id, ws.Name, account?.Id, account?.GroupLinks.Count ?? 0,
+        return new DeviceStatusDto(
+            device.Id, device.Name, ws.Id, ws.Name, fbAccount?.Id, fbAccount?.GroupLinks.Count ?? 0,
             ws.ExtensionOnline, AntiBanDto.From(ws.AntiBan), device.JobsPaused || !owner.CanPost || auto,
-            auto ? device.AutoPausedUntil : null, auto ? device.AutoPauseReason : null, account is { CanPost: false });
+            auto ? device.AutoPausedUntil : null, auto ? device.AutoPauseReason : null,
+            fbAccount is { CanPost: false },
+            LineSessionLost: lineSessionLost,
+            LineAccountId: lineAccount?.Id,
+            LineNote: lineNote);
     }
 }
 
@@ -364,6 +489,63 @@ public sealed class SyncDeviceGroupsCommandHandler(
     }
 }
 
+public sealed record SyncLineChatDto(string UserId, string Name, IReadOnlyList<string>? Labels = null, DateTimeOffset? LastMessageAt = null, bool? Unread = null);
+
+public sealed record SyncLineChatsCommand(string BotId, string OaName, bool Complete, IReadOnlyList<SyncLineChatDto> Chats) : ICommand<int>;
+
+public sealed class SyncLineChatsCommandHandler(
+    ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts,
+    ILineChatRepository lineChats, IDeviceEventRepository events, IUnitOfWork uow, TimeProvider clock)
+    : ICommandHandler<SyncLineChatsCommand, int>
+{
+    public async Task<int> HandleAsync(SyncLineChatsCommand c, CancellationToken ct = default)
+    {
+        var device = await DeviceAccess.RequireAsync(devices, current, ct);
+        var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("ไม่พบเวิร์กสเปซ", device.WorkspaceId);
+        await users.RequireLineChatAsync(ws, ct);
+        var account = await accounts.GetByDeviceAsync(device.Id, Platform.Line, ct)
+            ?? throw new DomainException("อุปกรณ์นี้ยังไม่ได้ผูกบัญชี LINE OA");
+        var now = clock.GetUtcNow();
+
+        if (device.Seen(null, now))
+            events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
+        // The roster belongs to the OA this device is attached to: a list for another OA is refused, never merged in.
+        if (!string.Equals(account.Handle, c.BotId?.Trim(), StringComparison.OrdinalIgnoreCase))
+            throw new DomainException("รายชื่อแชทนี้เป็นของ LINE OA อื่น ไม่ตรงกับ LINE OA ที่เครื่องนี้ผูกอยู่");
+
+        // The extension scrolls a list that may repeat a row: the last one of each customer wins. Labels are kept short.
+        var rows = c.Chats
+            .Where(x => LineChatUrl.IsValidUserId(x.UserId))
+            .GroupBy(x => x.UserId, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.Last())
+            .ToList();
+        var incoming = rows.Select(x => LineChat.Create(
+            device.WorkspaceId,
+            account.Id,
+            x.UserId,
+            LineChatUrl.Build(account.Handle, x.UserId),
+            x.Name,
+            (x.Labels ?? []).Where(l => !string.IsNullOrWhiteSpace(l)).Select(l => l.Trim().Length > 60 ? l.Trim()[..60] : l.Trim()).Distinct().Take(20).ToList(),
+            x.LastMessageAt,
+            x.Unread ?? false,
+            now)).ToList();
+
+        int total = 0;
+        await uow.ExecuteInTransactionAsync($"line-chats:{account.Id:N}", async () =>
+        {
+            var before = await lineChats.CountByAccountAsync(account.Id, ct);
+            // An empty "complete" list is a failed scroll, not a customer base that vanished: it removes nothing.
+            await lineChats.ReplaceForAccountAsync(account.Id, incoming, c.Complete && incoming.Count > 0, now, ct);
+            await uow.SaveChangesAsync(ct);
+            total = await lineChats.CountByAccountAsync(account.Id, ct);
+            if (total != before || incoming.Count > 0)
+                events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.LineChats, new { count = total }, now));
+            await uow.SaveChangesAsync(ct);
+        }, ct);
+        return total;
+    }
+}
+
 /// <summary>
 /// Hands the device the next post to publish, or nothing. First it lets the schedules catch up with the clock
 /// (<see cref="ScheduleTopUp"/>). On the way it settles posts it cannot hand out: too late for the offline policy
@@ -378,7 +560,7 @@ public sealed class ClaimJobCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
     IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, ISetLinkRepository links, ILinkSetRepository linkSets,
     IScheduleRepository schedules, ICollectionRepository collections, IPostBumpRepository bumps, IDeviceEventRepository events,
-    ScheduleTopUp topUp, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock)
+    ScheduleTopUp topUp, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock, ILineChatRepository? lineChats = null)
     : ICommandHandler<ClaimJobCommand, JobDto?>
 {
     /// <summary>The failure rate only stops the engine once this many posts finished in the last 24 hours.</summary>
@@ -520,9 +702,22 @@ public sealed class ClaimJobCommandHandler(
     // A browser that is new has a daily limit lower than the platform's while warm-up is on.
     private static int WarmupLimit(TimeSpan age) => age.TotalDays < 3 ? 3 : age.TotalDays < 7 ? 6 : age.TotalDays < 14 ? 12 : int.MaxValue;
 
+    /// <summary>Plan and all-platform daily numbers shared by the accounts of one claim.</summary>
+    private sealed record Quotas(int? PlanPosts, int SentByOwner, int SentAll);
+
+    /// <summary>What one account offers: a post to hand out, or nothing (GapBlocked: it is still inside the anti-ban gap).</summary>
+    private sealed record Pick(Candidate? Candidate, bool GapBlocked = false);
+
+    private sealed record Candidate(
+        Post Post,
+        SocialAccount Account,
+        string Url,
+        Guid? SetId,
+        Schedule? Schedule,
+        DateTimeOffset DueAt);
+
     private async Task<JobDto?> NextAsync(Device device, Workspace ws, DateTimeOffset now, Notes notes, CancellationToken ct)
     {
-        // A post the device never reported on is not retried automatically: it may have gone out.
         var claimed = await posts.ListClaimedByAsync(device.Id, ct);
         foreach (var p in claimed.Where(p => p.ClaimExpired(now)))
         {
@@ -531,55 +726,149 @@ public sealed class ClaimJobCommandHandler(
             notes.Settled(p);
             notes.Lost.Add(p);
         }
-        if (claimed.Any(p => !p.ClaimExpired(now))) return null; // one post at a time
-        // A bump the browser took and never reported is not retried either (the comment may be there).
+        if (claimed.Any(p => !p.ClaimExpired(now))) return null;
+
         var claimedBumps = await bumps.ListClaimedByAsync(device.Id, ct);
         foreach (var b in claimedBumps.Where(b => b.ClaimExpired(now))) b.Fail("ไม่ได้รับผลการดันโพสต์จากส่วนขยายภายใน 15 นาที", now);
         if (claimedBumps.Any(b => !b.ClaimExpired(now))) return null;
 
-        var account = await accounts.GetByDeviceAsync(device.Id, ct);
-        notes.PauseEnded = DevicePause.Settle(device, events, now, out var pauseReason); // a pause that ran out ends here
+        notes.PauseEnded = DevicePause.Settle(device, events, now, out var pauseReason);
         notes.PauseReason = pauseReason;
-        if (device.JobsPaused || device.IsAutoPaused(now) || !ws.ExtensionOnline || account is null || !account.CanPost) return null;
+        if (device.JobsPaused || device.IsAutoPaused(now) || !ws.ExtensionOnline) return null;
         var owner = await users.OwnerOfAsync(ws, ct);
-        if (!owner.CanPost) return null; // suspended, banned or paused by the platform admin
+        if (!owner.CanPost) return null;
 
+        var deviceAccounts = await accounts.ListByDeviceAsync(device.Id, ct);
+        if (deviceAccounts.Count == 0) return null;
+
+        // The shared daily numbers (plan, all-platform cap) cost several queries: only worked out once some account has a due post.
+        Quotas? quotas = null;
+        async Task<Quotas> QuotasAsync()
+        {
+            if (quotas is not null) return quotas;
+            var plan = (await plans.ForAsync(owner, ct)).Posts;
+            var ownWorkspaces = (await workspaces.ListByOwnerAsync(owner.Id, ct)).Select(w => w.Id).ToList();
+            var byOwner = plan is null ? 0 : await posts.CountPublishedSinceAsync(ownWorkspaces, now.AddDays(-1), ct);
+            var all = ws.AntiBan.Advanced.DailyAll > 0 ? await posts.CountPublishedInWorkspaceSinceAsync(ws.Id, now.AddDays(-1), ct) : 0;
+            return quotas = new Quotas(plan, byOwner, all);
+        }
+
+        var candidates = new List<Candidate>();
+        var fbGapBlocked = false;
+        foreach (var acc in deviceAccounts)
+        {
+            if (!acc.CanPost || acc.IsResting(now)) continue;
+            if (acc.Platform == Platform.Line && (!device.IsLineReady(now) || !owner.HasLineChat)) continue;
+
+            var pick = await FindCandidateAsync(device, ws, acc, owner, QuotasAsync, now, notes, ct);
+            if (pick.Candidate is not null) candidates.Add(pick.Candidate);
+            if (acc.Platform == Platform.Fb && pick.GapBlocked) fbGapBlocked = true;
+        }
+
+        if (candidates.Count > 0)
+        {
+            var winner = candidates
+                .OrderBy(c => c.DueAt)
+                .ThenBy(c => c.Account.Platform == Platform.Fb ? 0 : 1)
+                .First();
+
+            winner.Post.Claim(device.Id, now);
+            notes.Taken = winner.Post;
+
+            var files = (await media.ListAsync(ws.Id, ct)).ToDictionary(f => f.Id);
+            var items = winner.Post.MediaIds
+                .Where(files.ContainsKey)
+                .Select(id => new JobMediaDto(id, files[id].Name, files[id].ContentType))
+                .ToList();
+
+            if (winner.Account.Platform == Platform.Line)
+            {
+                var lineOpts = winner.Schedule?.EffectiveLineOptions ?? new LineOptions();
+                var bubbles = PostComposer.SplitBubbles(winner.Post.Content, lineOpts.SplitBubbles);
+                var lineDto = new LineJobOptionsDto(lineOpts.SkipIfActiveMinutes, lineOpts.ImagesFirst, lineOpts.AllowedFrom, lineOpts.AllowedTo);
+                return new JobDto(
+                    winner.Post.Id, winner.Post.Target, winner.Url, winner.Post.Content, items,
+                    AntiBanDto.From(ws.AntiBan), "post", "line", "",
+                    Shot: false, Channel: "line", Bubbles: bubbles, Line: lineDto);
+            }
+            else
+            {
+                var pageTags = "";
+                if (winner.Schedule is not null)
+                {
+                    pageTags = (await collections.GetAsync(ws.Id, winner.Schedule.CollectionId, ct))?.Settings.PageTags ?? "";
+                }
+                var kind = FacebookGroupUrl.KindOf(winner.Url) == FacebookTargetKind.Page ? "page" : "group";
+                return new JobDto(
+                    winner.Post.Id, winner.Post.Target, winner.Url, winner.Post.Content, items,
+                    AntiBanDto.From(ws.AntiBan), "post", kind, pageTags,
+                    Shot: await WantsShotAsync(ws, owner, winner.Post, winner.SetId, ct),
+                    Channel: "fb");
+            }
+        }
+
+        // A bump is a Facebook comment: it waits like a post for the anti-ban gap (a comment right after a post is as fast as two posts).
+        var fbAcc = deviceAccounts.FirstOrDefault(a => a.Platform == Platform.Fb && a.CanPost && !a.IsResting(now));
+        if (fbAcc is not null && !fbGapBlocked)
+        {
+            return await NextBumpAsync(device, ws, fbAcc, owner, now, notes, ct);
+        }
+
+        return null;
+    }
+
+    private async Task<Pick> FindCandidateAsync(
+        Device device, Workspace ws, SocialAccount account, User owner,
+        Func<Task<Quotas>> quotasAsync,
+        DateTimeOffset now, Notes notes, CancellationToken ct)
+    {
         var advanced = ws.AntiBan.Advanced;
-        var gap = TimeSpan.FromMinutes(Math.Max(ws.AntiBan.Min, advanced.MinGap));
-        // The pause between two actions of one account counts bumps too: a comment right after a post is as fast as two posts.
-        var lastPosted = await posts.LastPublishedAtAsync(account.Id, ct);
-        var lastBump = await bumps.LastDoneAtAsync(account.Id, ct);
-        var last = lastPosted is { } lp0 && lastBump is { } lb ? (lp0 > lb ? lp0 : lb) : lastPosted ?? lastBump;
-        if (last is { } l && now - l < gap) return null;
+        TimeSpan gap;
+        DateTimeOffset? last;
+        if (account.Platform == Platform.Line)
+        {
+            gap = TimeSpan.FromSeconds(ws.AntiBan.LineChat.MinGapSeconds);
+            last = await posts.LastPublishedAtAsync(account.Id, ct);
+        }
+        else
+        {
+            gap = TimeSpan.FromMinutes(Math.Max(ws.AntiBan.Min, advanced.MinGap));
+            var lastPosted = await posts.LastPublishedAtAsync(account.Id, ct);
+            var lastBump = await bumps.LastDoneAtAsync(account.Id, ct);
+            last = lastPosted is { } lp0 && lastBump is { } lb ? (lp0 > lb ? lp0 : lb) : lastPosted ?? lastBump;
+        }
+
+        if (last is { } l && now - l < gap) return new Pick(null, GapBlocked: true);
 
         var due = await posts.ListDueAsync(account.Id, now, ct);
-        if (due.Count == 0) return await NextBumpAsync(device, ws, account, owner, now, notes, ct);
+        if (due.Count == 0) return new Pick(null);
 
-        // Too many of the last day's posts failed: the engine stops until they age out (or the numbers are changed).
+        // Too many of the last day's posts failed ON THIS PLATFORM: its account stops until they age out (or the numbers are
+        // changed). Per platform, so a noisy LINE channel never halts Facebook posting (decision D12) and the reverse.
         if (advanced.StopFailPct > 0)
         {
-            var (finished, failed) = await posts.CountOutcomesSinceAsync(ws.Id, now.AddDays(-1), ct);
-            if (finished >= MinFinishedForHalt && failed * 100 > advanced.StopFailPct * finished) return null;
+            var (finished, failed) = await posts.CountOutcomesSinceAsync(ws.Id, now.AddDays(-1), account.Platform, ct);
+            if (finished >= MinFinishedForHalt && failed * 100 > advanced.StopFailPct * finished) return new Pick(null);
         }
+        var shared = await quotasAsync();
+        var planPosts = shared.PlanPosts;
+        var sentByOwner = shared.SentByOwner;
+        var sentAll = shared.SentAll;
 
         var limit = ws.AntiBan.Limits.For(account.Platform);
         var warmedUp = ws.AntiBan.Warmup && WarmupLimit(now - device.CreatedAt) < limit;
         if (ws.AntiBan.Warmup) limit = Math.Min(limit, WarmupLimit(now - device.CreatedAt));
         var sentToday = await posts.CountPublishedSinceAsync(ws.Id, account.Platform, now.AddDays(-1), ct);
-        var sentAll = advanced.DailyAll > 0 ? await posts.CountPublishedInWorkspaceSinceAsync(ws.Id, now.AddDays(-1), ct) : 0;
-        // The plan's posts per 24 hours count every workspace of the owner.
-        var planPosts = (await plans.ForAsync(owner, ct)).Posts;
-        var ownWorkspaces = (await workspaces.ListByOwnerAsync(owner.Id, ct)).Select(w => w.Id).ToList();
-        var sentByOwner = planPosts is null ? 0 : await posts.CountPublishedSinceAsync(ownWorkspaces, now.AddDays(-1), ct);
-        // The anti-ban gap is pacing, not lateness: a post held back by it is not "late" for the offline policy
-        // (otherwise two posts due together would leave the second one skipped under the skip policy).
+
+        if (account.Platform == Platform.Line && sentToday >= limit) return new Pick(null);
+
         var openFrom = last is { } lp ? lp + gap : DateTimeOffset.MinValue;
 
         var linkCache = new Dictionary<Guid, SetLink?>();
         var perLinkDay = new Dictionary<(Guid Link, DateTimeOffset Day), int>();
         var scheduleCache = new Dictionary<Guid, Schedule?>();
         var lastToLink = new Dictionary<Guid, DateTimeOffset?>();
-        DateTimeOffset? lastBegan = null; // when the browser last took a post (a schedule's gap between groups counts from it)
+        DateTimeOffset? lastBegan = null;
         var lastBeganKnown = false;
 
         async Task<Schedule?> ScheduleOfAsync(Guid scheduleId)
@@ -589,7 +878,6 @@ public sealed class ClaimJobCommandHandler(
             return found;
         }
 
-        // A group's daily cap counts calendar days, in the calendar of the schedule that made the post (UTC without one).
         async Task<(DateTimeOffset Start, DateTimeOffset End)> DayOfAsync(Post p)
         {
             var offset = p.ScheduleId is { } scheduleId ? (await ScheduleOfAsync(scheduleId))?.UtcOffsetMinutes ?? 0 : 0;
@@ -602,10 +890,6 @@ public sealed class ClaimJobCommandHandler(
             notes.Settled(p);
         }
 
-        // One group, one extension (2026-10-10): a post only goes to the browser of the link set it came from, and a
-        // group that sits in the sets of two extensions goes out from the extension that held it first. Anything else
-        // (a set handed to another machine after its posts were queued, a group copied into a second machine's set
-        // before this rule existed) is skipped with the reason, never posted from the wrong machine.
         IReadOnlyList<SocialAccount>? accountList = null;
         OwnershipMap? ownership = null;
         var setCache = new Dictionary<Guid, LinkSet?>();
@@ -614,45 +898,79 @@ public sealed class ClaimJobCommandHandler(
             accountList ??= await accounts.ListAsync(ws.Id, ct);
             if (!setCache.TryGetValue(link.LinkSetId, out var set)) setCache[link.LinkSetId] = set = await linkSets.GetAsync(ws.Id, link.LinkSetId, ct);
             if (set is null) return null;
-            var owner = LinkOwnership.OwnerOf(set, accountList);
-            if (owner is null) return $"ชุดลิงก์ \"{set.Name}\" ยังไม่ได้เลือกเครื่องที่จะโพสต์ จึงไม่โพสต์ (เลือกเครื่องในการ์ดของชุดลิงก์)";
-            if (owner != account.Id)
-                return $"ชุดลิงก์ \"{set.Name}\" ใช้เครื่อง \"{OwnershipMap.ExtensionName(owner.Value, accountList)}\" ไม่ใช่เครื่องนี้ จึงไม่โพสต์";
+            var setOwner = LinkOwnership.OwnerOf(set, accountList);
+            if (setOwner is null)
+                return link.Channel == Platform.Line
+                    ? $"ชุดลิงก์ \"{set.Name}\" ยังไม่ได้เลือกเครื่องที่จะส่ง จึงไม่ส่ง (เลือกเครื่องในการ์ดของชุดลิงก์)"
+                    : $"ชุดลิงก์ \"{set.Name}\" ยังไม่ได้เลือกเครื่องที่จะโพสต์ จึงไม่โพสต์ (เลือกเครื่องในการ์ดของชุดลิงก์)";
+            if (setOwner != account.Id)
+                return link.Channel == Platform.Line
+                    ? $"ชุดลิงก์ \"{set.Name}\" ใช้เครื่อง \"{OwnershipMap.ExtensionName(setOwner.Value, accountList)}\" ไม่ใช่เครื่องนี้ จึงไม่ส่ง"
+                    : $"ชุดลิงก์ \"{set.Name}\" ใช้เครื่อง \"{OwnershipMap.ExtensionName(setOwner.Value, accountList)}\" ไม่ใช่เครื่องนี้ จึงไม่โพสต์";
             ownership ??= OwnershipMap.Build(await linkSets.ListAsync(ws.Id, ct), await links.ListAsync(ws.Id, ct), accountList);
             return ownership.WinnerOf(link.Url) is { } first && first.Owner != account.Id
-                ? $"กลุ่มนี้อยู่ในชุดลิงก์ \"{first.Set.Name}\" ของเครื่อง \"{OwnershipMap.ExtensionName(first.Owner, accountList)}\" ด้วย (กลุ่มหนึ่งใช้ได้กับเครื่องเดียว) จึงไม่โพสต์จากเครื่องนี้"
+                ? (link.Channel == Platform.Line
+                    ? $"แชทนี้อยู่ในชุดลิงก์ \"{first.Set.Name}\" ของเครื่อง \"{OwnershipMap.ExtensionName(first.Owner, accountList)}\" ด้วย (แชทหนึ่งใช้ได้กับเครื่องเดียว) จึงไม่ส่งจากเครื่องนี้"
+                    : $"กลุ่มนี้อยู่ในชุดลิงก์ \"{first.Set.Name}\" ของเครื่อง \"{OwnershipMap.ExtensionName(first.Owner, accountList)}\" ด้วย (กลุ่มหนึ่งใช้ได้กับเครื่องเดียว) จึงไม่โพสต์จากเครื่องนี้")
                 : null;
         }
 
         foreach (var p in due)
         {
-            // A schedule's post "for another account of the set" (the retired feature) is never handed out: it would
-            // post a set's text through a second extension. Posts of the old composer have no schedule and no such key.
             if (p.ScheduleId is not null && p.LinkId is null && !p.IsTest && p.TargetKey is { } key && key.StartsWith("account:", StringComparison.Ordinal))
             {
                 p.Skip(now, "ชุดลิงก์ไม่โพสต์ผ่านเครื่องของบัญชีอื่นอีกแล้ว (ชุดหนึ่งใช้เครื่องเดียว) จึงไม่โพสต์");
                 Settle(p);
                 continue;
             }
+
+            Schedule? sch = null;
+            if (p.ScheduleId is { } sid)
+            {
+                sch = await ScheduleOfAsync(sid);
+            }
+
+            if (account.Platform == Platform.Line && lineChats is not null && !string.IsNullOrWhiteSpace(p.TargetUrl))
+            {
+                var userId = LineChatUrl.UserId(p.TargetUrl);
+                if (!string.IsNullOrWhiteSpace(userId))
+                {
+                    var chat = await lineChats.FindAsync(account.Id, userId, ct);
+                    if (chat is { DoNotSend: true })
+                    {
+                        p.Skip(now, "ลูกค้านี้ถูกตั้งเป็นห้ามส่ง");
+                        Settle(p);
+                        continue;
+                    }
+                }
+            }
+
             SetLink? link = null;
             var holdUntil = DateTimeOffset.MinValue;
+            if (account.Platform == Platform.Line && !p.IsTest && sch is not null && !sch.AllowsLineAt(now))
+            {
+                // Quiet hours (decision D11b): outside the schedule's allowed hours the post waits for the window to open, and
+                // the hours it spent waiting do not make it late. Other schedules' posts are still looked at.
+                holdUntil = Latest(holdUntil, sch.NextLineWindowOpen(now), DateTimeOffset.MinValue);
+            }
+            Guid? setOfPost = null;
             if (p.LinkId is { } linkId)
             {
                 if (!linkCache.TryGetValue(linkId, out link)) linkCache[linkId] = link = await links.GetAsync(ws.Id, linkId, ct);
                 if (link is null || !link.Enabled)
                 {
-                    p.Skip(now, "กลุ่มถูกปิดหรือถูกลบแล้ว");
+                    var noun = link?.Channel == Platform.Line ? "แชท" : "กลุ่ม";
+                    p.Skip(now, $"{noun}ถูกปิดหรือถูกลบแล้ว");
                     Settle(p);
                     continue;
                 }
-                // A test post goes to the extension the person chose for it (even one that does not own the set): not checked.
+                setOfPost = link.LinkSetId;
                 if (!p.IsTest && await WrongMachineAsync(link) is { } wrong)
                 {
                     p.Skip(now, wrong);
                     Settle(p);
                     continue;
                 }
-                // The group's own limit, else the one of its set ("posts a day per group").
                 if (!setCache.TryGetValue(link.LinkSetId, out var set)) setCache[link.LinkSetId] = set = await linkSets.GetAsync(ws.Id, link.LinkSetId, ct);
                 var dailyCap = set?.DailyCapFor(link) ?? link.DailyMax;
                 if (dailyCap > 0)
@@ -662,26 +980,26 @@ public sealed class ClaimJobCommandHandler(
                         perLinkDay[(linkId, dayStart)] = published = await posts.CountPublishedToLinkAsync(linkId, dayStart, dayEnd, ct);
                     if (published >= dailyCap)
                     {
-                        p.Skip(now, "ครบเพดานต่อวันของกลุ่มนี้");
+                        var noun = link.Channel == Platform.Line ? "แชท" : "กลุ่ม";
+                        p.Skip(now, $"ครบเพดานต่อวันของ{noun}นี้");
                         Settle(p);
                         continue;
                     }
                 }
-                if (advanced.Cooldown > 0)
+                if (advanced.Cooldown > 0 && account.Platform == Platform.Fb)
                 {
                     if (!lastToLink.TryGetValue(linkId, out var lastPost))
                         lastToLink[linkId] = lastPost = await posts.LastPublishedToLinkAtAsync(linkId, ct);
                     if (lastPost is { } lastAt) holdUntil = lastAt + TimeSpan.FromHours(advanced.Cooldown);
                 }
             }
+            else if (p.ScheduleId is not null && sch is not null)
+            {
+                setOfPost = sch.LinkSetId;
+            }
 
-            // A schedule with its own gap between groups ("how many minutes apart", 2026-10-13) keeps it here too, whatever put
-            // the posts close together (two rounds that overlap, a browser that was off and came back with a backlog, a
-            // second schedule): a post of such a schedule waits until the gap has passed since the browser last TOOK a
-            // post (start to start, so the minutes spent posting do not stretch the plan). A post somebody asked to post
-            // now, and a test, skip it: the person chose that moment. It is pacing, so lateness counts from when it ends.
             if (p.ScheduleId is { } gapScheduleId && p.RushedAt is null && !p.IsTest
-                && await ScheduleOfAsync(gapScheduleId) is { GroupGapMinutes: > 0 } gapSchedule)
+                && (sch ?? await ScheduleOfAsync(gapScheduleId)) is { GroupGapMinutes: > 0 } gapSchedule)
             {
                 if (!lastBeganKnown)
                 {
@@ -691,7 +1009,6 @@ public sealed class ClaimJobCommandHandler(
                 if (lastBegan is { } began) holdUntil = Latest(holdUntil, began + TimeSpan.FromMinutes(gapSchedule.GroupGapMinutes), DateTimeOffset.MinValue);
             }
 
-            // A group's cooldown is pacing too: lateness counts from when it ends.
             if (now - Latest(p.ScheduledAt, openFrom, holdUntil) > ws.Offline.MaxLateness)
             {
                 p.SkipLate(now);
@@ -699,9 +1016,15 @@ public sealed class ClaimJobCommandHandler(
                 notes.Late("งานเหล่านี้ถึงเวลาตอนเครื่องไม่ได้รับงานนานเกินกำหนด (ตั้งไว้ที่หน้านโยบายออฟไลน์) จึงไม่โพสต์ย้อนหลัง");
                 continue;
             }
-            if (holdUntil > now) continue; // the group had a post lately: it stays queued
+            if (holdUntil > now) continue;
+
             if (sentToday >= limit)
             {
+                if (account.Platform == Platform.Line)
+                {
+                    // A LINE post over the 24 h cap is not failed: it waits (the lateness rule skips it if it waits too long).
+                    return new Pick(null);
+                }
                 var detail = warmedUp
                     ? $"ครบโควตาช่วงอุ่นเครื่อง {limit} โพสต์ใน 24 ชั่วโมง"
                     : $"ครบโควตา {limit} โพสต์ใน 24 ชั่วโมงของแพลตฟอร์มนี้";
@@ -710,6 +1033,7 @@ public sealed class ClaimJobCommandHandler(
                 notes.Quota(detail);
                 continue;
             }
+
             if (advanced.DailyAll > 0 && sentAll >= advanced.DailyAll)
             {
                 var detail = $"ครบเพดานรวม {advanced.DailyAll} โพสต์ใน 24 ชั่วโมง (ทุกแพลตฟอร์ม)";
@@ -726,36 +1050,20 @@ public sealed class ClaimJobCommandHandler(
                 notes.Quota(detail);
                 continue;
             }
-            // Posts that came from a link of a link set carry the address; older ones look the group up by name.
+
             var url = p.TargetUrl ?? account.UrlFor(p.Target);
             if (url is null)
             {
-                p.Fail(FailureCode.Network, $"ไม่พบลิงก์ของกลุ่ม \"{p.Target}\" ในส่วนขยาย", now);
+                var noun = account.Platform == Platform.Line ? "แชท" : "กลุ่ม";
+                p.Fail(FailureCode.Network, $"ไม่พบลิงก์ของ{noun} \"{p.Target}\" ในส่วนขยาย", now);
                 Settle(p);
                 continue;
             }
-            p.Claim(device.Id, now);
-            var files = (await media.ListAsync(ws.Id, ct)).ToDictionary(f => f.Id);
-            var items = p.MediaIds
-                .Where(files.ContainsKey)
-                .Select(id => new JobMediaDto(id, files[id].Name, files[id].ContentType))
-                .ToList();
-            // The page tags are the schedule's collection's (an empty text = tag nobody): the extension has no page of its own.
-            var pageTags = "";
-            Guid? setOfPost = null;
-            if (p.ScheduleId is { } scheduleOfPost && await schedules.GetAsync(ws.Id, scheduleOfPost, ct) is { } sch)
-            {
-                pageTags = (await collections.GetAsync(ws.Id, sch.CollectionId, ct))?.Settings.PageTags ?? "";
-                setOfPost = sch.LinkSetId;
-            }
-            var kind = FacebookGroupUrl.KindOf(url) == FacebookTargetKind.Page ? "page" : "group";
-            notes.Taken = p;
-            return new JobDto(
-                p.Id, p.Target, url, p.Content, items, AntiBanDto.From(ws.AntiBan), "post", kind, pageTags,
-                Shot: await WantsShotAsync(ws, owner, p, setOfPost, ct));
+
+            return new Pick(new Candidate(p, account, url, setOfPost, sch, p.RushedAt ?? p.ScheduledAt));
         }
-        // Nothing to post right now (everything due was settled or is held back): a bump may go instead.
-        return await NextBumpAsync(device, ws, account, owner, now, notes, ct);
+
+        return new Pick(null);
     }
 
     /// <summary>
@@ -814,7 +1122,9 @@ public sealed class ClaimJobCommandHandler(
 /// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it: what a bump opens.</param>
 /// <param name="Shot">A picture of the posting window (already checked, see <see cref="ShotImage"/>): goes to Telegram with the message about this post.</param>
 public sealed record ReportJobResultCommand(
-    Guid PostId, bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null, byte[]? Shot = null) : ICommand<PostDto>;
+    Guid PostId, bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error,
+    string? PostUrl = null, byte[]? Shot = null,
+    bool Skip = false, int? DeferMinutes = null, string? Reason = null) : ICommand<PostDto>;
 
 /// <summary>
 /// Settles a post the device reported on, and what follows from it: the link's health (a group that kept failing is
@@ -840,18 +1150,43 @@ public sealed class ReportJobResultCommandHandler(
             events.Add(DeviceEvents.Make(device.WorkspaceId, device.Id, DeviceEventType.Online, new { version = device.Version }, now));
         var post = await posts.GetAsync(device.WorkspaceId, c.PostId, ct);
         if (post is null || post.ClaimedByDeviceId != device.Id) throw new NotFoundException("งานโพสต์", c.PostId);
-        var account = await accounts.GetByDeviceAsync(device.Id, ct);
+        var account = await accounts.GetAsync(device.WorkspaceId, post.AccountId, ct);
         var ws = await workspaces.GetByIdAsync(device.WorkspaceId, ct) ?? throw new NotFoundException("เวิร์กสเปซ", device.WorkspaceId);
         var advanced = ws.AntiBan.Advanced;
         var link = post.LinkId is { } linkId ? await links.GetAsync(ws.Id, linkId, ct) : null;
         var notices = new List<Notice>();
         var where = await NoticeContextAsync(ws, post, link?.LinkSetId, c, now, ct);
 
-        if (c.Ok)
+        if (c.Skip)
+        {
+            var skipReason = string.IsNullOrWhiteSpace(c.Reason) ? "ข้ามการส่งแชทนี้" : c.Reason;
+            post.SkipClaimed(skipReason, now);
+            if (link is not null)
+            {
+                link.DisableManually();
+                events.Add(DeviceEvents.LinksChanged(ws.Id, device.Id, link.LinkSetId, link.Id, link.Health, now));
+            }
+            notices.Add(EngineNotices.ChatSkipped(post, link?.LinkSetId, skipReason, where));
+        }
+        else if (c.DeferMinutes is { } deferM && deferM > 0)
+        {
+            if (post.DeferCount >= 6)
+            {
+                // A customer who is always mid-conversation is not an unusable chat: skip this post, keep the link on.
+                post.SkipClaimed("ลูกค้าคุยอยู่ตลอด จึงข้ามแชทนี้", now);
+                notices.Add(EngineNotices.ChatSkipped(post, link?.LinkSetId, "ลูกค้าคุยอยู่ตลอด จึงข้ามแชทนี้", where));
+            }
+            else
+            {
+                var jitter = random.NextDouble() * 0.4 - 0.2;
+                var deferSecs = (int)Math.Round(deferM * 60 * (1 + jitter));
+                post.Defer(now.AddSeconds(deferSecs), now);
+            }
+        }
+        else if (c.Ok)
         {
             post.CompletePosted(c.AwaitingApproval, now);
-            // Where it went up on Facebook (a bump opens it); nothing to bump while the group still has to approve it.
-            if (!c.AwaitingApproval)
+            if (!c.AwaitingApproval && post.Platform == Platform.Fb)
             {
                 post.RecordPostUrl(c.PostUrl);
                 if (post.ScheduleId is { } bumpScheduleId && post.PostUrl is not null
@@ -875,7 +1210,6 @@ public sealed class ReportJobResultCommandHandler(
             post.Fail(code, c.Error, now);
             if (c.NeedsLogin) account?.MarkNeedsLogin();
 
-            // A lost login or a Facebook block is about the account, not the group.
             Notice? switchedOff = null;
             if (link is not null && !c.NeedsLogin && !c.Blocked)
             {
@@ -892,7 +1226,10 @@ public sealed class ReportJobResultCommandHandler(
             if (c.Blocked && ws.AntiBan.AutoPause)
             {
                 blockPause = TimeSpan.FromHours(advanced.BlockMin + random.NextDouble() * (advanced.BlockMax - advanced.BlockMin));
-                if (device.AutoPause(now + blockPause.Value, "Facebook ขัดขวางการโพสต์ ระบบพักเครื่องชั่วคราว", now))
+                var pauseText = post.Platform == Platform.Line
+                    ? "LINE แจ้งเตือน ระบบพักเครื่องชั่วคราว"
+                    : "Facebook ขัดขวางการโพสต์ ระบบพักเครื่องชั่วคราว";
+                if (device.AutoPause(now + blockPause.Value, pauseText, now))
                     events.Add(DevicePause.Changed(device, now));
             }
             if (c.NeedsLogin) notices.Add(EngineNotices.NeedsLogin(post, link?.LinkSetId, device, where));
@@ -900,17 +1237,24 @@ public sealed class ReportJobResultCommandHandler(
             else notices.Add(EngineNotices.Failed(post, link?.LinkSetId, c.Error, where));
             if (switchedOff is not null) notices.Add(switchedOff);
 
-            // This post and the ones before it all failed: rest the device for a while.
             if (advanced.FailStreak > 0 && account is not null)
             {
                 var before = advanced.FailStreak > 1 ? await posts.ListRecentOutcomesAsync(account.Id, advanced.FailStreak - 1, ct) : [];
                 if (before.Count == advanced.FailStreak - 1 && before.All(s => s == PostStatus.Failed))
                 {
                     var rest = TimeSpan.FromHours(StreakPauseMinHours + random.NextDouble() * (StreakPauseMaxHours - StreakPauseMinHours));
-                    if (device.AutoPause(now + rest, $"โพสต์ล้มเหลวติดกัน {advanced.FailStreak} ครั้ง ระบบพักเครื่องชั่วคราว", now))
+                    if (account.Platform == Platform.Line)
                     {
-                        events.Add(DevicePause.Changed(device, now));
-                        notices.Add(EngineNotices.FailStreak(device, advanced.FailStreak, rest));
+                        account.Rest(now + rest);
+                        notices.Add(EngineNotices.FailStreak(device, advanced.FailStreak, rest, Platform.Line));
+                    }
+                    else
+                    {
+                        if (device.AutoPause(now + rest, $"โพสต์ล้มเหลวติดกัน {advanced.FailStreak} ครั้ง ระบบพักเครื่องชั่วคราว", now))
+                        {
+                            events.Add(DevicePause.Changed(device, now));
+                            notices.Add(EngineNotices.FailStreak(device, advanced.FailStreak, rest, Platform.Fb));
+                        }
                     }
                 }
             }
@@ -930,7 +1274,8 @@ public sealed class ReportJobResultCommandHandler(
             }
         }
         // The picture belongs to the message about this post, which is always the first one.
-        if (c.Shot is not null && notices.Count > 0) notices[0] = notices[0] with { Photo = c.Shot };
+        // A LINE window shows customers' messages: its picture is never forwarded, whatever the device sent.
+        if (c.Shot is not null && post.Platform != Platform.Line && notices.Count > 0) notices[0] = notices[0] with { Photo = c.Shot };
         await EngineNotices.SendAsync(notifier, ws.Id, notices, ct);
         return PostDto.From(post);
     }

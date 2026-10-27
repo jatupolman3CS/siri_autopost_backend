@@ -17,7 +17,7 @@ namespace SIRIAUTOPOST.Api.Controllers;
 public sealed class ExtensionDownloadController(ExtensionPackage package) : ControllerBase
 {
     private static readonly string[] RootFiles =
-        ["manifest.json", "background.js", "content.js", "status.html", "status.css", "status.js"];
+        ["manifest.json", "background.js", "content.js", "line.js", "status.html", "status.css", "status.js"];
 
     private static readonly string[] Folders = ["icons", "lib"];
 

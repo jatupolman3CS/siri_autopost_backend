@@ -65,9 +65,11 @@ public static class DeviceEventType
     public const string Updated = "device.updated";
     /// <summary>A link of a link set was switched off by the engine, switched on again, or went pending: { linkSetId, linkId, health }.</summary>
     public const string Links = "links.changed";
+    /// <summary>The customer chats of the device's Line account changed: { count }.</summary>
+    public const string LineChats = "device.line_chats";
 
     public static readonly IReadOnlySet<string> All = new HashSet<string>
     {
-        Paired, Revoked, Online, State, Log, LogCleared, Command, Config, Post, Groups, Updated, Links,
+        Paired, Revoked, Online, State, Log, LogCleared, Command, Config, Post, Groups, Updated, Links, LineChats,
     };
 }

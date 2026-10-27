@@ -24,6 +24,10 @@
 * {
   box-sizing: border-box;
 }
+/* An element with the hidden attribute stays hidden even when a class gives it display (.row, .btn). */
+[hidden] {
+  display: none !important;
+}
 body {
   margin: 0;
   background: var(--bg);

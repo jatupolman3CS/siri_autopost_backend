@@ -78,6 +78,28 @@
       <p id="linkError" class="warn" hidden></p>
     </section>
 
+    <!-- LINE Official Account chats (the settings live on the web; this card only switches it on here and shows the state) -->
+    <section id="lineCard" class="card" hidden>
+      <div class="head">
+        <h2>LINE OA</h2>
+        <span id="lineBadge" class="badge">ปิดอยู่</span>
+      </div>
+      <p class="muted">
+        ส่งข้อความหาลูกค้าที่เคยแชทกับ LINE Official Account ของร้าน ผ่านหน้า chat.line.biz ใน Chrome เครื่องนี้ (ตั้งค่าและสั่งงานที่หน้าเว็บ AutoPost)
+        ส่วนขยายอ่านเฉพาะชื่อลูกค้า ป้ายกำกับ และเวลาของแชทล่าสุดเท่านั้น ไม่อ่านและไม่เก็บข้อความที่ลูกค้าพิมพ์
+      </p>
+      <dl class="facts" id="lineFacts"></dl>
+      <p id="lineNote" class="warn" hidden></p>
+      <div id="lineChoices" class="row" hidden></div>
+      <div class="row">
+        <button id="btnLineEnable" class="btn primary" type="button">ใช้ LINE OA ในเครื่องนี้</button>
+        <button id="btnLineProbe" class="btn small" type="button" hidden>ตรวจการล็อกอิน LINE อีกครั้ง</button>
+        <button id="btnLineSync" class="btn small" type="button" hidden>ซิงก์รายชื่อแชทตอนนี้</button>
+        <button id="btnLineFloatingTool" class="btn small" type="button">เปิดเครื่องมือช่วยส่งทีละแชท (ในแท็บ LINE)</button>
+      </div>
+      <p id="lineMsg" class="muted" hidden></p>
+    </section>
+
     <!-- Run -->
     <section id="runCard" class="card" hidden>
       <div class="head">

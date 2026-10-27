@@ -36,6 +36,8 @@ public sealed class UpdateAntiBanCommandHandler(
         var owner = await users.GetByIdAsync(ws.OwnerId, ct) ?? throw new NotFoundException("ผู้ใช้", ws.OwnerId);
         var settings = c.Settings.ToSettings();
         if (c.Settings.Advanced is null) settings.Advanced = ws.AntiBan.Advanced.Clone(); // a client that does not know the advanced numbers keeps them
+        if (c.Settings.LineChat is null) settings.LineChat = ws.AntiBan.LineChat.Clone();
+        if (c.Settings.Limits?.Line is null) settings.Limits.Line = ws.AntiBan.Limits.Line;
         ws.UpdateAntiBan(settings, owner.HasAdvancedAntiBan);
         await uow.SaveChangesAsync(ct);
         return EngineSettingsDto.From(ws, await devices.ListAsync(ws.Id, ct), clock.GetUtcNow());

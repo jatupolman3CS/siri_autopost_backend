@@ -103,11 +103,12 @@ public sealed record CollectionPostInput(string Text, IReadOnlyList<Guid>? Media
 /// <param name="Kind">"group" or "page" (from the address; "group" while the address is not valid).</param>
 public sealed record SetLinkDto(
     Guid Id, string Name, string Url, string Code, int DailyMax, bool Enabled, LinkHealth Health, int FailStreak, bool Valid, bool Duplicate,
-    string Kind = "group")
+    string Kind = "group", Platform Channel = Platform.Fb)
 {
     public static SetLinkDto From(SetLink l, bool duplicate) =>
         new(l.Id, l.Name, l.Url, l.Code, l.DailyMax, l.Enabled, l.Health, l.FailStreak, l.IsValid, duplicate,
-            FacebookGroupUrl.KindOf(l.Url) == FacebookTargetKind.Page ? "page" : "group");
+            l.Channel == Platform.Line ? "chat" : (FacebookGroupUrl.KindOf(l.Url) == FacebookTargetKind.Page ? "page" : "group"),
+            l.Channel);
 }
 
 /// <param name="PostAsAccountId">The Facebook account whose browser posts the links; null = the first connected one.</param>
@@ -117,13 +118,15 @@ public sealed record SetLinkDto(
 /// <param name="DailyPerGroup">Posts a day each group may get unless its own limit says otherwise; 0 = no limit from the set.</param>
 public sealed record LinkSetDto(
     Guid Id, string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<SetLinkDto> Links, int ScheduleCount, bool Active,
-    bool RandomOrder = true, int DailyPerGroup = 0)
+    bool RandomOrder = true, int DailyPerGroup = 0, Platform Channel = Platform.Fb)
 {
     public static LinkSetDto From(LinkSet set, IReadOnlyList<SetLink> links, int scheduleCount)
     {
-        var seen = new HashSet<string>(FacebookGroupUrl.Comparer); // /groups/ABC and /groups/abc are one group
+        var seen = set.Channel == Platform.Line
+            ? new HashSet<string>(LineChatUrl.Comparer)
+            : new HashSet<string>(FacebookGroupUrl.Comparer);
         var dtos = links.Select(l => SetLinkDto.From(l, l.IsValid && !seen.Add(l.Url))).ToList();
-        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount, set.Active, set.RandomOrder, set.DailyPerGroup);
+        return new LinkSetDto(set.Id, set.Name, set.PostAsAccountId, set.AccountIds, dtos, scheduleCount, set.Active, set.RandomOrder, set.DailyPerGroup, set.Channel);
     }
 }
 
@@ -135,7 +138,7 @@ public sealed record HandOverResultDto(LinkSetDto Set, int Moved);
 /// <param name="Conflicts">Addresses left out because another extension's link set already holds the group (one group, one extension).</param>
 /// <param name="ConflictNote">Why the first of them was left out, in Thai; null when none was.</param>
 public sealed record BulkLinksResultDto(
-    int Added, int Duplicates, int Recoded, int Invalid, LinkSetDto Set, int Conflicts = 0, string? ConflictNote = null);
+    int Added, int Duplicates, int Recoded, int Invalid, LinkSetDto Set, int Conflicts = 0, string? ConflictNote = null, int SkippedDoNotSend = 0);
 
 /// <summary>One line of the CSV import: set,name,url,code.</summary>
 public sealed record CsvLinkRow(string Set, string? Name, string? Url, string? Code);
@@ -150,12 +153,33 @@ public sealed record CsvImportResultDto(int Links, int Sets, int Invalid, int Co
 /// <param name="UsablePosts">Collection posts that may be scheduled (approved ones when the collection requires approval).</param>
 /// <param name="TodayCount">Posts of the schedule on its local today.</param>
 /// <param name="NextRunAt">The earliest queued post still to go out.</param>
+public sealed record LineOptionsDto(
+    string AllowedFrom = "09:00",
+    string AllowedTo = "20:00",
+    int SkipIfActiveMinutes = 30,
+    bool SplitBubbles = false,
+    bool ImagesFirst = false)
+{
+    public static LineOptionsDto From(LineOptions o) =>
+        new(o.AllowedFrom, o.AllowedTo, o.SkipIfActiveMinutes, o.SplitBubbles, o.ImagesFirst);
+
+    public LineOptions ToOptions() =>
+        new()
+        {
+            AllowedFrom = AllowedFrom,
+            AllowedTo = AllowedTo,
+            SkipIfActiveMinutes = SkipIfActiveMinutes,
+            SplitBubbles = SplitBubbles,
+            ImagesFirst = ImagesFirst,
+        };
+}
+
 public sealed record ScheduleDto(
     Guid Id, string Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, IReadOnlyList<string> Slots,
     int TargetCount, int PerDay, int UsablePosts, int TodayCount, DateTimeOffset? NextRunAt, bool StartNow = false,
-    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null, int GroupGapMinutes = 0);
+    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null, int GroupGapMinutes = 0, LineOptionsDto? LineOptions = null);
 
 /// <summary>What a bump says and how often (see <see cref="BumpPlan"/>); only used while the schedule's bump hours are not 0.</summary>
 /// <param name="Rounds">Times a post is bumped, each the schedule's bump hours after the last (1-3).</param>
@@ -188,7 +212,7 @@ public sealed record SaveScheduleRequest(
     string? Name, Guid CollectionId, Guid LinkSetId, ScheduleMode Mode, IReadOnlyList<string>? Times, int EveryHours, string? FirstTime,
     string? StartDate, string? OnceTime, PostOrder Order, string? DripFrom, string? DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>>? Overrides, int UtcOffsetMinutes, bool StartNow = false,
-    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null, int GroupGapMinutes = 0);
+    PostRepeat Repeat = PostRepeat.Recent, BumpPlanDto? Bump = null, int GroupGapMinutes = 0, LineOptionsDto? LineOptions = null);
 
 public sealed record ScheduleCreatedDto(ScheduleDto Schedule, int Created, DateTimeOffset? FirstAt, DateTimeOffset? LastAt);
 
@@ -328,3 +352,21 @@ public sealed record SharedReportDto(
 
 /// <summary>What a restore replaced.</summary>
 public sealed record RestoreResultDto(int Collections, int LinkSets, int Schedules);
+
+// ---------- line chats ----------
+
+public sealed record LineChatAccountSummaryDto(Guid Id, string Name, Guid? DeviceId, bool Ready);
+
+public sealed record LineChatDto(
+    Guid Id, Guid AccountId, string Name, string Url, IReadOnlyList<string> Labels,
+    DateTimeOffset? LastMessageAt, bool Unread, bool DoNotSend, int LinkedSetCount);
+
+public sealed record LineChatPageDto(
+    IReadOnlyList<LineChatDto> Items, int Total, IReadOnlyList<string> Labels, IReadOnlyList<LineChatAccountSummaryDto> Accounts);
+
+public sealed record UpdateLineChatRequest(bool DoNotSend);
+
+public sealed record FromLineChatsFilter(string? Q = null, string? Label = null, int? ActiveWithinDays = null);
+
+public sealed record ImportLineChatsRequest(
+    Guid AccountId, IReadOnlyList<Guid>? ChatIds = null, FromLineChatsFilter? Filter = null, bool AllMatching = false);

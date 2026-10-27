@@ -173,14 +173,14 @@ public class BumpAndDeviceNameTests
     {
         Assert.Empty(PlanFeatures.For(PlanKey.Free));
         Assert.Empty(PlanFeatures.For(PlanKey.Basic));
-        Assert.Equal([PlanFeatures.AdvancedAntiBan, PlanFeatures.Notifications, PlanFeatures.AutoReply, PlanFeatures.Ai], PlanFeatures.For(PlanKey.Pro));
+        Assert.Equal([PlanFeatures.AdvancedAntiBan, PlanFeatures.Notifications, PlanFeatures.AutoReply, PlanFeatures.Ai, PlanFeatures.LineChat], PlanFeatures.For(PlanKey.Pro));
         Assert.Equal(PlanFeatures.All, PlanFeatures.For(PlanKey.Agency));
         Assert.DoesNotContain(PlanFeatures.Bump, PlanFeatures.For(PlanKey.Pro));
 
         var pro = User.Create("a@b.co", "A", UserRole.User, PlanKey.Pro, Now);
         var premium = User.Create("c@d.co", "C", UserRole.User, PlanKey.Agency, Now);
-        Assert.Equal((true, false, true, false), (pro.HasAi, pro.HasBump, pro.HasAdvancedAntiBan, pro.HasClientReports));
-        Assert.Equal((true, true, true, true), (premium.HasAi, premium.HasBump, premium.HasAdvancedAntiBan, premium.HasClientReports));
+        Assert.Equal((true, false, true, false, true), (pro.HasAi, pro.HasBump, pro.HasAdvancedAntiBan, pro.HasClientReports, pro.HasLineChat));
+        Assert.Equal((true, true, true, true, true), (premium.HasAi, premium.HasBump, premium.HasAdvancedAntiBan, premium.HasClientReports, premium.HasLineChat));
     }
 
     [Fact]

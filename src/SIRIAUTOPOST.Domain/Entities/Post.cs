@@ -61,6 +61,8 @@ public class Post : Entity
     /// rushed post is due at that moment and the claim hands it out before every other due post of its account.
     /// </summary>
     public DateTimeOffset? RushedAt { get; private set; }
+    /// <summary>Times this post was deferred (e.g. customer active in chat).</summary>
+    public int DeferCount { get; private set; }
 
     private Post() { } // EF Core
 
@@ -345,6 +347,32 @@ public class Post : Entity
     {
         if (Status != PostStatus.Queued) return;
         Status = PostStatus.Skipped;
+        UpdatedAt = now;
+    }
+
+    /// <summary>A claimed (Posting) post is skipped by the extension (e.g. chat disabled, unusable link).</summary>
+    public void SkipClaimed(string reason, DateTimeOffset now)
+    {
+        if (Status != PostStatus.Posting) throw new DomainException("ข้ามได้เฉพาะโพสต์ที่อยู่ระหว่างโพสต์");
+        Status = PostStatus.Skipped;
+        FailureDetail = Cut(reason);
+        ClaimedByDeviceId = null;
+        ClaimedAt = null;
+        UpdatedAt = now;
+    }
+
+    /// <summary>
+    /// A claimed (Posting) post is deferred (e.g. customer mid-conversation). It returns to Queued with a new ScheduledAt.
+    /// </summary>
+    public void Defer(DateTimeOffset when, DateTimeOffset now)
+    {
+        if (Status != PostStatus.Posting) throw new DomainException("เลื่อนได้เฉพาะโพสต์ที่อยู่ระหว่างโพสต์");
+        Status = PostStatus.Queued;
+        ScheduledAt = when.ToUniversalTime();
+        ClaimedByDeviceId = null;
+        ClaimedAt = null;
+        RushedAt = null;
+        DeferCount++;
         UpdatedAt = now;
     }
 

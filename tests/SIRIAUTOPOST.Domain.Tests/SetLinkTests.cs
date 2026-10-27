@@ -11,7 +11,7 @@ public class SetLinkTests
     private static readonly Guid Set = Guid.NewGuid();
 
     private static SetLink Link(string? url = "https://www.facebook.com/groups/baan.dee", string? name = null, string? code = null, int dailyMax = 0) =>
-        SetLink.Create(Ws, Set, name, url, code, dailyMax, Now);
+        SetLink.Create(Ws, Set, name, url, code, dailyMax, Now, Platform.Fb);
 
     [Fact]
     public void A_group_address_is_stored_normalised_and_names_the_link()

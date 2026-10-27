@@ -20,9 +20,9 @@ public sealed record Notice(NotifyEvent Event, Guid? LinkSetId, Guid? LinkId, st
 /// <param name="NextAt">The next post of the round, or when the next round starts once this one is done; null when nothing is queued.</param>
 /// <param name="RoundEnded">No post of the round is left to go, so <paramref name="NextAt"/> is about the next round.</param>
 public sealed record PostContext(
-    string? SetName, string? ScheduleName, int? Round, int Position, int Total, DateTimeOffset? NextAt, bool RoundEnded, int UtcOffsetMinutes)
+    string? SetName, string? ScheduleName, int? Round, int Position, int Total, DateTimeOffset? NextAt, bool RoundEnded, int UtcOffsetMinutes, Platform Platform = Platform.Fb)
 {
-    public static readonly PostContext None = new(null, null, null, 0, 0, null, false, DefaultUtcOffsetMinutes);
+    public static readonly PostContext None = new(null, null, null, 0, 0, null, false, DefaultUtcOffsetMinutes, Platform.Fb);
 
     /// <summary>"ชุด SIRI · ตารางเช้า · รอบ 1 (กลุ่ม 3/69)": the parts that are known; null when none is.</summary>
     public string? WhereLine()
@@ -31,7 +31,8 @@ public sealed record PostContext(
         if (!string.IsNullOrWhiteSpace(SetName)) parts.Add($"ชุด {Esc(SetName)}");
         if (!string.IsNullOrWhiteSpace(ScheduleName)) parts.Add(Esc(ScheduleName));
         var round = Round is { } n ? $"รอบ {n}" : "";
-        var place = Total > 0 && Position > 0 ? $"(กลุ่ม {Position}/{Total})" : "";
+        var noun = Platform == Platform.Line ? "แชท" : "กลุ่ม";
+        var place = Total > 0 && Position > 0 ? $"({noun} {Position}/{Total})" : "";
         var tail = string.Join(' ', new[] { round, place }.Where(s => s.Length > 0));
         if (tail.Length > 0) parts.Add(tail);
         return parts.Count == 0 ? null : string.Join(" · ", parts);
@@ -39,7 +40,7 @@ public sealed record PostContext(
 
     /// <summary>"⏭ กลุ่มถัดไป: 03/10 16:41:35" (or the next round); null when nothing is queued.</summary>
     public string? NextLine() =>
-        NextAt is { } at ? $"⏭ {(RoundEnded ? "รอบถัดไป" : "กลุ่มถัดไป")}: {Time(at, UtcOffsetMinutes)}" : null;
+        NextAt is { } at ? $"⏭ {(RoundEnded ? "รอบถัดไป" : (Platform == Platform.Line ? "แชทถัดไป" : "กลุ่มถัดไป"))}: {Time(at, UtcOffsetMinutes)}" : null;
 }
 
 /// <summary>
@@ -91,56 +92,90 @@ public static partial class EngineNotices
 
     private static string Reason(string? error, int max = 200) => string.IsNullOrWhiteSpace(error) ? "ไม่ทราบสาเหตุ" : Excerpt(error, max);
 
-    public static Notice Posted(Post p, Guid? linkSetId, bool awaitingApproval, PostContext ctx, DateTimeOffset now) => new(
-        NotifyEvent.Success, linkSetId, p.LinkId,
-        Lines(
-            awaitingApproval ? $"⏳ {Bold(Test(p) + "ส่งโพสต์แล้ว รอแอดมินกลุ่มอนุมัติ")}" : $"✅ {Bold(Test(p) + "โพสต์สำเร็จ")}",
-            GroupLines(p),
-            ctx.WhereLine(),
-            $"🕒 {Time(now, ctx.UtcOffsetMinutes)}",
-            ctx.NextLine()));
+    public static Notice Posted(Post p, Guid? linkSetId, bool awaitingApproval, PostContext ctx, DateTimeOffset now)
+    {
+        var isLine = p.Platform == Platform.Line;
+        var headline = awaitingApproval
+            ? $"⏳ {Bold(Test(p) + "ส่งโพสต์แล้ว รอแอดมินกลุ่มอนุมัติ")}"
+            : isLine
+                ? $"✅ {Bold(Test(p) + "ส่งข้อความสำเร็จ")}"
+                : $"✅ {Bold(Test(p) + "โพสต์สำเร็จ")}";
+        return new(
+            NotifyEvent.Success, linkSetId, p.LinkId,
+            Lines(
+                headline,
+                GroupLines(p),
+                ctx.WhereLine(),
+                $"🕒 {Time(now, ctx.UtcOffsetMinutes)}",
+                ctx.NextLine()));
+    }
 
-    public static Notice Failed(Post p, Guid? linkSetId, string? error, PostContext ctx) => new(
-        NotifyEvent.Fail, linkSetId, p.LinkId,
-        Lines(
-            $"❌ {Bold(Test(p) + "โพสต์ไม่สำเร็จ ข้ามกลุ่มนี้")}",
-            GroupLines(p),
-            $"สาเหตุ: {Esc(Reason(error))}",
-            ctx.WhereLine(),
-            ctx.NextLine()));
+    public static Notice Failed(Post p, Guid? linkSetId, string? error, PostContext ctx)
+    {
+        var isLine = p.Platform == Platform.Line;
+        return new(
+            NotifyEvent.Fail, linkSetId, p.LinkId,
+            Lines(
+                isLine ? $"❌ {Bold(Test(p) + "ส่งข้อความไม่สำเร็จ ข้ามแชทนี้")}" : $"❌ {Bold(Test(p) + "โพสต์ไม่สำเร็จ ข้ามกลุ่มนี้")}",
+                GroupLines(p),
+                $"สาเหตุ: {Esc(Reason(error))}",
+                ctx.WhereLine(),
+                ctx.NextLine()));
+    }
 
-    public static Notice NeedsLogin(Post p, Guid? linkSetId, Device device, PostContext ctx) => new(
-        NotifyEvent.Block, linkSetId, p.LinkId,
-        Lines(
-            $"⚠️ {Bold(Test(p) + "บัญชี Facebook ต้องเข้าสู่ระบบใหม่")}",
-            $"เครื่อง {Esc(device.Name)} จึงโพสต์ไปที่กลุ่มนี้ไม่ได้",
-            GroupLines(p),
-            ctx.WhereLine()));
+    public static Notice NeedsLogin(Post p, Guid? linkSetId, Device device, PostContext ctx)
+    {
+        var isLine = p.Platform == Platform.Line;
+        return new(
+            NotifyEvent.Block, linkSetId, p.LinkId,
+            Lines(
+                isLine ? $"⚠️ {Bold(Test(p) + "บัญชี LINE OA ต้องเข้าสู่ระบบใหม่")}" : $"⚠️ {Bold(Test(p) + "บัญชี Facebook ต้องเข้าสู่ระบบใหม่")}",
+                isLine ? $"เครื่อง {Esc(device.Name)} จึงส่งข้อความไปที่แชทนี้ไม่ได้" : $"เครื่อง {Esc(device.Name)} จึงโพสต์ไปที่กลุ่มนี้ไม่ได้",
+                GroupLines(p),
+                ctx.WhereLine()));
+    }
 
-    public static Notice Blocked(Post p, Guid? linkSetId, Device device, string? error, TimeSpan? pause, PostContext ctx) => new(
-        NotifyEvent.Block, linkSetId, p.LinkId,
-        Lines(
-            $"⚠️ {Bold(Test(p) + "Facebook ขัดขวางการโพสต์")}",
-            $"เครื่อง {Esc(device.Name)}",
-            GroupLines(p),
-            string.IsNullOrWhiteSpace(error) ? null : $"สาเหตุ: {Esc(Excerpt(error, 200))}",
-            ctx.WhereLine(),
-            pause is { } d ? $"⏸ ระบบพักเครื่องนี้ประมาณ {Hours(d)}" : null));
+    public static Notice Blocked(Post p, Guid? linkSetId, Device device, string? error, TimeSpan? pause, PostContext ctx)
+    {
+        var isLine = p.Platform == Platform.Line;
+        return new(
+            NotifyEvent.Block, linkSetId, p.LinkId,
+            Lines(
+                isLine ? $"⚠️ {Bold(Test(p) + "LINE ขัดขวางการส่งข้อความ")}" : $"⚠️ {Bold(Test(p) + "Facebook ขัดขวางการโพสต์")}",
+                $"เครื่อง {Esc(device.Name)}",
+                GroupLines(p),
+                string.IsNullOrWhiteSpace(error) ? null : $"สาเหตุ: {Esc(Excerpt(error, 200))}",
+                ctx.WhereLine(),
+                pause is { } d ? $"⏸ ระบบพักเครื่องนี้ประมาณ {Hours(d)}" : null));
+    }
 
-    public static Notice FailStreak(Device device, int streak, TimeSpan pause) => new(
+    public static Notice FailStreak(Device device, int streak, TimeSpan pause, Platform platform = Platform.Fb) => new(
         NotifyEvent.Block, null, null,
         Lines(
-            $"⏸ {Bold($"โพสต์ล้มเหลวติดกัน {streak} ครั้ง")}",
+            platform == Platform.Line ? $"⏸ {Bold($"ส่งข้อความ LINE ล้มเหลวติดกัน {streak} ครั้ง")}" : $"⏸ {Bold($"โพสต์ล้มเหลวติดกัน {streak} ครั้ง")}",
             $"เครื่อง {Esc(device.Name)}",
-            $"ระบบพักเครื่องนี้ประมาณ {Hours(pause)}"));
+            platform == Platform.Line ? $"ระบบพักการส่ง LINE ของเครื่องนี้ประมาณ {Hours(pause)}" : $"ระบบพักเครื่องนี้ประมาณ {Hours(pause)}"));
 
-    public static Notice LinkSwitchedOff(SetLink link, int streak) => new(
-        NotifyEvent.Fail, link.LinkSetId, link.Id,
+    public static Notice LinkSwitchedOff(SetLink link, int streak)
+    {
+        var isLine = link.Channel == Platform.Line;
+        return new(
+            NotifyEvent.Fail, link.LinkSetId, link.Id,
+            Lines(
+                isLine ? $"🚫 {Bold("ปิดแชทอัตโนมัติ")}" : $"🚫 {Bold("ปิดกลุ่มอัตโนมัติ")}",
+                link.Name.Length > 0 ? $"{Bold(link.Name)}\n{Esc(link.Url)}" : Bold(link.Url),
+                isLine ? $"สาเหตุ: ส่งข้อความล้มเหลวติดกัน {streak} ครั้ง" : $"สาเหตุ: โพสต์ล้มเหลวติดกัน {streak} ครั้ง",
+                isLine ? "เปิดกลับได้ที่หน้าชุดลิงก์แชท" : "เปิดกลับได้ที่หน้าชุดลิงก์กลุ่ม"));
+    }
+
+    public static Notice ChatSkipped(Post p, Guid? linkSetId, string? reason, PostContext ctx) => new(
+        NotifyEvent.Fail, linkSetId, p.LinkId,
         Lines(
-            $"🚫 {Bold("ปิดกลุ่มอัตโนมัติ")}",
-            link.Name.Length > 0 ? $"{Bold(link.Name)}\n{Esc(link.Url)}" : Bold(link.Url),
-            $"สาเหตุ: โพสต์ล้มเหลวติดกัน {streak} ครั้ง",
-            "เปิดกลับได้ที่หน้าชุดลิงก์กลุ่ม"));
+            $"⏭ {Bold(Test(p) + "ข้ามแชทนี้และปิดไม่ส่งอีก")}",
+            GroupLines(p),
+            $"สาเหตุ: {Esc(Reason(reason))}",
+            ctx.WhereLine(),
+            ctx.NextLine()));
 
     public static Notice QuotaReached(int failed, string detail) => new(
         NotifyEvent.Quota, null, null,
@@ -155,7 +190,7 @@ public static partial class EngineNotices
     public static Notice JobTaken(Post p, Guid? linkSetId, Device device, PostContext ctx, DateTimeOffset now) => new(
         NotifyEvent.Job, linkSetId, p.LinkId,
         Lines(
-            $"🚀 {Bold($"{Test(p)}เครื่อง {device.Name} เริ่มโพสต์")}",
+            p.Platform == Platform.Line ? $"🚀 {Bold($"{Test(p)}เครื่อง {device.Name} เริ่มส่งข้อความ")}" : $"🚀 {Bold($"{Test(p)}เครื่อง {device.Name} เริ่มโพสต์")}",
             GroupLines(p),
             ctx.WhereLine(),
             $"🕒 {Time(now, ctx.UtcOffsetMinutes)}"));
@@ -188,9 +223,11 @@ public static partial class EngineNotices
     public static Notice JobLost(Post p, Guid? linkSetId, Device device, PostContext ctx) => new(
         NotifyEvent.Fail, linkSetId, p.LinkId,
         Lines(
-            $"⌛ {Bold($"{Test(p)}เครื่อง {device.Name} ไม่ส่งผลการโพสต์กลับมา")}",
+            p.Platform == Platform.Line ? $"⌛ {Bold($"{Test(p)}เครื่อง {device.Name} ไม่ส่งผลกลับมา")}" : $"⌛ {Bold($"{Test(p)}เครื่อง {device.Name} ไม่ส่งผลการโพสต์กลับมา")}",
             GroupLines(p),
-            "สาเหตุ: ไม่ได้รับผลภายใน 15 นาที งานนี้ถูกตีเป็นล้มเหลวและจะไม่โพสต์ซ้ำ (อาจโพสต์ไปแล้ว ควรตรวจในกลุ่ม)",
+            p.Platform == Platform.Line
+                ? "สาเหตุ: ไม่ได้รับผลภายใน 15 นาที งานนี้ถูกตีเป็นล้มเหลวและจะไม่ส่งซ้ำ (อาจส่งไปแล้ว ควรตรวจในแชท LINE)"
+                : "สาเหตุ: ไม่ได้รับผลภายใน 15 นาที งานนี้ถูกตีเป็นล้มเหลวและจะไม่โพสต์ซ้ำ (อาจโพสต์ไปแล้ว ควรตรวจในกลุ่ม)",
             ctx.WhereLine()));
 
     /// <summary>Posts that waited so long (the machine was off) that they were skipped instead of going out late.</summary>
@@ -291,6 +328,8 @@ public static partial class EngineNotices
 
     public static Notice RoundDone(Schedule schedule, string slotKey, IReadOnlyList<Post> round, DateTimeOffset? nextRoundAt)
     {
+        var isLine = round.FirstOrDefault()?.Platform == Platform.Line;
+        var noun = isLine ? "แชท" : "กลุ่ม";
         var ok = round.Count(p => p.Status == PostStatus.Success);
         var pending = round.Count(p => p.Status == PostStatus.Pending);
         var failed = round.Where(p => p.Status == PostStatus.Failed).ToList();
@@ -298,17 +337,17 @@ public static partial class EngineNotices
         var lines = new List<string?>
         {
             $"📊 {Bold($"สรุปรอบ {RoundLabel(slotKey)}")} · ตาราง “{Esc(schedule.Name)}”",
-            $"ทั้งหมด {round.Count} กลุ่ม",
-            $"✅ สำเร็จ {ok} กลุ่ม",
+            $"ทั้งหมด {round.Count} {noun}",
+            $"✅ สำเร็จ {ok} {noun}",
         };
-        if (pending > 0) lines.Add($"⏳ รออนุมัติ {pending} กลุ่ม");
+        if (pending > 0) lines.Add($"⏳ รออนุมัติ {pending} {noun}");
         if (failed.Count > 0)
         {
-            lines.Add($"❌ ไม่สำเร็จ {failed.Count} กลุ่ม");
+            lines.Add($"❌ ไม่สำเร็จ {failed.Count} {noun}");
             lines.AddRange(failed.Take(MaxFailedListed).Select(p => $"• {Esc(Group(p))} — {Esc(Reason(p.FailureDetail, 80))}"));
-            if (failed.Count > MaxFailedListed) lines.Add($"• และอีก {failed.Count - MaxFailedListed} กลุ่ม");
+            if (failed.Count > MaxFailedListed) lines.Add($"• และอีก {failed.Count - MaxFailedListed} {noun}");
         }
-        if (skipped > 0) lines.Add($"⏭ ข้าม {skipped} กลุ่ม");
+        if (skipped > 0) lines.Add($"⏭ ข้าม {skipped} {noun}");
         if (nextRoundAt is { } next) lines.Add($"🔄 รอบถัดไป: {Time(next, schedule.UtcOffsetMinutes)}");
         return new Notice(NotifyEvent.Round, schedule.LinkSetId, null, Lines(lines.ToArray()));
     }
@@ -358,7 +397,7 @@ public static partial class EngineNotices
             var index = keys.IndexOf(slotKey);
             if (index >= 0) round = index + 1;
         }
-        return new PostContext(setName, schedule?.Name, round, position, slot.Count, next, nextInRound is null, offset);
+        return new PostContext(setName, schedule?.Name, round, position, slot.Count, next, nextInRound is null, offset, post.Platform);
     }
 
     /// <summary>

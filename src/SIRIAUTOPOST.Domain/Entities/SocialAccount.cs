@@ -24,6 +24,8 @@ public class SocialAccount : Entity
     /// <summary>The device whose browser holds this account's login, when connected through the extension.</summary>
     public Guid? DeviceId { get; private set; }
     public int SortOrder { get; private set; }
+    /// <summary>LINE resting until this time after failure streak or block.</summary>
+    public DateTimeOffset? RestUntil { get; private set; }
 
     private SocialAccount() { } // EF Core
 
@@ -50,8 +52,12 @@ public class SocialAccount : Entity
 
     public void MarkHealthy() => Health = AccountHealth.Ok;
 
-    /// <summary>The extension found Facebook logged out or asking for a checkpoint.</summary>
+    /// <summary>The extension found Facebook or LINE logged out or asking for a checkpoint.</summary>
     public void MarkNeedsLogin() => Health = AccountHealth.Relogin;
+
+    public void Rest(DateTimeOffset until) => RestUntil = until;
+
+    public bool IsResting(DateTimeOffset now) => RestUntil is { } u && now < u;
 
     /// <summary>The Facebook account of a newly paired browser.</summary>
     public static SocialAccount Connect(Guid workspaceId, Device device, int sortOrder) =>
@@ -67,8 +73,47 @@ public class SocialAccount : Entity
             SortOrder = sortOrder,
         };
 
+    public static SocialAccount CreateLine(
+        Guid workspaceId, Guid deviceId, string botId, string oaName, DateTimeOffset now, int sortOrder = 0)
+    {
+        var rawName = $"LINE · {oaName}";
+        if (rawName.Length > 120) rawName = rawName[..120];
+        return new SocialAccount
+        {
+            WorkspaceId = workspaceId,
+            Platform = Platform.Line,
+            DeviceId = deviceId,
+            Handle = botId,
+            Name = rawName,
+            DefaultTarget = "แชท LINE",
+            Health = AccountHealth.Ok,
+            SortOrder = sortOrder,
+        };
+    }
+
+    public void ReattachLine(Guid deviceId, string oaName)
+    {
+        DeviceId = deviceId;
+        Health = AccountHealth.Ok;
+        RestUntil = null;
+        var rawName = $"LINE · {oaName}";
+        if (rawName.Length > 120) rawName = rawName[..120];
+        Name = rawName;
+    }
+
+    /// <summary>The OA was renamed in LINE: only the name follows (health and rest are left as they are).</summary>
+    public void RenameLine(string oaName)
+    {
+        var rawName = $"LINE · {oaName}";
+        if (rawName.Length > 120) rawName = rawName[..120];
+        Name = rawName;
+    }
+
     /// <summary>Follows a rename of its browser in the web app.</summary>
-    public void FollowDevice(Device device) => Name = $"Facebook · {device.Name}";
+    public void FollowDevice(Device device)
+    {
+        if (Platform == Platform.Fb) Name = $"Facebook · {device.Name}";
+    }
 
     /// <summary>Replaces the groups with the ones the extension knows (names must be unique). False when nothing changed.</summary>
     public bool SyncGroups(IEnumerable<GroupLink> links)
@@ -94,9 +139,12 @@ public class SocialAccount : Entity
     /// </summary>
     public void Reconnect(Device device)
     {
-        DeviceId = device.Id;
-        Health = AccountHealth.Ok;
-        Name = $"Facebook · {device.Name}";
+        if (Platform == Platform.Fb)
+        {
+            DeviceId = device.Id;
+            Health = AccountHealth.Ok;
+            Name = $"Facebook · {device.Name}";
+        }
     }
 
     /// <summary>The device was unbound: the account stays (with its history) but cannot post.</summary>

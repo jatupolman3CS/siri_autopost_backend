@@ -24,11 +24,17 @@ namespace SIRIAUTOPOST.Api.Controllers;
 [Authorize(AuthenticationSchemes = DeviceKeyAuthenticationHandler.SchemeName)]
 public sealed class DeviceApiController : ControllerBase
 {
-    public sealed record HeartbeatRequest(string? Version, bool? SessionOk = null);
+    public sealed record LineHeartbeatRequest(bool Ready, string? BotId = null, string? OaName = null);
+    public sealed record HeartbeatRequest(string? Version, bool? SessionOk = null, LineHeartbeatRequest? Line = null, bool? LineSessionOk = null);
     public sealed record GroupsRequest(IReadOnlyList<GroupLinkDto> Groups);
+    public sealed record SyncLineChatDto(string UserId, string Name, IReadOnlyList<string>? Labels = null, DateTimeOffset? LastMessageAt = null, bool? Unread = null);
+    public sealed record SyncLineChatsRequest(string BotId, string OaName, bool Complete, IReadOnlyList<SyncLineChatDto> Chats);
     /// <param name="PostUrl">Where the post went up on Facebook, when the extension could read it (a bump opens it).</param>
     /// <param name="Shot">A picture of the posting window (a JPEG/PNG data URL, 2 MB at most) for the notification, sent when the job asked for one.</param>
-    public sealed record ResultRequest(bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error, string? PostUrl = null, string? Shot = null);
+    public sealed record ResultRequest(
+        bool Ok, bool AwaitingApproval, bool NeedsLogin, bool Blocked, string? Error,
+        string? PostUrl = null, string? Shot = null,
+        bool Skip = false, int? DeferMinutes = null, string? Reason = null);
     public sealed record BumpResultRequest(bool Ok, bool NeedsLogin, bool Blocked, string? Error);
     /// <param name="Wait">With takeCommands: hold the call (up to 25 s) until the web app sends a command.</param>
     public sealed record SyncRequest(string? Version, JsonElement? State, IReadOnlyList<DeviceLogEntry>? Logs, bool TakeCommands, bool Wait = false);
@@ -46,13 +52,27 @@ public sealed class DeviceApiController : ControllerBase
     [HttpPost("heartbeat")]
     public Task<DeviceStatusDto> Heartbeat(
         HeartbeatRequest r, [FromServices] ICommandHandler<DeviceHeartbeatCommand, DeviceStatusDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new DeviceHeartbeatCommand(r.Version, r.SessionOk), ct);
+        handler.HandleAsync(new DeviceHeartbeatCommand(
+            r.Version,
+            r.SessionOk,
+            r.Line is { } l ? new LineHeartbeatDto(l.Ready, l.BotId, l.OaName) : null,
+            r.LineSessionOk), ct);
 
     /// <summary>Replaces the groups of the device's Facebook account; returns how many it has.</summary>
     [HttpPut("groups")]
     public Task<int> Groups(
         GroupsRequest r, [FromServices] ICommandHandler<SyncDeviceGroupsCommand, int> handler, CancellationToken ct) =>
         handler.HandleAsync(new SyncDeviceGroupsCommand(r.Groups ?? []), ct);
+
+    /// <summary>Replaces the roster chats of the device's LINE account; returns how many it has.</summary>
+    [HttpPut("line/chats")]
+    public Task<int> LineChats(
+        SyncLineChatsRequest r, [FromServices] ICommandHandler<SyncLineChatsCommand, int> handler, CancellationToken ct) =>
+        handler.HandleAsync(new SyncLineChatsCommand(
+            r.BotId,
+            r.OaName,
+            r.Complete,
+            (r.Chats ?? []).Select(c => new Application.Features.Devices.SyncLineChatDto(c.UserId, c.Name, c.Labels, c.LastMessageAt, c.Unread)).ToList()), ct);
 
     /// <summary>The next post to publish now, or 204 when there is none.</summary>
     [HttpPost("jobs/claim")]
@@ -68,7 +88,9 @@ public sealed class DeviceApiController : ControllerBase
     [HttpPost("jobs/{postId:guid}/result")]
     public Task<PostDto> Result(
         Guid postId, ResultRequest r, [FromServices] ICommandHandler<ReportJobResultCommand, PostDto> handler, CancellationToken ct) =>
-        handler.HandleAsync(new ReportJobResultCommand(postId, r.Ok, r.AwaitingApproval, r.NeedsLogin, r.Blocked, r.Error, r.PostUrl, ShotImage.Parse(r.Shot)), ct);
+        handler.HandleAsync(new ReportJobResultCommand(
+            postId, r.Ok, r.AwaitingApproval, r.NeedsLogin, r.Blocked, r.Error,
+            r.PostUrl, ShotImage.Parse(r.Shot), r.Skip, r.DeferMinutes, r.Reason), ct);
 
     /// <summary>The result of a bump job (<c>kind: "bump"</c> from jobs/claim): the comment was made, or why not.</summary>
     [HttpPost("bumps/{bumpId:guid}/result")]

@@ -1,0 +1,170 @@
+<!doctype html>
+<!-- A stand-in for LINE Official Account Manager > Chats (chat.line.biz), drawn from the one screenshot the spec author had
+     (left menu, chat list with search/filter/rows, conversation with header, grey auto-reply bar, bubbles, composer with a
+     grey overlay and a green "ส่ง" button). It is NOT the real page: the markup and class names are invented (hashed on
+     purpose), so it checks the mechanics of line.js (scrolling, clicking, typing, geometry fallbacks), never LINE's real DOM.
+
+     Serve this file for ANY path and open  http://localhost:<port>/<botId>/chat/<userId>  (line.js reads the address), e.g.
+       node tools/fixtures/serve-fixture.mjs 5188   ->   http://localhost:5188/Ubbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/chat/U00000000000000000000000000000001
+     then paste line.js in the DevTools console after defining a small `chrome` stub (see tools/fixtures/README in serve-fixture.mjs).
+     All names and messages below are made up. -->
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<title>LINE Official Account Manager (fixture)</title>
+<style>
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; font: 14px/1.4 sans-serif; color: #222; }
+  body { display: flex; }
+  .a1 { width: 56px; background: #1d2330; flex: none; }
+  .a2 { width: 320px; flex: none; border-right: 1px solid #ddd; display: flex; flex-direction: column; min-height: 0; }
+  .a3 { padding: 10px; display: flex; gap: 6px; }
+  .a3 input { flex: 1; padding: 6px; }
+  .a4 { flex: 1; overflow-y: auto; min-height: 0; }
+  .a4 a { display: flex; gap: 8px; padding: 10px 12px; text-decoration: none; color: inherit; border-bottom: 1px solid #eee; align-items: center; }
+  .a4 a.sel { background: #eef7ee; }
+  .av { width: 36px; height: 36px; border-radius: 50%; background: #bbb; flex: none; }
+  .r1 { flex: 1; min-width: 0; }
+  .r1 b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r1 small { display: block; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .r2 { text-align: right; color: #888; font-size: 12px; }
+  .r2 i { display: inline-block; background: #e3f3ff; color: #06c; border-radius: 4px; padding: 0 5px; font-style: normal; }
+  .r2 em { display: inline-block; min-width: 18px; background: #f33; color: #fff; border-radius: 9px; padding: 0 5px; font-style: normal; text-align: center; }
+  .b1 { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  .h1 { height: 56px; flex: none; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid #ddd; }
+  .h1 .who { font-size: 16px; font-weight: 700; }
+  .h1 button { margin-left: 6px; }
+  .bar { flex: none; background: #e6e6e6; padding: 8px 16px; display: flex; justify-content: space-between; align-items: center; }
+  .m0 { flex: 1; overflow-y: auto; padding: 14px 16px; background: #f4f5f7; min-height: 0; }
+  .m1 { display: flex; align-items: flex-end; gap: 6px; margin: 6px 0; }
+  .m1.o { justify-content: flex-end; }
+  .m1 .t { font-size: 11px; color: #777; }
+  .m2 { max-width: 62%; padding: 8px 12px; border-radius: 14px; background: #fff; white-space: pre-wrap; word-break: break-word; }
+  .m1.o .m2 { background: #8de05b; }
+  .m2 img { display: block; width: 120px; height: 90px; border-radius: 10px; background: #ccc; }
+  .dd { margin: 12px auto; width: fit-content; background: rgba(0, 0, 0, .25); color: #fff; border-radius: 10px; padding: 2px 12px; font-size: 12px; }
+  .f1 { flex: none; position: relative; border-top: 1px solid #ddd; padding: 8px 12px; display: flex; gap: 8px; align-items: flex-end; background: #fff; }
+  .f1 textarea { flex: 1; height: 64px; resize: none; padding: 6px; }
+  .f1 .pv { display: flex; gap: 4px; }
+  .f1 .pv img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
+  .cv { position: absolute; inset: 0; background: rgba(228, 228, 228, .96); display: flex; align-items: center; justify-content: center; text-align: center; padding: 0 24px; }
+  .go { background: #06c755; color: #fff; border: 0; border-radius: 6px; padding: 8px 18px; font-weight: 700; }
+  .go[disabled] { opacity: .4; }
+  .md { position: fixed; inset: 0; background: rgba(0, 0, 0, .35); display: flex; align-items: center; justify-content: center; }
+  .md > div { background: #fff; padding: 20px; border-radius: 8px; }
+  .nt { position: fixed; top: 12px; right: 12px; background: #333; color: #fff; padding: 10px 14px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<div class="a1"></div>
+<div class="a2">
+  <div class="a3"><input type="text" placeholder="ค้นหา" id="q"><button type="button" id="flt">ทั้งหมด</button></div>
+  <div class="a4" id="rows"></div>
+</div>
+<div class="b1" id="conv" hidden>
+  <div class="h1"><div class="who" id="who"></div><div><button type="button">ต้องดำเนินการ</button><button type="button">ดำเนินการแล้ว</button><button type="button">ค้นหา</button></div></div>
+  <div class="bar" id="bar" hidden><span>กำลังใช้ข้อความตอบกลับอัตโนมัติ</span><button type="button" id="manual">แชทแบบแมนนวล</button></div>
+  <div class="m0" id="msgs"></div>
+  <div class="f1" id="foot">
+    <button type="button" id="attach" aria-label="แนบไฟล์">📎</button>
+    <input type="file" id="file" accept="image/*" multiple hidden>
+    <div class="pv" id="pv"></div>
+    <textarea id="box" placeholder="พิมพ์ข้อความ"></textarea>
+    <button type="button" class="go" id="go" disabled>ส่ง</button>
+    <div class="cv" id="cv" hidden>ขณะนี้อยู่ในเวลาตอบข้อความ หากต้องการแชทแบบแมนนวลเป็นการชั่วคราว โปรดคลิก “แชทแบบแมนนวล”</div>
+  </div>
+</div>
+<script>
+  // ---- invented data: 65 customers, the list loads 20 more rows when it is scrolled near its end ----
+  const BOT = location.pathname.split('/')[1] || 'Ubbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const uid = (n) => 'U' + String(n).padStart(32, '0');
+  const TOTAL = 65;
+  const nowLabel = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + '.' + String(d.getMinutes()).padStart(2, '0') + ' น.'; };
+  const people = Array.from({ length: TOTAL }, (_, i) => ({
+    id: uid(i + 1), name: 'ลูกค้า ' + String(i + 1).padStart(2, '0'),
+    time: i === 0 ? '11.34 น.' : i === 1 ? 'เมื่อวาน' : i === 2 ? 'จันทร์' : '12 ต.ค.',
+    tag: i % 3 === 0 ? 'แมนนวล' : '', unread: i === 4 ? 2 : 0, auto: i === 5,
+    last: i === 7 ? 'in' : 'out', recent: i === 7,
+    msgs: [{ who: 'in', text: 'สวัสดี ' + i }, { who: 'out', text: 'ยินดีต้อนรับ ' + i }],
+  }));
+  window.__sent = [];            // what the "customer service staff" sent: the test reads it
+  window.__enterSends = 0;       // times Enter in the box sent something (the extension must never rely on it)
+  let loaded = 0;
+  const rows = document.getElementById('rows');
+  function addRows() {
+    for (let i = loaded; i < Math.min(loaded + 20, TOTAL); i++) {
+      const p = people[i];
+      const a = document.createElement('a');
+      a.href = '/' + BOT + '/chat/' + p.id;
+      a.innerHTML = '<span class="av"></span><span class="r1"><b></b><small>ข้อความล่าสุด (ตัวอย่าง)</small></span><span class="r2"><div class="tm"></div><div class="tg"></div></span>';
+      a.querySelector('b').textContent = p.name;
+      a.querySelector('.tm').textContent = p.time;
+      if (p.tag) a.querySelector('.tg').innerHTML = '<i>' + p.tag + '</i>';
+      if (p.unread) a.querySelector('.tg').innerHTML += ' <em>' + p.unread + '</em>';
+      a.addEventListener('click', (e) => { e.preventDefault(); history.pushState({}, '', a.getAttribute('href')); show(); });
+      rows.appendChild(a);
+    }
+    loaded = Math.min(loaded + 20, TOTAL);
+  }
+  rows.addEventListener('scroll', () => { if (rows.scrollTop + rows.clientHeight > rows.scrollHeight - 80 && loaded < TOTAL) setTimeout(addRows, 250); });
+  addRows();
+
+  // ---- the open conversation ----
+  const $ = (id) => document.getElementById(id);
+  let cur = null;
+  function bubble(m) {
+    const w = document.createElement('div');
+    w.className = 'm1 ' + (m.who === 'out' ? 'o' : '');
+    const t = '<span class="t">' + (m.time || '10.15 น.') + '</span>';
+    const b = document.createElement('div');
+    b.className = 'm2';
+    if (m.img) { const i = document.createElement('img'); i.src = m.img; b.appendChild(i); } else b.textContent = m.text;
+    if (m.who === 'out') w.innerHTML = t, w.appendChild(b); else { w.appendChild(b); w.insertAdjacentHTML('beforeend', t); }
+    return w;
+  }
+  function show() {
+    const m = /\/chat\/([A-Za-z0-9_-]+)/.exec(location.pathname);
+    cur = m && people.find((p) => p.id === m[1]);
+    $('conv').hidden = !cur;
+    document.querySelectorAll('#rows a').forEach((a) => a.classList.toggle('sel', !!cur && a.getAttribute('href').endsWith(cur.id)));
+    if (!cur) return;
+    $('who').textContent = cur.name;
+    const box = $('msgs');
+    box.innerHTML = '<div class="dd">' + (cur.recent ? 'วันนี้' : '12 ต.ค.') + '</div>';
+    for (const x of cur.msgs) box.appendChild(bubble(x));
+    if (cur.recent) { const w = bubble({ who: 'in', text: 'ขอราคาหน่อยค่ะ', time: nowLabel() }); box.appendChild(w); }
+    box.scrollTop = box.scrollHeight;
+    const auto = cur.auto && !cur.manual;
+    $('bar').hidden = !auto; $('cv').hidden = !auto; $('box').disabled = auto; $('box').value = ''; $('pv').innerHTML = ''; $('go').disabled = true;
+  }
+  addEventListener('popstate', show);
+  $('manual').addEventListener('click', () => {
+    const d = document.createElement('div');
+    d.className = 'md'; d.setAttribute('role', 'dialog');
+    d.innerHTML = '<div><p>สลับเป็นแชทแบบแมนนวล?</p><button type="button" id="no">ยกเลิก</button> <button type="button" id="yes">ตกลง</button></div>';
+    document.body.appendChild(d);
+    d.querySelector('#no').onclick = () => d.remove();
+    d.querySelector('#yes').onclick = () => { cur.manual = true; d.remove(); show(); };
+  });
+  const files = [];
+  $('attach').addEventListener('click', () => { /* a real file chooser would open; the test sets .files itself */ });
+  $('file').addEventListener('change', () => {
+    for (const f of $('file').files) { files.push(f); const i = document.createElement('img'); i.src = URL.createObjectURL(f); $('pv').appendChild(i); }
+    $('go').disabled = !($('box').value.trim() || files.length);
+  });
+  $('box').addEventListener('input', () => { $('go').disabled = !($('box').value.trim() || files.length); });
+  function send() {
+    const box = $('msgs');
+    if ($('box').value.trim()) { window.__sent.push({ user: cur.id, text: $('box').value }); box.appendChild(bubble({ who: 'out', text: $('box').value, time: nowLabel() })); }
+    for (const f of files.splice(0)) { window.__sent.push({ user: cur.id, file: f.name }); box.appendChild(bubble({ who: 'out', img: URL.createObjectURL(f), time: nowLabel() })); }
+    $('box').value = ''; $('pv').innerHTML = ''; $('go').disabled = true; box.scrollTop = box.scrollHeight;
+  }
+  $('go').addEventListener('click', send);
+  $('box').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); window.__enterSends++; send(); } });
+  show();
+  // ?warn=1 shows a rate-limit notice the way a toast would (for blockCheck)
+  if (/warn=1/.test(location.search)) document.body.insertAdjacentHTML('beforeend', '<div class="nt" role="alert">Too many requests. Please try again later.</div>');
+</script>
+</body>
+</html>

@@ -13,6 +13,12 @@ public static class FeatureGates
     public const string ProRequired = "ต้องใช้แผน Pro ขึ้นไป";
     public const string AgencyRequired = "ต้องใช้แผน Agency";
     public const string PremiumRequired = "การดันโพสต์ต้องใช้แผน Premium (Agency)";
+    public const string LineChatRequired = "แชท LINE ใช้ได้ในแพ็กเกจ Pro ขึ้นไป";
+
+    public static async Task RequireLineChatAsync(this IUserRepository users, Workspace ws, CancellationToken ct)
+    {
+        if (!(await users.OwnerOfAsync(ws, ct)).HasLineChat) throw new ForbiddenException(LineChatRequired);
+    }
 
     public static async Task RequireNotificationsAsync(this IUserRepository users, Workspace ws, CancellationToken ct)
     {

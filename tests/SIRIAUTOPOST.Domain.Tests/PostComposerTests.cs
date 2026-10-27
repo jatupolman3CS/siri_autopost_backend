@@ -205,4 +205,59 @@ public class PostComposerTests
         var text = PostComposer.ComposeFull(new string('ก', Post.MaxComposedLength), "", Settings(), Always(0.0));
         Assert.Equal(Post.MaxComposedLength, text.Length);
     }
+
+    [Fact]
+    public void Chat_mode_replaces_name_and_code_tags()
+    {
+        var template = "สวัสดีคุณ {{name}} ({{ชื่อ}})\nรหัสลูกค้า {{code}} ({{รหัส}})";
+        var res = PostComposer.Compose(template, "C01", ComposeMode.Chat, "สมชาย");
+        Assert.Equal("สวัสดีคุณ สมชาย (สมชาย)\nรหัสลูกค้า C01 (C01)", res);
+    }
+
+    [Fact]
+    public void Chat_mode_removes_standalone_tag_lines_when_empty()
+    {
+        var template = "สวัสดีครับ\n{{name}}\nยินดีต้อนรับ\n{{code}}\nขอบคุณครับ";
+        var res = PostComposer.Compose(template, "", ComposeMode.Chat, "");
+        Assert.Equal("สวัสดีครับ\nยินดีต้อนรับ\nขอบคุณครับ", res);
+    }
+
+    [Fact]
+    public void Chat_mode_never_adds_footer_or_hashtags_and_never_prepends_code()
+    {
+        var template = "ข้อความหลัก";
+        var settings = Settings("ข้อความท้าย", "#แท็ก");
+        var res = PostComposer.ComposeFull(template, "CODE123", settings, Always(0.0), ComposeMode.Chat, "สมชาย");
+        Assert.Equal("ข้อความหลัก", res);
+    }
+
+    [Fact]
+    public void SplitBubbles_returns_single_bubble_when_disabled_and_under_limit()
+    {
+        var text = "ข้อความบรรทัด 1\n\nข้อความบรรทัด 2";
+        var bubbles = PostComposer.SplitBubbles(text, split: false);
+        Assert.Single(bubbles);
+        Assert.Equal(text, bubbles[0]);
+    }
+
+    [Fact]
+    public void SplitBubbles_splits_on_blank_lines_when_enabled()
+    {
+        var text = "บับเบิ้ล 1\n\nบับเบิ้ล 2\n\n\nบับเบิ้ล 3";
+        var bubbles = PostComposer.SplitBubbles(text, split: true);
+        Assert.Equal(3, bubbles.Length);
+        Assert.Equal("บับเบิ้ล 1", bubbles[0]);
+        Assert.Equal("บับเบิ้ล 2", bubbles[1]);
+        Assert.Equal("บับเบิ้ล 3", bubbles[2]);
+    }
+
+    [Fact]
+    public void SplitBubbles_merges_to_at_most_5_bubbles()
+    {
+        var text = "1\n\n2\n\n3\n\n4\n\n5\n\n6\n\n7";
+        var bubbles = PostComposer.SplitBubbles(text, split: true);
+        Assert.True(bubbles.Length <= 5);
+        Assert.Contains("1", bubbles[0]);
+        Assert.Contains("7", bubbles[^1]);
+    }
 }

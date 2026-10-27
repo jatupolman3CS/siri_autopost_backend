@@ -11,6 +11,7 @@ using SIRIAUTOPOST.Application.Features.Billing;
 using SIRIAUTOPOST.Application.Features.AutoReply;
 using SIRIAUTOPOST.Application.Features.Collections;
 using SIRIAUTOPOST.Application.Features.LinkSets;
+using SIRIAUTOPOST.Application.Features.LineChats;
 using SIRIAUTOPOST.Application.Features.MasterPosts;
 using SIRIAUTOPOST.Application.Features.Notifications;
 using SIRIAUTOPOST.Application.Features.Reports;
@@ -156,9 +157,13 @@ public static class DependencyInjection
         services.AddCommand<DeleteLinkCommand, Unit, DeleteLinkCommandHandler>();
         services.AddCommand<EnableLinkCommand, SetLinkDto, EnableLinkCommandHandler>();
         services.AddCommand<BulkAddLinksCommand, BulkLinksResultDto, BulkAddLinksCommandHandler>();
+        services.AddCommand<ImportLineChatsCommand, BulkLinksResultDto, ImportLineChatsCommandHandler>();
         services.AddCommand<ImportAccountGroupsCommand, LinkSetDto, ImportAccountGroupsCommandHandler>();
         services.AddCommand<ImportLinksCsvCommand, CsvImportResultDto, ImportLinksCsvCommandHandler>();
         services.AddQuery<GetAccountGroupsQuery, IReadOnlyList<GroupLinkDto>, GetAccountGroupsQueryHandler>();
+        // LINE OA customer chats
+        services.AddQuery<GetLineChatsQuery, LineChatPageDto, GetLineChatsQueryHandler>();
+        services.AddCommand<UpdateLineChatCommand, LineChatDto, UpdateLineChatCommandHandler>();
 
         // Schedule engine: schedules, the materializer that queues their posts, test posts, backup and restore
         services.AddScoped<ScheduleMaterializer>();
@@ -196,6 +201,7 @@ public static class DependencyInjection
         services.AddCommand<PairDeviceCommand, PairResultDto, PairDeviceCommandHandler>();
         services.AddCommand<DeviceHeartbeatCommand, DeviceStatusDto, DeviceHeartbeatCommandHandler>();
         services.AddCommand<SyncDeviceGroupsCommand, int, SyncDeviceGroupsCommandHandler>();
+        services.AddCommand<SyncLineChatsCommand, int, SyncLineChatsCommandHandler>();
         services.AddCommand<ClaimJobCommand, JobDto?, ClaimJobCommandHandler>();
         services.AddCommand<ReportJobResultCommand, PostDto, ReportJobResultCommandHandler>();
         services.AddCommand<ReportBumpResultCommand, Unit, ReportBumpResultCommandHandler>();

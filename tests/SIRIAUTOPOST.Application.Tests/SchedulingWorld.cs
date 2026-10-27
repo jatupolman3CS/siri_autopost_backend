@@ -1,3 +1,4 @@
+using SIRIAUTOPOST.Domain.Services;
 using NSubstitute;
 using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Application.DTOs;
@@ -84,7 +85,7 @@ internal sealed class SchedulingWorld
 
     public SetLink AddLink(string slug, string code = "", int dailyMax = 0, string? name = null)
     {
-        var link = SetLink.Create(Ws.Id, Set.Id, name ?? $"กลุ่ม {slug}", $"https://www.facebook.com/groups/{slug}", code, dailyMax, Now, Links.Count);
+        var link = SetLink.Create(Ws.Id, Set.Id, name ?? $"กลุ่ม {slug}", $"https://www.facebook.com/groups/{slug}", code, dailyMax, Now, Platform.Fb, Links.Count);
         Links.Add(link);
         return link;
     }
@@ -134,4 +135,27 @@ internal sealed class SchedulingWorld
 
     /// <summary>The local time of a post in the schedule's calendar.</summary>
     public static DateTime Local(Post p, int offsetMinutes = 420) => p.ScheduledAt.ToOffset(TimeSpan.FromMinutes(offsetMinutes)).DateTime;
+
+    public void SwitchToLine(string botId = "shop_bot", string oaName = "Shop OA")
+    {
+        Accounts.Clear();
+        var device = Device.Pair(Ws.Id, "PC", "Chrome", "2.2.0", "hash", Now);
+        var lineAccount = SocialAccount.CreateLine(Ws.Id, device.Id, botId, oaName, Now);
+        Accounts.Add(lineAccount);
+        Set = LinkSet.Create(Ws.Id, "ชุดแชทลูกค้า", lineAccount.Id, Now, channel: Platform.Line);
+        Links.Clear();
+    }
+
+    public SetLink AddLineChat(string botId, string userId, string name = "ลูกค้าสมชาย", int dailyMax = 0)
+    {
+        var url = LineChatUrl.Build(botId, userId);
+        var link = SetLink.Create(Ws.Id, Set.Id, name, url, "", dailyMax, Now, Platform.Line, Links.Count);
+        Links.Add(link);
+        return link;
+    }
+
+    public Schedule NewLineSchedule(
+        string[]? times = null, LineOptions? lineOptions = null, int groupGapMinutes = 0) =>
+        Schedule.Create(Ws.Id, "ตารางไลน์", Collection.Id, Set.Id, ScheduleMode.Daily, times ?? ["10:00"], 6, "09:00", Today, "14:00", PostOrder.Rotate,
+            "09:00", "21:00", 3, 0, 0, null, 420, Now, false, PostRepeat.Recent, groupGapMinutes: groupGapMinutes, lineOptions: lineOptions ?? new LineOptions());
 }

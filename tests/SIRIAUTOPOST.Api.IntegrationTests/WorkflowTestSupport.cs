@@ -59,8 +59,8 @@ internal static class WorkflowTestSupport
         await (await client.PostAsJsonAsync($"/api/workspaces/{ws}/collections/{collection}/posts", new { text, mediaIds = media ?? [] }, Json))
             .ReadAsync<CollectionPostDto>();
 
-    public static async Task<LinkSetDto> CreateLinkSetAsync(this HttpClient client, Guid ws, string name = "กลุ่มขายของ", Guid? postAs = null) =>
-        await (await client.PostAsJsonAsync($"/api/workspaces/{ws}/link-sets", new { name, postAsAccountId = postAs }, Json)).ReadAsync<LinkSetDto>();
+    public static async Task<LinkSetDto> CreateLinkSetAsync(this HttpClient client, Guid ws, string name = "กลุ่มขายของ", Guid? postAs = null, string channel = "fb") =>
+        await (await client.PostAsJsonAsync($"/api/workspaces/{ws}/link-sets", new { name, postAsAccountId = postAs, channel }, Json)).ReadAsync<LinkSetDto>();
 
     public static async Task<SetLinkDto> AddLinkAsync(
         this HttpClient client, Guid ws, Guid set, string? url, string? code = null, string? name = null, int? dailyMax = null) =>
@@ -111,6 +111,23 @@ internal static class WorkflowTestSupport
         factory.WithDbAsync(async db =>
         {
             var account = SocialAccount.Create(ws, Platform.Fb, name, "", target, health, groups, await db.Accounts.CountAsync(a => a.WorkspaceId == ws));
+            db.Accounts.Add(account);
+            await db.SaveChangesAsync();
+            return AccountDto.From(account);
+        });
+
+    
+    /// <summary>
+    /// A Line account made straight in the database.
+    /// </summary>
+    public static Task<AccountDto> SeedLineAccountAsync(
+        this ApiFactory factory, Guid ws, string botId = "@shop_bot", string oaName = "Shop OA", AccountHealth health = AccountHealth.Ok) =>
+        factory.WithDbAsync(async db =>
+        {
+            var device = await db.Devices.FirstOrDefaultAsync(d => d.WorkspaceId == ws);
+            var deviceId = device?.Id ?? Guid.NewGuid();
+            var account = SocialAccount.CreateLine(ws, deviceId, botId, oaName, DateTimeOffset.UtcNow, await db.Accounts.CountAsync(a => a.WorkspaceId == ws));
+            if (health == AccountHealth.Relogin) account.MarkNeedsLogin();
             db.Accounts.Add(account);
             await db.SaveChangesAsync();
             return AccountDto.From(account);

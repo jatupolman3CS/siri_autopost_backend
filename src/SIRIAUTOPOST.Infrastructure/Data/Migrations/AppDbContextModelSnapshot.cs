@@ -194,6 +194,15 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_seen_at");
 
+                    b.Property<string>("LineBotId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("line_bot_id");
+
+                    b.Property<DateTimeOffset?>("LineReadyAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("line_ready_at");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(80)
@@ -589,6 +598,77 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.ToTable("IMPORTED_POSTS", (string)null);
                 });
 
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.LineChat", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AccountId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("account_id");
+
+                    b.Property<string>("ChatUrl")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("chat_url");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("DoNotSend")
+                        .HasColumnType("boolean")
+                        .HasColumnName("do_not_send");
+
+                    b.Property<string>("Labels")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("labels");
+
+                    b.Property<DateTimeOffset?>("LastMessageAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_message_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTimeOffset>("SyncedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("synced_at");
+
+                    b.Property<bool>("Unread")
+                        .HasColumnType("boolean")
+                        .HasColumnName("unread");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("user_id");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("workspace_id");
+
+                    b.HasKey("Id")
+                        .HasName("pk_line_chats");
+
+                    b.HasIndex("AccountId", "UserId")
+                        .IsUnique()
+                        .HasDatabaseName("ix_line_chats_account_id_user_id");
+
+                    b.HasIndex("WorkspaceId", "AccountId", "Name")
+                        .HasDatabaseName("ix_line_chats_workspace_id_account_id_name");
+
+                    b.ToTable("LINE_CHATS", (string)null);
+                });
+
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.LinkSet", b =>
                 {
                     b.Property<Guid>("Id")
@@ -604,6 +684,14 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Property<bool>("Active")
                         .HasColumnType("boolean")
                         .HasColumnName("active");
+
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("Fb")
+                        .HasColumnName("channel");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
@@ -994,6 +1082,12 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
+
+                    b.Property<int>("DeferCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("defer_count");
 
                     b.Property<bool>("ErrorDismissed")
                         .HasColumnType("boolean")
@@ -1560,6 +1654,14 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<string>("Channel")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("Fb")
+                        .HasColumnName("channel");
+
                     b.Property<string>("Code")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -1714,6 +1816,10 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .HasColumnType("character varying(30)")
                         .HasColumnName("platform");
 
+                    b.Property<DateTimeOffset?>("RestUntil")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rest_until");
+
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer")
                         .HasColumnName("sort_order");
@@ -1730,6 +1836,11 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
 
                     b.HasIndex("WorkspaceId")
                         .HasDatabaseName("ix_social_accounts_workspace_id");
+
+                    b.HasIndex("WorkspaceId", "Platform", "Handle")
+                        .IsUnique()
+                        .HasDatabaseName("ix_social_accounts_workspace_id_platform_handle")
+                        .HasFilter("platform = 'Line'");
 
                     b.ToTable("SOCIAL_ACCOUNTS", (string)null);
                 });
@@ -2172,6 +2283,23 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                     b.Navigation("Media");
                 });
 
+            modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.LineChat", b =>
+                {
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.SocialAccount", null)
+                        .WithMany()
+                        .HasForeignKey("AccountId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_line_chats_accounts_account_id");
+
+                    b.HasOne("SIRIAUTOPOST.Domain.Entities.Workspace", null)
+                        .WithMany()
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_line_chats_workspaces_workspace_id");
+                });
+
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.LinkSet", b =>
                 {
                     b.HasOne("SIRIAUTOPOST.Domain.Entities.Workspace", null)
@@ -2350,6 +2478,37 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired()
                         .HasConstraintName("fk_schedules_workspaces_workspace_id");
+
+                    b.OwnsOne("SIRIAUTOPOST.Domain.Entities.LineOptions", "LineOptions", b1 =>
+                        {
+                            b1.Property<Guid>("ScheduleId");
+
+                            b1.Property<string>("AllowedFrom")
+                                .IsRequired();
+
+                            b1.Property<string>("AllowedTo")
+                                .IsRequired();
+
+                            b1.Property<bool>("ImagesFirst");
+
+                            b1.Property<int>("SkipIfActiveMinutes");
+
+                            b1.Property<bool>("SplitBubbles");
+
+                            b1.HasKey("ScheduleId");
+
+                            b1.ToTable("SCHEDULES");
+
+                            b1
+                                .ToJson("line_options")
+                                .HasColumnType("jsonb");
+
+                            b1.WithOwner()
+                                .HasForeignKey("ScheduleId")
+                                .HasConstraintName("fk_schedules_schedules_id");
+                        });
+
+                    b.Navigation("LineOptions");
                 });
 
             modelBuilder.Entity("SIRIAUTOPOST.Domain.Entities.SetLink", b =>
@@ -2547,11 +2706,31 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                                         .HasConstraintName("fk_workspaces_workspaces_anti_ban_settings_workspace_id");
                                 });
 
+                            b1.OwnsOne("SIRIAUTOPOST.Domain.ValueObjects.LineChatAntiBanSettings", "LineChat", b2 =>
+                                {
+                                    b2.Property<Guid>("AntiBanSettingsWorkspaceId");
+
+                                    b2.Property<int>("MaxGapSeconds");
+
+                                    b2.Property<int>("MinGapSeconds");
+
+                                    b2.HasKey("AntiBanSettingsWorkspaceId")
+                                        .HasName("pk_workspaces");
+
+                                    b2.ToTable("WORKSPACES");
+
+                                    b2.WithOwner()
+                                        .HasForeignKey("AntiBanSettingsWorkspaceId")
+                                        .HasConstraintName("fk_workspaces_workspaces_anti_ban_settings_workspace_id");
+                                });
+
                             b1.OwnsOne("SIRIAUTOPOST.Domain.ValueObjects.PlatformLimits", "Limits", b2 =>
                                 {
                                     b2.Property<Guid>("AntiBanSettingsWorkspaceId");
 
                                     b2.Property<int>("Fb");
+
+                                    b2.Property<int>("Line");
 
                                     b2.HasKey("AntiBanSettingsWorkspaceId")
                                         .HasName("pk_workspaces");
@@ -2567,6 +2746,9 @@ namespace SIRIAUTOPOST.Infrastructure.Data.Migrations
                                 .IsRequired();
 
                             b1.Navigation("Limits")
+                                .IsRequired();
+
+                            b1.Navigation("LineChat")
                                 .IsRequired();
                         });
 

@@ -20,7 +20,7 @@ public sealed record BackupLinkDto(string Name, string Url, string Code, int Dai
 /// <param name="RandomOrder">A file from before the setting has none: the groups are in a random order, as the default.</param>
 /// <param name="DailyPerGroup">A file from before the setting has none: no limit from the set.</param>
 public sealed record BackupLinkSetDto(
-    string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<BackupLinkDto> Links, bool RandomOrder = true, int DailyPerGroup = 0);
+    string Name, Guid? PostAsAccountId, IReadOnlyList<Guid> AccountIds, IReadOnlyList<BackupLinkDto> Links, bool RandomOrder = true, int DailyPerGroup = 0, Platform Channel = Platform.Fb);
 
 /// <param name="Collection">The collection's name.</param>
 /// <param name="LinkSet">The link set's name.</param>
@@ -29,7 +29,7 @@ public sealed record BackupScheduleDto(
     string Name, string Collection, string LinkSet, ScheduleMode Mode, IReadOnlyList<string> Times, int EveryHours, string FirstTime,
     string StartDate, string OnceTime, PostOrder Order, string DripFrom, string DripTo, int DripCount, int BumpHours, int AutoDeleteDays,
     IReadOnlyDictionary<string, IReadOnlyList<string>> Overrides, bool Active, int UtcOffsetMinutes, PostRepeat Repeat = PostRepeat.Recent,
-    BumpPlanDto? Bump = null, int GroupGapMinutes = 0);
+    BumpPlanDto? Bump = null, int GroupGapMinutes = 0, LineOptionsDto? LineOptions = null);
 
 /// <param name="Url">The group's address inside its set.</param>
 public sealed record BackupGroupNotifyRuleDto(string Url, NotifyChannel Channel, NotifyEventsDto? Events);

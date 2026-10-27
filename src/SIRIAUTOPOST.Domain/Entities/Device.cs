@@ -22,6 +22,24 @@ public class Device : Entity
     /// <summary>The engine paused the device itself (Facebook blocked it, or too many posts failed) until this time.</summary>
     public DateTimeOffset? AutoPausedUntil { get; private set; }
     public string? AutoPauseReason { get; private set; }
+    public DateTimeOffset? LineReadyAt { get; private set; }
+    public string? LineBotId { get; private set; }
+
+    public static readonly TimeSpan LineReadyWindow = TimeSpan.FromMinutes(5);
+
+    public bool IsLineReady(DateTimeOffset now) => LineReadyAt is { } at && now - at <= LineReadyWindow;
+
+    public void SetLineReady(string? botId, DateTimeOffset now)
+    {
+        LineReadyAt = now;
+        LineBotId = string.IsNullOrWhiteSpace(botId) ? null : Cut(botId.Trim(), 100);
+    }
+
+    public void ClearLineReady()
+    {
+        LineReadyAt = null;
+        LineBotId = null;
+    }
 
     private Device() { } // EF Core
 

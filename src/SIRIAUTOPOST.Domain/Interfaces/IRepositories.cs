@@ -89,10 +89,22 @@ public interface IAccountRepository
 {
     Task<IReadOnlyList<SocialAccount>> ListAsync(Guid workspaceId, CancellationToken ct = default);
     /// <summary>Accounts connected through a paired browser, in any of these workspaces.</summary>
-    Task<int> CountConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
-    Task<IReadOnlyList<SocialAccount>> ListConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default);
+    Task<int> CountConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default) =>
+        CountConnectedAsync(workspaceIds, Platform.Fb, ct);
+    Task<int> CountConnectedAsync(IEnumerable<Guid> workspaceIds, Platform platform, CancellationToken ct = default);
+
+    Task<IReadOnlyList<SocialAccount>> ListConnectedAsync(IEnumerable<Guid> workspaceIds, CancellationToken ct = default) =>
+        ListConnectedAsync(workspaceIds, Platform.Fb, ct);
+    Task<IReadOnlyList<SocialAccount>> ListConnectedAsync(IEnumerable<Guid> workspaceIds, Platform platform, CancellationToken ct = default);
+
     Task<SocialAccount?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
-    Task<SocialAccount?> GetByDeviceAsync(Guid deviceId, CancellationToken ct = default);
+
+    Task<SocialAccount?> GetByDeviceAsync(Guid deviceId, CancellationToken ct = default) =>
+        GetByDeviceAsync(deviceId, Platform.Fb, ct);
+    Task<SocialAccount?> GetByDeviceAsync(Guid deviceId, Platform platform, CancellationToken ct = default);
+
+    Task<IReadOnlyList<SocialAccount>> ListByDeviceAsync(Guid deviceId, CancellationToken ct = default);
+    Task<SocialAccount?> FindByHandleAsync(Guid workspaceId, Platform platform, string handle, CancellationToken ct = default);
     Task<int> CountAsync(Guid workspaceId, CancellationToken ct = default);
     void Add(SocialAccount account);
 }
@@ -215,7 +227,9 @@ public interface IPostRepository
     /// actually attempted count: a post the engine itself failed or skipped before handing it out (a daily limit, a group the
     /// extension no longer has) says nothing about how posting is going.
     /// </summary>
-    Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default);
+    Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, CancellationToken ct = default) =>
+        CountOutcomesSinceAsync(workspaceId, since, null, ct);
+    Task<(int Finished, int Failed)> CountOutcomesSinceAsync(Guid workspaceId, DateTimeOffset since, Platform? platform, CancellationToken ct = default);
     /// <summary>The newest finished outcomes of an account (success, awaiting approval, failed), newest first; attempted posts only, as above.</summary>
     Task<IReadOnlyList<PostStatus>> ListRecentOutcomesAsync(Guid accountId, int take, CancellationToken ct = default);
 
@@ -475,4 +489,29 @@ public interface IReportShareRepository
     Task DeleteExpiredAsync(DateTimeOffset before, CancellationToken ct = default);
     void Add(ReportShare share);
     void Remove(ReportShare share);
+}
+
+public sealed record LineChatFilter(
+    Guid WorkspaceId,
+    Guid? AccountId = null,
+    string? Q = null,
+    string? Label = null,
+    int? ActiveWithinDays = null,
+    bool? DoNotSend = null,
+    int Page = 1,
+    int PageSize = 20);
+
+public interface ILineChatRepository
+{
+    Task<IReadOnlyList<LineChat>> ListByAccountAsync(Guid accountId, CancellationToken ct = default);
+    Task<(IReadOnlyList<LineChat> Items, int Total, IReadOnlyList<string> Labels)> PageAsync(LineChatFilter filter, CancellationToken ct = default);
+    Task<LineChat?> GetAsync(Guid workspaceId, Guid id, CancellationToken ct = default);
+    Task<IReadOnlyList<LineChat>> GetManyAsync(Guid workspaceId, IEnumerable<Guid> ids, CancellationToken ct = default);
+    Task<LineChat?> FindAsync(Guid accountId, string userId, CancellationToken ct = default);
+    Task<IReadOnlyDictionary<Guid, int>> LinkedSetCountsAsync(IEnumerable<Guid> chatIds, CancellationToken ct = default);
+    Task<DateTimeOffset?> MaxSyncedAtAsync(Guid accountId, CancellationToken ct = default);
+    Task ReplaceForAccountAsync(Guid accountId, IEnumerable<LineChat> incoming, bool complete, DateTimeOffset now, CancellationToken ct = default);
+    Task DeleteByAccountAsync(Guid accountId, CancellationToken ct = default);
+    Task<int> CountByAccountAsync(Guid accountId, CancellationToken ct = default);
+    void Add(LineChat chat);
 }

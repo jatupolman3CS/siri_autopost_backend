@@ -150,7 +150,7 @@ public class DeviceCommand : Entity
     /// <summary>The commands the extension runs from the web (remoteCommands in client/background.js).</summary>
     public static readonly IReadOnlySet<string> Allowed = new HashSet<string>
     {
-        "start", "stop", "runNow", "testPost", "tgTest", "tgFindChats", "clearLogs", "syncNow", "takeJobs",
+        "start", "stop", "runNow", "testPost", "tgTest", "tgFindChats", "clearLogs", "syncNow", "takeJobs", "syncLineChats",
     };
 
     /// <summary>Buttons that make the extension post (start, run now, test post, take the schedules' due posts).</summary>

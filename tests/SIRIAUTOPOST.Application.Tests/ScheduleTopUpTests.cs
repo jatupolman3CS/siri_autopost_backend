@@ -200,7 +200,7 @@ public class ScheduleTopUpTests
     {
         var rig = new Rig();
         var big = LinkSet.Create(rig.World.Ws.Id, "ใหญ่", null, Now);
-        var bigLinks = Enumerable.Range(0, 150).Select(i => SetLink.Create(rig.World.Ws.Id, big.Id, $"g{i}", $"https://www.facebook.com/groups/big{i}", "", 0, Now, i)).ToList();
+        var bigLinks = Enumerable.Range(0, 150).Select(i => SetLink.Create(rig.World.Ws.Id, big.Id, $"g{i}", $"https://www.facebook.com/groups/big{i}", "", 0, Now, Platform.Fb, i)).ToList();
         rig.World.LinkSets.GetAsync(rig.World.Ws.Id, big.Id, Arg.Any<CancellationToken>()).Returns(big);
         rig.World.SetLinks.ListBySetAsync(rig.World.Ws.Id, big.Id, Arg.Any<CancellationToken>()).Returns(bigLinks);
         var tooMany = rig.Add(Schedule.Create(rig.World.Ws.Id, "ใหญ่", rig.World.Collection.Id, big.Id, ScheduleMode.Daily,

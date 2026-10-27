@@ -263,7 +263,7 @@ public class ScheduleSpacingEndpointsTests(ApiFactory factory)
         // The group is in the third extension's set too (as data from before the rule had it; the API would refuse it now).
         await factory.WithDbAsync(async db =>
         {
-            db.SetLinks.Add(SIRIAUTOPOST.Domain.Entities.SetLink.Create(w.Ws, thirdsSet.Id, null, held, null, 0, DateTimeOffset.UtcNow.AddDays(1)));
+            db.SetLinks.Add(SIRIAUTOPOST.Domain.Entities.SetLink.Create(w.Ws, thirdsSet.Id, null, held, null, 0, DateTimeOffset.UtcNow.AddDays(1), SIRIAUTOPOST.Domain.Enums.Platform.Fb));
             await db.SaveChangesAsync();
         });
 

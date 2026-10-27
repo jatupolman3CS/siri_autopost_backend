@@ -15,10 +15,12 @@ namespace SIRIAUTOPOST.Application.Common;
 public static class ScheduleSpacing
 {
     /// <summary>One gap in seconds, whole seconds (the database keeps microseconds and a time should read back as it was made).</summary>
-    public static double GapSeconds(Schedule s, AntiBanSettings anti, Func<double> next) =>
+    public static double GapSeconds(Schedule s, AntiBanSettings anti, Func<double> next, Platform channel = Platform.Fb) =>
         s.GroupGapMinutes > 0
             ? Math.Round(s.GroupGapMinutes * 60 * (1 + next() * Schedule.GroupGapJitter))
-            : Math.Round((anti.Min + next() * (anti.Max - anti.Min)) * 60);
+            : channel == Platform.Line
+                ? Math.Round(anti.LineChat.MinGapSeconds + next() * (anti.LineChat.MaxGapSeconds - anti.LineChat.MinGapSeconds))
+                : Math.Round((anti.Min + next() * (anti.Max - anti.Min)) * 60);
 
     /// <summary>
     /// Lays out the posts a schedule still has queued again, with its gap: the rounds of one local day follow each other on
@@ -34,7 +36,7 @@ public static class ScheduleSpacing
     {
         var today = s.LocalDay(now).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         var queued = posts
-            .Where(p => p.ScheduleId == s.Id && p.Status == PostStatus.Queued && p.RushedAt is null && !p.IsTest && p.SlotKey is { Length: >= 10 })
+            .Where(p => p.ScheduleId == s.Id && p.Status == PostStatus.Queued && p.RushedAt is null && !p.IsTest && p.SlotKey is { Length: >= 10 } && p.DeferCount == 0)
             .ToList();
         var moved = 0;
         foreach (var day in queued.GroupBy(p => p.SlotKey![..10]).Where(g => string.CompareOrdinal(g.Key, today) >= 0)
@@ -55,6 +57,12 @@ public static class ScheduleSpacing
             {
                 var at = Latest(SlotStart(s, p) ?? p.ScheduledAt, floor);
                 if (end is { } e) at = Latest(at, e.AddSeconds(gapSeconds()));
+                if (s.LineOptions is not null && !s.AllowsLineAt(at))
+                {
+                    var localAt = at.ToOffset(TimeSpan.FromMinutes(s.UtcOffsetMinutes));
+                    var nextDay = DateOnly.FromDateTime(localAt.DateTime).AddDays(1);
+                    at = s.ToUtc(nextDay, s.LineOptions.AllowedFrom);
+                }
                 if (at.ToUniversalTime() != p.ScheduledAt)
                 {
                     p.Reschedule(at, now);

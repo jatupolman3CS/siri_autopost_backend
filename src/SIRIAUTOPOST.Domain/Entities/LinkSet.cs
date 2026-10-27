@@ -4,8 +4,8 @@ using SIRIAUTOPOST.Domain.Services;
 
 namespace SIRIAUTOPOST.Domain.Entities;
 
-// A named set of Facebook group links ("ชุดลิงก์กลุ่ม") that one browser posts to, plus other accounts that post the
-// same content. A schedule pairs one with a collection.
+// A named set of group or chat links ("ชุดลิงก์") that one browser posts to.
+// A schedule pairs one with a collection.
 public class LinkSet : Entity
 {
     public const int MaxNameLength = 120;
@@ -16,11 +16,14 @@ public class LinkSet : Entity
     /// <summary>Other accounts per set.</summary>
     public const int MaxAccounts = 50;
 
+    public static int MaxLinksFor(Platform p) => p == Platform.Line ? 2000 : MaxLinks;
+
     public Guid WorkspaceId { get; private set; }
+    public Platform Channel { get; private set; } = Platform.Fb;
     public string Name { get; private set; } = "";
     /// <summary>
-    /// The connected Facebook account whose browser posts the links; null = the workspace's first connected Facebook
-    /// account when posts are generated.
+    /// The connected account whose browser posts the links; null = the workspace's first connected account
+    /// when posts are generated.
     /// </summary>
     public Guid? PostAsAccountId { get; private set; }
     /// <summary>
@@ -39,19 +42,31 @@ public class LinkSet : Entity
     /// </summary>
     public bool RandomOrder { get; private set; } = true;
     /// <summary>
-    /// How many posts a day each group of the set may get (the schedule's local day); 0 = no limit from the set. A link's own
-    /// <see cref="SetLink.DailyMax"/> replaces it for that link. A group that has more times than this in a day gets a random
-    /// choice of them, so the same group is not always posted in the first slot.
+    /// How many posts a day each group/chat of the set may get (the schedule's local day); 0 = no limit from the set. A link's own
+    /// <see cref="SetLink.DailyMax"/> replaces it for that link. A target that has more times than this in a day gets a random
+    /// choice of them, so the same target is not always posted in the first slot.
     /// </summary>
     public int DailyPerGroup { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
     private LinkSet() { } // EF Core
 
-    public static LinkSet Create(Guid workspaceId, string name, Guid? postAsAccountId, DateTimeOffset now, int sortOrder = 0)
+    public static LinkSet Create(
+        Guid workspaceId, string name, Guid? postAsAccountId, DateTimeOffset now, int sortOrder = 0, Platform channel = Platform.Fb)
     {
-        var set = new LinkSet { WorkspaceId = workspaceId, PostAsAccountId = postAsAccountId, CreatedAt = now, SortOrder = sortOrder };
+        var set = new LinkSet
+        {
+            WorkspaceId = workspaceId,
+            PostAsAccountId = postAsAccountId,
+            CreatedAt = now,
+            SortOrder = sortOrder,
+            Channel = channel,
+        };
         set.Name = CleanName(name);
+        if (channel == Platform.Line)
+        {
+            set.DailyPerGroup = 1;
+        }
         return set;
     }
 
@@ -75,6 +90,8 @@ public class LinkSet : Entity
     /// </summary>
     public int DailyCapFor(SetLink link) => link.DailyMax > 0 ? link.DailyMax : DailyPerGroup;
 
+    public void SetChannel(Platform channel) => Channel = channel;
+
     private static string CleanName(string? name)
     {
         var n = (name ?? "").Trim();
@@ -84,7 +101,7 @@ public class LinkSet : Entity
     }
 }
 
-// One Facebook group link of a link set. Not the GroupLink value class of SocialAccount (the groups a browser synced).
+// One link of a link set (Facebook group or LINE customer chat).
 public class SetLink : Entity
 {
     public const int MaxNameLength = 200;
@@ -94,12 +111,13 @@ public class SetLink : Entity
 
     public Guid WorkspaceId { get; private set; }
     public Guid LinkSetId { get; private set; }
+    public Platform Channel { get; private set; } = Platform.Fb;
     public string Name { get; private set; } = "";
-    /// <summary>The normalised group address; a text that is not a Facebook group address is kept as typed and is not valid.</summary>
+    /// <summary>The normalised target address; invalid text is kept as typed and is not valid.</summary>
     public string Url { get; private set; } = "";
     /// <summary>The group's code: it replaces {{code}} in the post text, or becomes its first line.</summary>
     public string Code { get; private set; } = "";
-    /// <summary>Posts per 24 hours to this group; 0 = unlimited.</summary>
+    /// <summary>Posts per 24 hours to this target; 0 = unlimited.</summary>
     public int DailyMax { get; private set; }
     public bool Enabled { get; private set; } = true;
     public LinkHealth Health { get; private set; }
@@ -112,23 +130,32 @@ public class SetLink : Entity
 
     /// <summary>A blank or invalid address is allowed (the web app adds an empty row); such a link is never used.</summary>
     public static SetLink Create(
-        Guid workspaceId, Guid linkSetId, string? name, string? url, string? code, int dailyMax, DateTimeOffset now, int sortOrder = 0)
+        Guid workspaceId, Guid linkSetId, string? name, string? url, string? code, int dailyMax, DateTimeOffset now, Platform channel, int sortOrder = 0)
     {
-        var link = new SetLink { WorkspaceId = workspaceId, LinkSetId = linkSetId, CreatedAt = now, SortOrder = sortOrder, Enabled = true, Health = LinkHealth.Ok };
+        var link = new SetLink
+        {
+            WorkspaceId = workspaceId,
+            LinkSetId = linkSetId,
+            CreatedAt = now,
+            SortOrder = sortOrder,
+            Enabled = true,
+            Health = LinkHealth.Ok,
+            Channel = channel,
+        };
         link.Apply(name, url, code, dailyMax);
         return link;
     }
 
-    public bool IsValid => FacebookGroupUrl.IsValid(Url);
+    public bool IsValid => Channel == Platform.Line ? LineChatUrl.IsValid(Url) : FacebookGroupUrl.IsValid(Url);
 
     /// <summary>Would this normalised address and code fit? (Bulk and CSV imports count a row that does not as invalid.)</summary>
     public static bool Fits(string normalizedUrl, string? code) =>
         normalizedUrl.Length <= MaxUrlLength && (code ?? "").Trim().Length <= MaxCodeLength;
 
-    /// <summary>The group's slug, empty when the address is not valid.</summary>
-    public string Slug => FacebookGroupUrl.Slug(Url) ?? "";
+    /// <summary>The group's slug, empty when the address is not valid or is a LINE chat.</summary>
+    public string Slug => Channel == Platform.Line ? "" : (FacebookGroupUrl.Slug(Url) ?? "");
 
-    /// <summary>Posts may go to this link: switched on and a real group address.</summary>
+    /// <summary>Posts may go to this link: switched on and a real target address.</summary>
     public bool IsUsable => Enabled && IsValid;
 
     /// <summary>The form: values and the switch. Switching off by hand or on again follows <see cref="DisableManually"/> / <see cref="Enable"/>.</summary>
@@ -183,15 +210,22 @@ public class SetLink : Entity
     private void Apply(string? name, string? url, string? code, int dailyMax)
     {
         var raw = (url ?? "").Trim();
-        var normalized = FacebookGroupUrl.Normalize(raw);
+        var normalized = Channel == Platform.Line ? LineChatUrl.Normalize(raw) : FacebookGroupUrl.Normalize(raw);
         var u = normalized ?? raw;
         var c = (code ?? "").Trim();
         var n = (name ?? "").Trim();
-        if (n.Length == 0 && normalized is not null)
+        if (Channel == Platform.Line)
         {
-            // A name made from the address is cut to fit rather than refused: the person did not type it.
-            n = FacebookGroupUrl.NameFromSlug(FacebookGroupUrl.Slug(normalized)!);
-            if (n.Length > MaxNameLength) n = n[..MaxNameLength];
+            if (n.Length == 0) n = "ลูกค้า";
+        }
+        else
+        {
+            if (n.Length == 0 && normalized is not null)
+            {
+                // A name made from the address is cut to fit rather than refused: the person did not type it.
+                n = FacebookGroupUrl.NameFromSlug(FacebookGroupUrl.Slug(normalized)!);
+                if (n.Length > MaxNameLength) n = n[..MaxNameLength];
+            }
         }
         if (u.Length > MaxUrlLength) throw new DomainException($"ลิงก์ยาวเกิน {MaxUrlLength} ตัวอักษร");
         if (n.Length > MaxNameLength) throw new DomainException($"ชื่อกลุ่มยาวเกิน {MaxNameLength} ตัวอักษร");

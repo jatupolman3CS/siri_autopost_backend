@@ -248,6 +248,23 @@ public sealed class SyncDeviceGroupsCommandValidator : AbstractValidator<SyncDev
     }
 }
 
+public sealed class SyncLineChatsCommandValidator : AbstractValidator<SyncLineChatsCommand>
+{
+    public const int MaxChats = 5000;
+
+    public SyncLineChatsCommandValidator()
+    {
+        RuleFor(x => x.BotId).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.OaName).MaximumLength(120);
+        RuleFor(x => x.Chats).NotNull().Must(c => c.Count <= MaxChats).WithMessage($"ส่งแชทได้ไม่เกิน {MaxChats} แชท");
+        RuleForEach(x => x.Chats).ChildRules(c =>
+        {
+            c.RuleFor(x => x.UserId).NotEmpty().MaximumLength(LineChat.MaxUserIdLength);
+            c.RuleFor(x => x.Name).MaximumLength(LineChat.MaxNameLength);
+        });
+    }
+}
+
 public sealed class SendDeviceCommandCommandValidator : AbstractValidator<SendDeviceCommandCommand>
 {
     public SendDeviceCommandCommandValidator() =>

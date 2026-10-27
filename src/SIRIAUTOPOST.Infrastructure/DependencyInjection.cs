@@ -61,6 +61,7 @@ public static class DependencyInjection
         services.AddScoped<ISetLinkRepository, SetLinkRepository>();
         services.AddScoped<IScheduleRepository, ScheduleRepository>();
         services.AddScoped<IReportShareRepository, ReportShareRepository>();
+        services.AddScoped<ILineChatRepository, LineChatRepository>();
 
         services.Configure<JwtOptions>(config.GetSection(JwtOptions.Section));
         services.AddSingleton<ITokenService, JwtTokenService>();

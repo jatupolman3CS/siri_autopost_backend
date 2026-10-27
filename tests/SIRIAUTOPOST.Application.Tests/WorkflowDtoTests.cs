@@ -121,7 +121,7 @@ public class WorkflowDtoTests
     public void Links_that_repeat_an_earlier_address_of_their_set_are_flagged()
     {
         var set = LinkSet.Create(Ws, "ชุด", null, Now);
-        SetLink Link(string? url) => SetLink.Create(Ws, set.Id, null, url, null, 0, Now);
+        SetLink Link(string? url) => SetLink.Create(Ws, set.Id, null, url, null, 0, Now, Platform.Fb);
         var links = new[] { Link("fb.com/groups/a"), Link("facebook.com/groups/b"), Link("m.facebook.com/groups/a"), Link(""), Link(""), Link("https://nope.example") };
 
         var dto = LinkSetDto.From(set, links, 2);

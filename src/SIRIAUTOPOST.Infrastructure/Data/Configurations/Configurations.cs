@@ -40,6 +40,7 @@ public sealed class WorkspaceConfiguration : IEntityTypeConfiguration<Workspace>
             o.ToJson("anti_ban");
             o.OwnsOne(x => x.Limits);
             o.OwnsOne(x => x.Advanced);
+            o.OwnsOne(x => x.LineChat);
         });
         b.OwnsOne(x => x.Offline, o => o.ToJson("offline"));
         // Notification rules hold dictionaries (by set and link id), which owned JSON cannot map: a whole document.
@@ -84,8 +85,12 @@ public sealed class SocialAccountConfiguration : IEntityTypeConfiguration<Social
         b.Property(x => x.Name).HasMaxLength(120).IsRequired();
         b.Property(x => x.Handle).HasMaxLength(200);
         b.Property(x => x.DefaultTarget).HasMaxLength(120);
+        b.Property(x => x.RestUntil);
         b.HasIndex(x => x.WorkspaceId);
         b.HasIndex(x => x.DeviceId);
+        b.HasIndex(x => new { x.WorkspaceId, x.Platform, x.Handle })
+            .IsUnique()
+            .HasFilter("platform = 'Line'");
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
         b.HasOne<Device>().WithMany().HasForeignKey(x => x.DeviceId).OnDelete(DeleteBehavior.SetNull);
         b.OwnsMany(x => x.GroupLinks, o => o.ToJson("group_links"));
@@ -103,6 +108,7 @@ public sealed class PostConfiguration : IEntityTypeConfiguration<Post>
         b.Property(x => x.Target).HasMaxLength(Post.MaxTargetLength);
         b.Property(x => x.Content).HasMaxLength(Post.MaxComposedLength).IsRequired();
         b.Property(x => x.FailureDetail).HasMaxLength(Post.MaxDetailLength);
+        b.Property(x => x.DeferCount).HasDefaultValue(0);
         b.Property(x => x.TargetKey).HasMaxLength(60);
         b.Property(x => x.SlotKey).HasMaxLength(20);
         b.Property(x => x.TargetUrl).HasMaxLength(Post.MaxTargetUrlLength);
@@ -206,6 +212,8 @@ public sealed class DeviceConfiguration : IEntityTypeConfiguration<Device>
         b.Property(x => x.Version).HasMaxLength(40);
         b.Property(x => x.KeyHash).HasMaxLength(64).IsRequired();
         b.Property(x => x.AutoPauseReason).HasMaxLength(200);
+        b.Property(x => x.LineReadyAt);
+        b.Property(x => x.LineBotId).HasMaxLength(100);
         b.HasIndex(x => x.KeyHash).IsUnique();
         // The extensions of one workspace have different names (the handlers check it without regard to case; this is the backstop).
         b.HasIndex(x => new { x.WorkspaceId, x.Name }).IsUnique();
@@ -458,6 +466,7 @@ public sealed class LinkSetConfiguration : IEntityTypeConfiguration<LinkSet>
     {
         b.ToTable("LINK_SETS");
         b.Property(x => x.Name).HasMaxLength(LinkSet.MaxNameLength).IsRequired();
+        b.Property(x => x.Channel).HasMaxLength(30).IsRequired().HasDefaultValue(Domain.Enums.Platform.Fb);
         b.HasIndex(x => new { x.WorkspaceId, x.SortOrder });
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
         // PostAsAccountId and AccountIds point at accounts without foreign keys: an unbound account stays, but nothing breaks if one goes.
@@ -472,6 +481,7 @@ public sealed class SetLinkConfiguration : IEntityTypeConfiguration<SetLink>
         b.Property(x => x.Name).HasMaxLength(SetLink.MaxNameLength);
         b.Property(x => x.Url).HasMaxLength(SetLink.MaxUrlLength);
         b.Property(x => x.Code).HasMaxLength(SetLink.MaxCodeLength);
+        b.Property(x => x.Channel).HasMaxLength(30).IsRequired().HasDefaultValue(Domain.Enums.Platform.Fb);
         b.HasIndex(x => new { x.LinkSetId, x.SortOrder });
         b.HasIndex(x => x.WorkspaceId);
         b.HasOne<LinkSet>().WithMany().HasForeignKey(x => x.LinkSetId).OnDelete(DeleteBehavior.Cascade);
@@ -492,6 +502,7 @@ public sealed class ScheduleConfiguration : IEntityTypeConfiguration<Schedule>
         b.Property(x => x.Bump).HasColumnName("bump_plan").HasColumnType("jsonb").HasJsonConversion(() => new BumpPlan());
         b.Property(x => x.Overrides).HasColumnType("jsonb")
             .HasJsonConversion(() => new Dictionary<string, List<string>>());
+        b.OwnsOne(x => x.LineOptions, o => o.ToJson("line_options"));
         b.HasIndex(x => new { x.WorkspaceId, x.Active });
         b.HasIndex(x => x.CollectionId);
         b.HasIndex(x => x.LinkSetId);
@@ -516,5 +527,21 @@ public sealed class ReportShareConfiguration : IEntityTypeConfiguration<ReportSh
         b.HasIndex(x => x.WorkspaceId);
         b.HasIndex(x => x.ExpiresAt);
         b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+    }
+}
+
+public sealed class LineChatConfiguration : IEntityTypeConfiguration<LineChat>
+{
+    public void Configure(EntityTypeBuilder<LineChat> b)
+    {
+        b.ToTable("LINE_CHATS");
+        b.Property(x => x.UserId).HasMaxLength(LineChat.MaxUserIdLength).IsRequired();
+        b.Property(x => x.ChatUrl).HasMaxLength(LineChat.MaxUrlLength).IsRequired();
+        b.Property(x => x.Name).HasMaxLength(LineChat.MaxNameLength).IsRequired();
+        b.Property(x => x.Labels).HasColumnType("jsonb").HasJsonConversion(() => new List<string>());
+        b.HasIndex(x => new { x.AccountId, x.UserId }).IsUnique();
+        b.HasIndex(x => new { x.WorkspaceId, x.AccountId, x.Name });
+        b.HasOne<Workspace>().WithMany().HasForeignKey(x => x.WorkspaceId).OnDelete(DeleteBehavior.Cascade);
+        b.HasOne<SocialAccount>().WithMany().HasForeignKey(x => x.AccountId).OnDelete(DeleteBehavior.Cascade);
     }
 }

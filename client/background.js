@@ -28,6 +28,7 @@ import {
 } from './lib/shared.js';
 import { escHtml, sendText, sendPhoto, findChats, dataUrlToBlob } from './lib/telegram.js';
 import { parseBackup, applyImport, summarize, hasContent, imageIdsOf, BUNDLED_CONFIG_PATH } from './lib/backup.js';
+import { createLineFlow } from './lib/line-flow.js';
 
 const ALARM_PREFIX = 'fbap:';
 const MAX_LOGS = 400;
@@ -923,8 +924,9 @@ async function createWorkerWindow(focus) {
   return tab;
 }
 
-// Reuses one dedicated window/tab for posting so the user's own tabs are never touched.
-async function openWorkerTab(url, focus) {
+// Reuses one dedicated window/tab for posting so the user's own tabs are never touched. failText: the error when the page
+// will not load (the LINE flow passes its own wording instead of the Facebook one).
+async function openWorkerTab(url, focus, failText = 'โหลดหน้ากลุ่มไม่สำเร็จ') {
   const st = await getState();
   let tab = null;
   if (st.tabId != null) {
@@ -950,7 +952,7 @@ async function openWorkerTab(url, focus) {
     /* already gone */
   }
   tab = await createWorkerWindow(focus);
-  if (!(await navigateAndWait(tab.id, url, 60000))) throw new Error('โหลดหน้ากลุ่มไม่สำเร็จ');
+  if (!(await navigateAndWait(tab.id, url, 60000))) throw new Error(failText);
   return tab.id;
 }
 
@@ -1710,6 +1712,14 @@ const remoteCommands = {
     enqueue(() => cloudTick()).catch(() => {});
     return { ok: true };
   },
+  // The web's "sync LINE chats" button: read the OA's chat list now (not awaited: it takes minutes, the command is answered at once).
+  syncLineChats: async () => {
+    const c = await getCloud();
+    if (!c.enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+    if (!c.lineEnabled) return { ok: false, error: 'ยังไม่ได้เปิดใช้ LINE OA ในเครื่องนี้ (กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยาย)' };
+    enqueue(() => lineSyncChats({ trigger: 'web' })).catch(() => {});
+    return { ok: true };
+  },
 };
 
 // Runs commands sent from a web page; report(id, result) sends each result back.
@@ -1887,6 +1897,8 @@ export const tuning = {
   loginProbeMs: 8 * 60000, // while Facebook wants a login: how often the extension looks whether the person logged in again
   jobDeadlineMs: 14 * 60000, // a job still running after this is stopped (the web fails a job it hears nothing of after 15 minutes)
   probeDeadlineMs: 3 * 60000,
+  lineSyncMinGapMs: 10 * 60000, // the chat list of the LINE OA is read at most this often
+  lineSyncDeadlineMs: 20 * 60000, // reading a very long chat list takes minutes: scroll bursts with pauses between them
 };
 
 // A job that never ends (a tab that does not answer, a window that cannot open) would hold the post queue for ever: every later
@@ -1929,6 +1941,21 @@ const DEFAULT_CLOUD = {
   lastSyncAt: 0,
   lastError: '',
   lastJob: null,      // { at, group, ok, error }
+  // LINE Official Account chats (lib/line-flow.js). FLAT on purpose: getCloud/setCloud merge shallowly, so a nested object
+  // would lose its other keys on every patch. cloudForget resets all of it to these defaults (unbinding forgets LINE too).
+  lineEnabled: false, // the person allowed chat.line.biz here (status page) and switched LINE on
+  lineBotId: '',      // the OA this browser is logged in to (one OA per browser)
+  lineOaName: '',
+  lineLoginLostAt: 0, // LINE wanted a login (a job or a probe found it): no LINE jobs until a probe finds the person logged in again
+  lineLoginProbeAt: 0,
+  lineChats: 0,       // chats the web holds for this OA after the last sync
+  lineSyncAt: 0,      // the last time the chat list was read (the 10-minute floor)
+  lineSyncedAt: 0,    // the last time it reached the web
+  lineSyncNextAt: 0,  // the next automatic read (about every 6 hours)
+  lineNote: '',       // the web's remark (an OA that another browser of the workspace holds, ...)
+  lineError: '',
+  lineChoices: [],    // several OAs on the account chooser: [{ botId, name }] for the person to pick on the status page
+  lineLastJob: null,  // { at, group, ok, defer, skip, error } of the last LINE chat
   // The campaigns of this browser, shown and edited in the web app (cloudConfigSync).
   configRevision: 0,  // web revision of the settings this browser has
   configHash: '',     // hash of the settings at that revision (finds local edits)
@@ -1961,7 +1988,7 @@ function showCloudBadge(c) {
   let text = '';
   let color = '#d93025';
   if (!c.enabled && c.unboundAt) text = '!';
-  else if (c.enabled && c.loginLostAt) {
+  else if (c.enabled && (c.loginLostAt || (c.lineEnabled && c.lineLoginLostAt))) {
     text = '!';
     color = '#e8710a';
   } else if (c.enabled && (c.lastError || c.configError)) {
@@ -1976,7 +2003,9 @@ function showCloudBadge(c) {
         ? 'AutoPost - เครื่องนี้ถูกยกเลิกการผูก จับคู่ใหม่ที่หน้าเว็บ'
         : c.enabled && c.loginLostAt
           ? 'AutoPost - ยังไม่ได้ล็อกอิน Facebook ในเครื่องนี้'
-          : 'AutoPost - สถานะการทำงาน',
+          : c.enabled && c.lineEnabled && c.lineLoginLostAt
+            ? 'AutoPost - ยังไม่ได้ล็อกอิน LINE OA ในเครื่องนี้'
+            : 'AutoPost - สถานะการทำงาน',
     });
   } catch {
     /* no toolbar (a test, or the API is missing): the badge is a courtesy */
@@ -2072,6 +2101,7 @@ async function dataUrlOf(blob, type) {
 
 // Posts one job from the web app and reports how it went.
 async function runCloudJob(c, job) {
+  if (job.channel === 'line') return runCloudLineJob(c, job);
   if (job.kind === 'bump') return runCloudBump(c, job);
   const stored = (await getSettings()).global;
   const ab = job.antiBan || {};
@@ -2247,13 +2277,259 @@ async function runCloudBump(c, job) {
 // The browser looks again every few minutes (cloudTick) and the account takes jobs as soon as the person is logged in.
 const loginLost = () => ({ loginLostAt: Date.now(), loginProbeAt: Date.now() + tuning.loginProbeMs * rand(0.8, 1.3) });
 
+// ---------- LINE Official Account chats ----------
+// The second channel beside Facebook groups: the same worker window drives chat.line.biz (lib/line-flow.js orchestrates,
+// line.js touches the page). It is switched on from the status page, which asks Chrome for the host permission inside a
+// click. LINE has its own login health, its own heartbeat part and its own recovery, so a lost LINE login never touches
+// Facebook and the other way round. No screenshot of a LINE window is ever taken (it shows customers' messages).
+
+const LINE_ORIGINS = { origins: ['https://chat.line.biz/*'] };
+
+async function linePermitted() {
+  try {
+    return await chrome.permissions.contains(LINE_ORIGINS);
+  } catch {
+    return false;
+  }
+}
+
+// "Ready" is sticky, not "probed lately": LINE is switched on here with its permission, the OA is known and no job or probe
+// found the login lost. (A "probed in the last 10 minutes" rule would deadlock: probes only run while the login is lost, so
+// an idle healthy browser would never be ready and never claim.) The web adds its own freshness rule: a heartbeat with
+// ready = true in the last 5 minutes, which the 30-second round keeps true.
+const lineReady = (c, permitted = true) => !!(c.enabled && c.lineEnabled && c.lineBotId && !c.lineLoginLostAt && permitted);
+
+// The LINE part of a heartbeat; nothing for a browser that never switched LINE on (the web then leaves its LINE state alone).
+function lineHeartbeatFields(c, permitted) {
+  if (!c.lineEnabled) return {};
+  return { line: { ready: lineReady(c, permitted), botId: c.lineBotId || undefined, oaName: c.lineOaName || undefined } };
+}
+
+async function lineHeartbeat(extra = {}) {
+  const c = await getCloud();
+  return cloudApi(c, 'POST', '/api/device/heartbeat', {
+    version: chrome.runtime.getManifest().version,
+    ...lineHeartbeatFields(c, await linePermitted()),
+    ...extra,
+  });
+}
+
+const lineFlow = createLineFlow({
+  tabCmd, tabCmdOk, openWorkerTab, navigateAndWait, typeHuman, typingPace, typingEstimateMs, TYPING_BUDGET_MS, pollState, textClose,
+  withDeadline, sleep, rand, randInt, chance, humanRand, log,
+  abortCheck: () => {
+    if (abortFlag) throw new Aborted('ถูกหยุดโดยผู้ใช้');
+  },
+  Aborted, Fatal, Blocked, getState, setState, TYPING_SPEEDS, segmenter, cloudApi, getCloud, setCloud, tuning,
+  heartbeat: lineHeartbeat,
+  // captureWorker is deliberately NOT passed: no screenshot of a LINE window, ever.
+});
+
+// Page work of the LINE flow runs in the post queue (the caller is inside enqueue), alone in the worker window, under a deadline.
+async function inWorker(run, ms, message) {
+  posting = true;
+  abortFlag = false;
+  keepAlive(true);
+  try {
+    return await withDeadline(run, ms, message);
+  } finally {
+    posting = false;
+    keepAlive(false);
+  }
+}
+
+// Looks at chat.line.biz the way a person checks they are still logged in: { ok, botId, oaName, choices } or { ok: false, login | error }.
+async function lineProbe() {
+  try {
+    const r = await inWorker(() => lineFlow.probeLineLogin(), tuning.probeDeadlineMs, 'ตรวจ LINE OA ไม่เสร็จ');
+    return r.login ? { ok: false, login: true } : { ok: true, ...r };
+  } catch (e) {
+    return { ok: false, error: e?.message || String(e) };
+  }
+}
+
+// A probe, and what follows from it: logged in -> the OA is remembered and the web hears it (heartbeat with lineSessionOk, which
+// makes a LINE account that was waiting for a login healthy again); not logged in -> the person is asked, and looked for again later.
+async function lineCheckIn() {
+  const r = await lineProbe();
+  const c = await getCloud();
+  if (!r.ok) {
+    const next = Date.now() + tuning.loginProbeMs * rand(0.8, 1.3);
+    await setCloud({ lineLoginLostAt: c.lineLoginLostAt || Date.now(), lineLoginProbeAt: next, lineError: r.error || '' });
+    return { ok: false, login: !r.error, error: r.error || 'ยังไม่ได้ล็อกอิน LINE OA Manager ใน Chrome นี้: ล็อกอินที่ chat.line.biz แล้วกดตรวจอีกครั้ง' };
+  }
+  const patch = { lineLoginLostAt: 0, lineLoginProbeAt: 0, lineError: '' };
+  if (r.botId) Object.assign(patch, { lineBotId: r.botId, lineOaName: r.oaName || (r.botId === c.lineBotId ? c.lineOaName : '') || '', lineChoices: [] });
+  else patch.lineChoices = r.choices || [];
+  await setCloud(patch);
+  if (r.botId) {
+    try {
+      const hb = await lineHeartbeat({ lineSessionOk: true });
+      await setCloud({ lineNote: hb.lineNote || '' });
+    } catch (e) {
+      await log('warn', `[LINE] แจ้งเว็บไม่สำเร็จ: ${e?.message || e}`);
+    }
+  }
+  return { ok: true, botId: r.botId || '', oaName: r.oaName || '', choices: r.choices || [], needsChoice: !r.botId && (r.choices || []).length > 1 };
+}
+
+// The status page's button "ใช้ LINE OA ในเครื่องนี้" (it asked Chrome for the permission inside the click).
+async function lineEnable() {
+  const c = await getCloud();
+  if (!c.enabled) return { ok: false, error: 'ต้องเชื่อมต่อกับเว็บ AutoPost ก่อน' };
+  if (!(await linePermitted())) return { ok: false, error: 'ยังไม่ได้อนุญาตให้ส่วนขยายใช้ chat.line.biz: กดปุ่มแล้วเลือก "อนุญาต"' };
+  await setCloud({ lineEnabled: true, lineError: '', lineNote: '' });
+  await log('info', '[LINE] เปิดใช้ LINE OA ในเครื่องนี้แล้ว');
+  return enqueue(() => lineCheckIn());
+}
+
+// Several OAs on the chooser: the person picked one on the status page.
+async function lineChoose(botId) {
+  const c = await getCloud();
+  const picked = (c.lineChoices || []).find((x) => x.botId === botId);
+  if (!picked) return { ok: false, error: 'ไม่พบ LINE OA ที่เลือก ลองตรวจอีกครั้ง' };
+  await setCloud({ lineBotId: picked.botId, lineOaName: picked.name || '', lineChoices: [], lineError: '' });
+  return enqueue(() => lineCheckIn());
+}
+
+async function lineSyncChats(opts = {}) {
+  try {
+    return await inWorker(() => lineFlow.syncLineChats(opts), tuning.lineSyncDeadlineMs, 'ซิงก์รายชื่อแชท LINE ใช้เวลานานเกินไปจึงหยุด');
+  } catch (e) {
+    const error = e?.message || String(e);
+    await setCloud({ lineError: error });
+    await log('warn', `[LINE] ซิงก์รายชื่อแชทไม่สำเร็จ: ${error}`);
+    return { ok: false, error };
+  }
+}
+
+// Every round: when the web says LINE wants a login (a job found it lost) or this browser noted it itself, look about every
+// tuning.loginProbeMs whether the person logged in again. Independent of the Facebook recovery.
+async function cloudLineRecovery(c, hb) {
+  if (!c.lineEnabled) return;
+  if (!c.lineLoginLostAt && hb.lineSessionLost) {
+    // The web knows before this browser does (a restart since the failed job): look at once.
+    c = await setCloud({ lineLoginLostAt: Date.now(), lineLoginProbeAt: 0 });
+  }
+  if (!c.lineLoginLostAt || posting || Date.now() < c.lineLoginProbeAt) return;
+  const r = await lineCheckIn();
+  if (r.ok) await log('success', '[LINE] ล็อกอิน LINE OA ในเครื่องนี้อีกครั้งแล้ว กลับมารับงานต่อ');
+  else await log('info', `[LINE] ยังไม่ได้ล็อกอิน LINE OA ในเครื่องนี้ รอรับงานอยู่ (ตรวจอีกครั้งตอน ${fmtDateTime((await getCloud()).lineLoginProbeAt)})`);
+}
+
+// The chat list is read about every 6 hours while LINE is ready (and once right after it is switched on).
+async function lineAutoSync() {
+  const c = await getCloud();
+  if (!lineReady(c, await linePermitted()) || Date.now() < (c.lineSyncNextAt || 0)) return;
+  const r = await lineSyncChats({ trigger: 'auto' });
+  // A failure waits an hour before the next try, so a broken page is not opened every round.
+  if (!r.ok && !r.throttled) await setCloud({ lineSyncNextAt: Date.now() + 3600000 });
+}
+
+// A LINE chat job from the web: sends the composed message(s) to one customer and reports how it went. The result may also be
+// "deferred" (the customer is in the middle of a conversation) or "skipped" (the chat cannot be written to); neither is a failure.
+async function runCloudLineJob(c, job) {
+  const stored = (await getSettings()).global;
+  const ab = job.antiBan || {};
+  const adv = ab.advanced || {};
+  const global = { ...stored, focusWindow: typeof adv.focus === 'boolean' ? adv.focus : stored.focusWindow };
+  const speedKey = ['slow', 'normal', 'fast'].includes(ab.typingSpeed) ? ab.typingSpeed : 'normal';
+  const cfg = {
+    ...DEFAULT_CONFIG,
+    pageTags: '', // no @mentions in a chat
+    typingSpeed: speedKey,
+    typos: ab.typing !== false,
+    maxTypeChars: ab.typing === false ? 1 : 0, // typing on = typed, however long; only the web's switch makes it a paste
+    typingBudgetMs: TYPING_BUDGET_MS[speedKey],
+    browseBeforePost: ab.scroll !== false,
+  };
+  const keys = [];
+  posting = true;
+  abortFlag = false;
+  // forceShot stays false: a LINE window is never photographed (job.shot is always false for a chat anyway).
+  keepAlive(true);
+  const who = job.groupName || 'ลูกค้า';
+  await setState({ current: { campaignId: null, url: `แชท LINE · ${who}`, cloud: true, line: true } });
+  let result;
+  try {
+    if (!(await linePermitted())) throw new Error('ยังไม่ได้อนุญาตให้ส่วนขยายใช้ chat.line.biz: กด "ใช้ LINE OA ในเครื่องนี้" ที่หน้าสถานะของส่วนขยาย');
+    for (const m of job.media || []) {
+      const blob = await cloudApi(c, 'GET', `/api/device/media/${m.id}`, undefined, { blob: true });
+      const key = CLOUD_IMG + m.id;
+      const type = m.contentType || blob.type;
+      await chrome.storage.local.set({ [key]: { name: m.name, type, data: await dataUrlOf(blob, type) } });
+      keys.push(key);
+    }
+    await log('info', `[เว็บ AutoPost] กำลังส่งแชท LINE ถึง ${who}`);
+    const bubbles = Array.isArray(job.bubbles) && job.bubbles.length ? job.bubbles : [job.content || ''];
+    result = await withDeadline(
+      () => lineFlow.sendToLineChat({ groupUrl: job.groupUrl, groupName: job.groupName, bubbles, imageIds: keys, line: job.line }, cfg, global),
+      tuning.jobDeadlineMs,
+      'การส่งแชท LINE ใช้เวลานานเกินไปจึงหยุดงานนี้'
+    );
+  } catch (e) {
+    result = {
+      ok: false,
+      error: e?.message || String(e),
+      aborted: e instanceof Aborted,
+      fatal: e instanceof Fatal,
+      blocked: e instanceof Blocked,
+      groupName: e?.groupName || '',
+    };
+  } finally {
+    posting = false;
+    keepAlive(false);
+    if (keys.length) await chrome.storage.local.remove(keys);
+    await setState({ current: null });
+  }
+
+  if (result.ok) {
+    await setState({ lastPostAt: Date.now() });
+    await log('success', `[เว็บ AutoPost] ส่งแชท LINE สำเร็จ: ${who}`);
+  } else if (result.defer) {
+    await log('info', `[เว็บ AutoPost] เลื่อนการส่งแชท LINE ถึง ${who} ไปอีกประมาณ ${result.deferMinutes} นาที: ${result.reason}`);
+  } else if (result.skip) {
+    await log('warn', `[เว็บ AutoPost] ข้ามแชท LINE ของ ${who}: ${result.reason}`);
+  } else {
+    await log('error', `[เว็บ AutoPost] ส่งแชท LINE ไม่สำเร็จ: ${who} - ${result.error}`);
+  }
+  try {
+    await cloudApi(c, 'POST', `/api/device/jobs/${job.postId}/result`, {
+      ok: !!result.ok,
+      awaitingApproval: false,
+      needsLogin: !!result.fatal,
+      blocked: !!(result.blocked || result.blockedAfter),
+      error: result.ok ? (result.blockedAfter || null) : result.defer || result.skip ? null : result.error,
+      postUrl: null,
+      shot: null, // never: the window shows customers' messages
+      skip: !!result.skip,
+      deferMinutes: result.defer ? result.deferMinutes : null,
+      reason: result.defer || result.skip ? result.reason : null,
+    });
+  } catch (e) {
+    await log('warn', `[เว็บ AutoPost] ส่งผลการส่งแชท LINE ไม่สำเร็จ: ${e.message}`);
+  }
+  const note = { at: Date.now(), group: `LINE · ${who}`, ok: !!result.ok, error: result.ok || result.defer || result.skip ? '' : result.error };
+  const patch = { lastJob: note, lineLastJob: { ...note, defer: !!result.defer, skip: !!result.skip, reason: result.reason || '' } };
+  if (result.blocked || result.blockedAfter) {
+    // LINE showed a warning: the web rests the whole device (the Facebook account too: one browser); so does this browser.
+    patch.pausedUntil = Date.now() + rand(adv.blockMin || stored.blockPauseHoursMin || 2, adv.blockMax || stored.blockPauseHoursMax || 4) * 3600000;
+    await log('warn', `[เว็บ AutoPost] LINE แจ้งเตือน พักรับงานถึง ${fmtDateTime(patch.pausedUntil)}`);
+  }
+  if (result.fatal) Object.assign(patch, { lineLoginLostAt: Date.now(), lineLoginProbeAt: Date.now() + tuning.loginProbeMs * rand(0.8, 1.3) });
+  else if (result.ok) Object.assign(patch, { lineLoginLostAt: 0 });
+  await setCloud(patch);
+  return result;
+}
+
 // One round: heartbeat, groups, and at most one post. Runs in the tick chain, so it never
 // overlaps a campaign post.
 async function cloudTick({ claim = true } = {}) {
   let c = await getCloud();
   if (!c.enabled || !c.apiUrl || !c.deviceKey) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
   try {
-    let hb = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version });
+    const linePerm = c.lineEnabled ? await linePermitted() : false;
+    let hb = await cloudApi(c, 'POST', '/api/device/heartbeat', { version: chrome.runtime.getManifest().version, ...lineHeartbeatFields(c, linePerm) });
     const groups = await cloudGroupList(c.groupNames || {});
     const hash = await sha256(JSON.stringify(groups));
     let count = hb.groups;
@@ -2274,15 +2550,24 @@ async function cloudTick({ claim = true } = {}) {
       lastSyncAt: Date.now(),
       lastError: '',
       authFails: 0,
+      ...(c.lineEnabled ? { lineNote: hb.lineNote || '' } : {}),
     });
     // The web holds this account's jobs while it waits for a Facebook login: look whether the person logged in again.
-    if (claim) hb = await cloudLoginRecovery(c, hb);
-    if (!hb) return { ok: true, posted: false };
+    // A lost Facebook login only skips the Facebook part of the round: LINE (its own login, its own recovery) is still
+    // claimed for, and the web hands Facebook nothing while that account waits for a login.
+    const fbHb = claim ? await cloudLoginRecovery(c, hb) : hb;
+    if (claim && c.lineEnabled) await cloudLineRecovery(c, hb);
+    c = await getCloud();
+    if (fbHb) hb = fbHb;
+    else if (!(c.lineEnabled && lineReady(c, linePerm))) return { ok: true, posted: false };
     const state = await getState();
     const resting = c.pausedUntil > Date.now() || (state.pausedUntil && Date.now() < state.pausedUntil);
     if (!claim || hb.jobsPaused || resting || !hb.online || posting) return { ok: true, posted: false };
     const job = await cloudApi(c, 'POST', '/api/device/jobs/claim');
-    if (!job) return { ok: true, posted: false };
+    if (!job) {
+      if (c.lineEnabled) await lineAutoSync();
+      return { ok: true, posted: false };
+    }
     const r = await runCloudJob(c, job);
     return { ok: true, posted: true, result: !!r.ok };
   } catch (e) {
@@ -2462,6 +2747,10 @@ async function cloudPair({ apiUrl, code, name }) {
   } catch (e) {
     return { ok: false, error: e.message };
   }
+  // Pairing again with the web this browser is still paired with keeps LINE switched on here (its OA stays the same).
+  const keepLine = was.enabled && here(was.apiUrl) && was.lineEnabled
+    ? { lineEnabled: true, lineBotId: was.lineBotId, lineOaName: was.lineOaName }
+    : {};
   await setCloud({
     ...DEFAULT_CLOUD,
     enabled: true,
@@ -2471,6 +2760,7 @@ async function cloudPair({ apiUrl, code, name }) {
     accountId: pair.accountId || '',
     deviceName: pair.deviceName,
     workspaceName: pair.workspaceName,
+    ...keepLine,
   });
   await ensureCloudAlarm();
   await log('success', `[เว็บ AutoPost] จับคู่กับเวิร์กสเปซ "${pair.workspaceName}" แล้ว (เครื่อง "${pair.deviceName}")`);
@@ -2859,6 +3149,25 @@ const commands = {
     return enqueue(() => cloudTick());
   },
   cloudConfig: (m) => cloudConfigSync({ mode: m.mode || 'auto' }),
+  // LINE OA (the status page's card). lineEnable runs right after the page asked Chrome for the chat.line.biz permission.
+  lineEnable: () => lineEnable(),
+  lineProbe: () => enqueue(() => lineCheckIn()),
+  lineChoose: (m) => lineChoose(m.botId),
+  lineSyncChats: () => enqueue(() => lineSyncChats({ trigger: 'button' })),
+  lineInjectFloatingTool: async () => {
+    const tabs = await chrome.tabs.query({ url: ['https://chat.line.biz/*', 'https://manager.line.biz/*'] });
+    if (!tabs || !tabs.length) {
+      return { ok: false, error: 'ไม่พบแท็บ LINE OA (chat.line.biz หรือ manager.line.biz): โปรดเปิดแท็บในเบราว์เซอร์นี้ก่อน' };
+    }
+    const tab = tabs[0];
+    await chrome.windows.update(tab.windowId, { focused: true });
+    await chrome.tabs.update(tab.id, { active: true });
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['tools/line-human-sender.js'],
+    });
+    return { ok: true, tabId: tab.id };
+  },
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

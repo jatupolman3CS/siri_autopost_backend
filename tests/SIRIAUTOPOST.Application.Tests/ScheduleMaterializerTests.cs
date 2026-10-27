@@ -598,7 +598,7 @@ public class ScheduleMaterializerTests
         var off = w.AddLink("off");
         off.DisableManually();
         w.AddLink("dupe").Edit("", "https://www.facebook.com/groups/good", "", 0, true);
-        var bad = SetLink.Create(w.Ws.Id, w.Set.Id, "x", "https://example.com/nope", "", 0, Now, 9);
+        var bad = SetLink.Create(w.Ws.Id, w.Set.Id, "x", "https://example.com/nope", "", 0, Now, Platform.Fb, 9);
         w.Links.Add(bad);
         var s = w.NewSchedule();
 
@@ -1146,5 +1146,57 @@ public class ScheduleMaterializerTests
 
         Assert.Equal(2 * 4, w.Added.Count);
     }
-}
 
+    [Fact]
+    public async Task Line_schedule_materialization_respects_allowed_hours_seconds_gap_daily_cap_and_no_footer_hashtags()
+    {
+        var w = new SchedulingWorld(links: 0, posts: 0);
+        w.SwitchToLine("shop_bot", "Shop OA");
+        w.Collection.Update("โปร", "", null, new CollectionSettings { Footer = "ส่วนท้ายโทร 02-xxx", Hashtags = "#sale" });
+        w.AddPost("สวัสดีคุณ {{name}} สนใจโปรโมชันไหมครับ");
+
+        // 2 customers, one with dailyMax = 1
+        var c1 = w.AddLineChat("shop_bot", "U11111111111111111111111111111111", name: "สมชาย", dailyMax: 1);
+        var c2 = w.AddLineChat("shop_bot", "U22222222222222222222222222222222", name: "สมศรี", dailyMax: 2);
+
+        // Schedule at 18:00 and 22:00, with allowed window 09:00 - 20:00
+        var s = w.NewLineSchedule(
+            times: ["18:00", "22:00"],
+            lineOptions: new LineOptions { AllowedFrom = "09:00", AllowedTo = "20:00" });
+
+        await w.RunAsync(s, Today, Today, new FixedRandom(0.5));
+
+        Assert.NotEmpty(w.Added);
+        Assert.All(w.Added, p =>
+        {
+            // Name placeholder is replaced
+            Assert.DoesNotContain("{{name}}", p.Content);
+            Assert.True(p.Content.Contains("สมชาย") || p.Content.Contains("สมศรี"));
+            // No footer and no hashtags
+            Assert.DoesNotContain("ส่วนท้ายโทร", p.Content);
+            Assert.DoesNotContain("#sale", p.Content);
+        });
+
+        // c1 only received 1 post due to dailyMax = 1
+        Assert.Equal(1, w.Added.Count(p => p.LinkId == c1.Id));
+
+        // Check clamping of outside allowed window: any post from the 22:00 slot is clamped to next day 09:00
+        var latePosts = w.Added.Where(p => p.SlotKey?.EndsWith("22:00") == true).ToList();
+        Assert.NotEmpty(latePosts);
+        Assert.All(latePosts, p =>
+        {
+            var local = p.ScheduledAt.ToOffset(Bangkok);
+            Assert.Equal(9, local.Hour);
+            Assert.True(local.Minute is >= 0 and <= 15);
+            Assert.Equal(Today.AddDays(1), DateOnly.FromDateTime(local.DateTime));
+        });
+
+        // Seconds gap check: for multiple posts in the same slot (18:00), difference between them is seconds (not minutes)
+        var slot18Posts = w.Added.Where(p => p.SlotKey?.EndsWith("18:00") == true).OrderBy(p => p.ScheduledAt).ToList();
+        if (slot18Posts.Count > 1)
+        {
+            var diff = slot18Posts[1].ScheduledAt - slot18Posts[0].ScheduledAt;
+            Assert.True(diff.TotalSeconds >= 45 && diff.TotalSeconds <= 150);
+        }
+    }
+}

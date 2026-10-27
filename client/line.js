@@ -100,8 +100,10 @@
     ],
     fileInput: ['input[type="file"]'],
     // Assumption A6: outgoing bubbles on the right, incoming on the left; a failed send shows a red marker / resend control.
-    bubbleOut: ['[class*="bubble" i][class*="outgoing" i]', '[class*="message" i][class*="outgoing" i]', '[class*="bubble" i][class*="right" i]', '[class*="message" i][class*="right" i]', '[class*="message" i][class*="mine" i]', '[class*="message" i][class*="self" i]'],
-    bubbleIn: ['[class*="bubble" i][class*="incoming" i]', '[class*="message" i][class*="incoming" i]', '[class*="bubble" i][class*="left" i]', '[class*="message" i][class*="left" i]', '[class*="message" i][class*="received" i]', '[class*="message" i][class*="customer" i]'],
+    // The real page (2026-10-27): every message is `div.chat > .chat-content`, the shop's own (staff, auto-reply and bot cards: Flex
+    // messages are `.kv-flex-bubble` inside it) under `.chat-reverse`, the customer's under a `.chat` without it.
+    bubbleOut: ['.chat.chat-reverse .chat-content', '[class*="bubble" i][class*="outgoing" i]', '[class*="message" i][class*="outgoing" i]', '[class*="bubble" i][class*="right" i]', '[class*="message" i][class*="right" i]', '[class*="message" i][class*="mine" i]', '[class*="message" i][class*="self" i]'],
+    bubbleIn: ['.chat:not(.chat-reverse) .chat-content', '[class*="bubble" i][class*="incoming" i]', '[class*="message" i][class*="incoming" i]', '[class*="bubble" i][class*="left" i]', '[class*="message" i][class*="left" i]', '[class*="message" i][class*="received" i]', '[class*="message" i][class*="customer" i]'],
     bubbleTime: ['time', '[class*="time" i]'],
     dateDivider: ['[class*="divider" i]', '[class*="date-label" i]', '[class*="datetime" i]'],
     sendFailed: ['[class*="error" i]', '[class*="fail" i]', '[class*="resend" i]', { label: /ส่งไม่สำเร็จ|resend|failed to send|ส่งอีกครั้ง/i }],

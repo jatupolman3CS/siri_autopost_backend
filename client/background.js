@@ -1720,6 +1720,13 @@ const remoteCommands = {
     enqueue(() => lineSyncChats({ trigger: 'web' })).catch(() => {});
     return { ok: true };
   },
+  // The web's "connect LINE" button: Chrome grants chat.line.biz only on a click inside an extension page, so the
+  // command opens the status page, where the "use LINE OA on this machine" button asks for it.
+  openLineSetup: async () => {
+    if (!(await getCloud()).enabled) return { ok: false, error: 'ยังไม่ได้จับคู่กับเว็บ AutoPost' };
+    await openDashboard();
+    return { ok: true };
+  },
 };
 
 // Runs commands sent from a web page; report(id, result) sends each result back.

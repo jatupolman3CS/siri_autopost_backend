@@ -220,6 +220,7 @@ function renderLine() {
     }
   }
   show($('#btnLineEnable'), !enabled);
+  show($('#lineLinkRow'), !enabled);
   show($('#btnLineProbe'), enabled);
   show($('#btnLineSync'), ready);
 }
@@ -240,7 +241,7 @@ $('#btnLineEnable').addEventListener('click', async () => {
     return;
   }
   lineMessage('กำลังตรวจการล็อกอิน LINE OA ในหน้าต่างทำงาน...');
-  const r = await bg('lineEnable');
+  const r = await bg('lineEnable', { link: $('#lineLink').value });
   lineMessage(r?.ok ? (r.needsChoice ? '' : 'เปิดใช้ LINE OA แล้ว รายชื่อแชทจะถูกซิงก์ขึ้นเว็บภายในไม่กี่นาที') : r?.error || 'ไม่สำเร็จ');
   btn.disabled = false;
 });

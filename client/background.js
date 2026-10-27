@@ -1724,7 +1724,9 @@ const remoteCommands = {
   // command opens the status page, where the "use LINE OA on this machine" button asks for it.
   // The web's "change LINE OA": forget this browser's OA (and its permission-free state) so the status page can connect another.
   resetLine: async () => {
+    const was = await getCloud();
     await setCloud({
+      lineAvoidBotId: was.lineBotId || was.lineAvoidBotId || '',
       lineEnabled: false, lineBotId: '', lineOaName: '', lineChoices: [], lineLoginLostAt: 0, lineLoginProbeAt: 0,
       lineError: '', lineNote: '', lineSyncedAt: 0, lineChats: 0,
     });
@@ -1961,6 +1963,7 @@ const DEFAULT_CLOUD = {
   // would lose its other keys on every patch. cloudForget resets all of it to these defaults (unbinding forgets LINE too).
   lineEnabled: false, // the person allowed chat.line.biz here (status page) and switched LINE on
   lineBotId: '',      // the OA this browser is logged in to (one OA per browser)
+  lineAvoidBotId: '', // the OA the web just let go of: chat.line.biz reopens the last OA used, so it is not taken again by itself
   lineOaName: '',
   lineLoginLostAt: 0, // LINE wanted a login (a job or a probe found it): no LINE jobs until a probe finds the person logged in again
   lineLoginProbeAt: 0,
@@ -2366,9 +2369,47 @@ async function lineProbe() {
 
 // A probe, and what follows from it: logged in -> the OA is remembered and the web hears it (heartbeat with lineSessionOk, which
 // makes a LINE account that was waiting for a login healthy again); not logged in -> the person is asked, and looked for again later.
+// The OAs of the chat.line.biz tabs the person has open themselves (not the posting window): "change LINE OA" reads the new
+// one from there, because the page opened by the extension lands on the OA LINE used last, i.e. the old one.
+async function lineOwnTabBotIds() {
+  try {
+    const worker = (await getState()).windowId;
+    const tabs = await chrome.tabs.query({ url: 'https://chat.line.biz/*' });
+    const ids = tabs.filter((t) => t.windowId !== worker).map((t) => {
+      try {
+        return new URL(t.url).pathname.split('/').filter(Boolean)[0] || '';
+      } catch {
+        return '';
+      }
+    });
+    return [...new Set(ids.filter((id) => id && !['login', 'static'].includes(id.toLowerCase())))];
+  } catch {
+    return [];
+  }
+}
+
 async function lineCheckIn() {
+  let avoid = (await getCloud()).lineAvoidBotId || '';
+  if (avoid) {
+    const mine = (await lineOwnTabBotIds()).filter((id) => id.toLowerCase() !== avoid.toLowerCase());
+    if (mine.length === 1) await setCloud({ lineBotId: mine[0], lineOaName: '' });
+    else if (mine.length === 0) {
+      const error = 'เปิด chat.line.biz ในหน้าต่าง Chrome ปกติ เลือก LINE OA ใหม่ที่ต้องการ (ไม่ใช่ OA เดิม) ค้างไว้ แล้วกด “ตรวจการล็อกอิน LINE อีกครั้ง”';
+      await setCloud({ lineError: error });
+      return { ok: false, error };
+    } else {
+      await setCloud({ lineChoices: mine.map((botId) => ({ botId, name: botId })), lineError: '' });
+      return { ok: true, botId: '', choices: mine, needsChoice: true };
+    }
+  }
   const r = await lineProbe();
   const c = await getCloud();
+  if (avoid && r.ok && r.botId && r.botId.toLowerCase() === avoid.toLowerCase()) {
+    const error = 'ยังเป็น LINE OA เดิม: เลือก LINE OA ใหม่ในหน้า chat.line.biz ปกติก่อน แล้วกดตรวจอีกครั้ง';
+    await setCloud({ lineBotId: '', lineError: error });
+    return { ok: false, error };
+  }
+  if (avoid && r.ok && r.botId) await setCloud({ lineAvoidBotId: '' });
   if (!r.ok) {
     const next = Date.now() + tuning.loginProbeMs * rand(0.8, 1.3);
     await setCloud({ lineLoginLostAt: c.lineLoginLostAt || Date.now(), lineLoginProbeAt: next, lineError: r.error || '' });
@@ -2390,10 +2431,30 @@ async function lineCheckIn() {
 }
 
 // The status page's button "ใช้ LINE OA ในเครื่องนี้" (it asked Chrome for the permission inside the click).
-async function lineEnable() {
+// The OA id in a pasted chat.line.biz link (https://chat.line.biz/<id>/... or just the id); '' when there is none.
+function lineBotIdFromLink(text) {
+  const raw = String(text || '').trim();
+  if (!raw) return '';
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+    if (u.hostname === 'chat.line.biz') return u.pathname.split('/').filter(Boolean)[0] || '';
+  } catch {
+    /* not an address: maybe the bare id */
+  }
+  return /^[\w@.-]{3,100}$/.test(raw) && !raw.includes('.') ? raw : '';
+}
+
+async function lineEnable(link = '') {
   const c = await getCloud();
   if (!c.enabled) return { ok: false, error: 'ต้องเชื่อมต่อกับเว็บ AutoPost ก่อน' };
   if (!(await linePermitted())) return { ok: false, error: 'ยังไม่ได้อนุญาตให้ส่วนขยายใช้ chat.line.biz: กดปุ่มแล้วเลือก "อนุญาต"' };
+  if (String(link || '').trim()) {
+    // The person pasted the new OA's chat.line.biz link: it names the OA, so nothing is guessed from the page LINE opens.
+    const botId = lineBotIdFromLink(link);
+    if (!botId) return { ok: false, error: 'ลิงก์ไม่ถูกต้อง: วางลิงก์จากหน้า chat.line.biz เช่น https://chat.line.biz/Uxxxxxxxx/chat' };
+    if (c.lineAvoidBotId && botId.toLowerCase() === c.lineAvoidBotId.toLowerCase()) return { ok: false, error: 'ลิงก์นี้เป็น LINE OA เดิมที่เพิ่งเลิกผูก: วางลิงก์ของ OA ใหม่' };
+    await setCloud({ lineBotId: botId, lineOaName: '', lineAvoidBotId: '', lineChoices: [] });
+  }
   await setCloud({ lineEnabled: true, lineError: '', lineNote: '' });
   await log('info', '[LINE] เปิดใช้ LINE OA ในเครื่องนี้แล้ว');
   return enqueue(() => lineCheckIn());
@@ -3166,7 +3227,7 @@ const commands = {
   },
   cloudConfig: (m) => cloudConfigSync({ mode: m.mode || 'auto' }),
   // LINE OA (the status page's card). lineEnable runs right after the page asked Chrome for the chat.line.biz permission.
-  lineEnable: () => lineEnable(),
+  lineEnable: (m) => lineEnable(m?.link),
   lineProbe: () => enqueue(() => lineCheckIn()),
   lineChoose: (m) => lineChoose(m.botId),
   lineSyncChats: () => enqueue(() => lineSyncChats({ trigger: 'button' })),

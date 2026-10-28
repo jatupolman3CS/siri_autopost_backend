@@ -879,15 +879,58 @@
         blocked: /บล็อก|block/i.test(typeText),
       });
     }
-    const hasNext = !!findNextPage();
+    // A full page with something pager-like after the table may still have a next page: the caller tries the turn and checks the table moved.
+    // (a "next" control that is switched off is the page saying it is the last one)
+    const lastSaid = pagerControls().some((e) => isOff(e) && /\bnext\b|ถัดไป|chevron-?right|arrow-?(?:right|forward)|^(?:›|>)$/i.test(`${hint(e)} ${(e.textContent || '').trim()}`));
+    const hasNext = !!findNextPage() || (!lastSaid && rows.length >= 10 && tailControls().length > 0);
     return { ok: true, rowCount: rows.length, contacts, unstamped, hasNext, total: pageTotal(), pager: hasNext ? '' : pagerOutline() };
   }
 
+  // What the table shows now (first row id + number of rows): a page turn is proven by this changing, whatever the pager looks like.
+  const tableSignature = () => {
+    const rows = [...document.querySelectorAll('table tbody tr')];
+    return `${rows.length}:${rows[0] ? rows[0].getAttribute('data-fbap-uid') || rows[0].textContent.slice(0, 40) : ''}`;
+  };
+
+  // Controls that sit after the table and look like pager parts (a number, an arrow, an icon): the fallback when the labelled
+  // "next" control is not found. Verbs (delete, export, send...) are never candidates, so a wrong guess cannot do harm.
+  function tailControls() {
+    const table = document.querySelector('table');
+    if (!table) return [];
+    const out = [];
+    for (const e of document.querySelectorAll('a, button, [role="button"], li')) {
+      if (table.contains(e) || !visible(e) || isOff(e)) continue;
+      if (!(table.compareDocumentPosition(e) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+      if (e.tagName === 'LI' && e.querySelector('a, button')) continue;
+      const text = (e.textContent || '').trim();
+      if (text.length > 3 && !/next|ถัดไป/i.test(hint(e))) continue;
+      if (/prev|ก่อนหน้า|back|left|‹|«/i.test(hint(e))) continue;
+      if (e.tagName === 'A' && e.getAttribute('href') && !/page|offset|next|^#|^\?/i.test(e.getAttribute('href'))) continue;
+      if (e.getAttribute('aria-current') || /active|current|selected/.test(e.className || '')) continue;
+      out.push(e);
+    }
+    // A labelled "next" first, then the last control of the pager (the next arrow is usually the last), then the rest from the end.
+    const labelled = out.filter((e) => /\bnext\b|ถัดไป|chevron-?right|arrow-?(?:right|forward)|caret-?right|angle-?right|›|»/i.test(hint(e)));
+    return [...new Set([...labelled, ...out.reverse()])].slice(0, 6);
+  }
+
   async function nextContactsPage() {
-    const b = findNextPage();
-    if (!b) return { ok: true, clicked: false };
-    b.click();
-    return { ok: true, clicked: true };
+    const labelled = findNextPage();
+    // A control that says "next" is trusted (a switched-off one is not returned at all); a guess has to prove itself.
+    if (labelled) {
+      labelled.click();
+      return { ok: true, clicked: true };
+    }
+    const tries = tailControls();
+    for (const b of tries) {
+      const before = tableSignature();
+      b.click();
+      for (let i = 0; i < 16; i++) {
+        await sleep(250);
+        if (tableSignature() !== before) return { ok: true, clicked: true };
+      }
+    }
+    return { ok: true, clicked: false };
   }
 
   async function listChats(m) {

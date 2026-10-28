@@ -52,6 +52,24 @@ for (const [name, markup] of Object.entries(PAGERS)) {
   console.log(`✔ ${name}`);
 }
 
+// A pager with no known class or label: the turn is found by trying the pager-like controls and checking the table moved.
+{
+  const { w, send } = load('<div class="foot"><div role="button" id="a">‹</div><div role="button" id="b">1</div><div role="button" id="c">›</div></div>');
+  const body = w.document.querySelector('tbody');
+  w.document.getElementById('c').addEventListener('click', () => {
+    body.innerHTML = rows(20).replaceAll(uid(1), uid(101));
+  });
+  const r = await send('lineListContacts');
+  assert.equal(r.hasNext, true, 'a full page with pager-like controls may have a next page');
+  const n = await send('lineNextContactsPage');
+  assert.equal(n.clicked, true, 'the arrow is found by its effect');
+  assert.equal(body.querySelector('tr').getAttribute('data-fbap-uid'), uid(101));
+  // Nothing moves any more (the last, full page): no turn is claimed.
+  const again = await send('lineNextContactsPage');
+  assert.equal(again.clicked, false);
+  console.log('✔ an unlabelled pager is found by its effect');
+}
+
 // The last page: the next control is switched off.
 {
   const { send } = load('<nav class="pagination"><button>1</button><button disabled>ถัดไป</button></nav>');

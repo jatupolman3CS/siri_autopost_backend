@@ -31,8 +31,8 @@ public class LineChat : Entity
             UserId = (userId ?? "").Trim(),
             ChatUrl = (chatUrl ?? "").Trim(),
             Name = CleanName(name),
-            Labels = labels?.Select(l => l.Trim()).Where(l => l.Length > 0).Distinct().ToList() ?? [],
-            LastMessageAt = lastMessageAt,
+            Labels = CleanLabels(labels),
+            LastMessageAt = lastMessageAt?.ToUniversalTime(),
             Unread = unread,
             DoNotSend = doNotSend,
             SyncedAt = now,
@@ -44,17 +44,24 @@ public class LineChat : Entity
     {
         Name = CleanName(name);
         ChatUrl = (chatUrl ?? "").Trim();
-        Labels = labels?.Select(l => l.Trim()).Where(l => l.Length > 0).Distinct().ToList() ?? [];
-        LastMessageAt = lastMessageAt;
+        Labels = CleanLabels(labels);
+        LastMessageAt = lastMessageAt?.ToUniversalTime();
         Unread = unread;
         SyncedAt = now;
     }
 
     public void SetDoNotSend(bool doNotSend) => DoNotSend = doNotSend;
 
+    // A page's text may hold control characters (a NUL makes PostgreSQL refuse the whole save) and a time may carry the
+    // browser's offset (Npgsql only writes UTC): both are cleaned here so one odd customer cannot fail the whole roster.
+    private static string Printable(string? text) => new string((text ?? "").Where(ch => !char.IsControl(ch) || ch == ' ').ToArray()).Trim();
+
+    private static List<string> CleanLabels(IEnumerable<string>? labels) =>
+        labels?.Select(Printable).Where(l => l.Length > 0).Distinct().ToList() ?? [];
+
     private static string CleanName(string? name)
     {
-        var n = (name ?? "").Trim();
+        var n = Printable(name);
         if (n.Length == 0) n = "ลูกค้า";
         return n.Length > MaxNameLength ? n[..MaxNameLength] : n;
     }

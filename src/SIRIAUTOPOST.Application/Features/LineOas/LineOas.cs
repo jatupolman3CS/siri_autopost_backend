@@ -39,6 +39,22 @@ internal static class LineOaRows
 
 internal static class LineOaCommands
 {
+    /// <summary>
+    /// The browser that works for an OA. An OA whose browser was unbound or changed ("change LINE OA") has none; with ONE
+    /// browser in the workspace it simply goes back to it, with several the person must say which (removing and adding the OA
+    /// again asks for it).
+    /// </summary>
+    public static async Task<Guid> DeviceOfAsync(SocialAccount a, IDeviceRepository devices, Guid workspaceId, CancellationToken ct)
+    {
+        if (a.DeviceId is { } id) return id;
+        var list = await devices.ListAsync(workspaceId, ct);
+        if (list.Count == 0) throw new DomainException("ยังไม่มีส่วนขยายที่เชื่อมไว้: เชื่อมส่วนขยายก่อน แล้วค่อยใช้ LINE OA นี้");
+        if (list.Count > 1)
+            throw new DomainException("LINE OA นี้ยังไม่ได้ผูกกับเครื่องใด และมีส่วนขยายหลายเครื่อง: ลบ OA นี้แล้วเพิ่มใหม่พร้อมเลือกเครื่อง");
+        a.ReattachLine(list[0].Id, a.Name.StartsWith("LINE · ") ? a.Name["LINE · ".Length..] : a.Name);
+        return list[0].Id;
+    }
+
     /// <summary>Queues the "read this OA's customers" command for a browser (the extension opens the OA and scrolls its chat list).</summary>
     public static void Ask(IExtensionRepository ext, IDeviceEventRepository events, Guid workspaceId, Guid deviceId, string botId, DateTimeOffset now, string cmdName = "syncLineChats")
     {
@@ -106,7 +122,7 @@ public sealed class AddLineOaCommandHandler(
 public sealed record SyncLineOaCommand(Guid WorkspaceId, Guid AccountId) : ICommand<bool>;
 
 public sealed class SyncLineOaCommandHandler(
-    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IExtensionRepository ext,
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IDeviceRepository devices, IExtensionRepository ext,
     IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<SyncLineOaCommand, bool>
 {
@@ -116,7 +132,7 @@ public sealed class SyncLineOaCommandHandler(
         await users.RequireLineChatAsync(ws, ct);
         var a = await accounts.GetAsync(ws.Id, c.AccountId, ct);
         if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
-        if (a.DeviceId is not { } deviceId) throw new DomainException("LINE OA นี้ยังไม่มีส่วนขยายที่อ่านรายชื่อ");
+        var deviceId = await LineOaCommands.DeviceOfAsync(a, devices, ws.Id, ct);
         LineOaCommands.Ask(ext, events, ws.Id, deviceId, a.Handle, clock.GetUtcNow());
         await uow.SaveChangesAsync(ct);
         return true;
@@ -127,7 +143,7 @@ public sealed class SyncLineOaCommandHandler(
 public sealed record UseLineOaCommand(Guid WorkspaceId, Guid AccountId) : ICommand<bool>;
 
 public sealed class UseLineOaCommandHandler(
-    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IExtensionRepository ext,
+    IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, IDeviceRepository devices, IExtensionRepository ext,
     IDeviceEventRepository events, ICurrentUser current, IUnitOfWork uow, TimeProvider clock)
     : ICommandHandler<UseLineOaCommand, bool>
 {
@@ -137,7 +153,7 @@ public sealed class UseLineOaCommandHandler(
         await users.RequireLineChatAsync(ws, ct);
         var a = await accounts.GetAsync(ws.Id, c.AccountId, ct);
         if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
-        if (a.DeviceId is not { } deviceId) throw new DomainException("LINE OA นี้ยังไม่มีส่วนขยายที่ดูแล");
+        var deviceId = await LineOaCommands.DeviceOfAsync(a, devices, ws.Id, ct);
         LineOaCommands.Ask(ext, events, ws.Id, deviceId, a.Handle, clock.GetUtcNow(), "lineUseOa");
         await uow.SaveChangesAsync(ct);
         return true;

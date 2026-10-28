@@ -572,18 +572,69 @@ export function createLineFlow(deps) {
     let pages = 0;
     let total = 0;
     let noNext = '';
+    let grew = false;
+    let front = null;
+    const blockedIds = new Set();
+    let dupes = 0;
+    let rawRows = 0;
+    let unstamped = 0;
+    try {
     for (;;) {
       abortCheck();
       // A lazily loaded table grows when scrolled: read until the number of rows stops growing.
+      // The real page (checked in a logged-in browser) has no pager: it loads about 20 more each time its own box is scrolled to
+      // the bottom, so keep scrolling until the number of rows stays the same for a few looks.
       let seen = r.rowCount;
-      for (let i = 0; i < 4; i++) {
-        await sleep(rand(800, 1600));
-        const more = await tabCmdOk(tabId, 'lineListContacts', { scroll: true }, 20000);
-        if (more.rowCount <= seen) break;
+      let still = 0;
+      let nudged = false;
+      let i = 0;
+      for (; i < 400 && still < (nudged ? 6 : 3); i++) {
+        abortCheck();
+        // Small steps like a wheel (a jump to the bottom loads nothing on the real page), then a moment for the rows to arrive.
+        // (a tab still running an older line.js does not know the stepped scroll: the old jump below is the fallback, never a failure)
+        // A stalled look scrolls up a little first: the page loads when its end comes into view again.
+        let stepped = true;
+        try {
+          await tabCmdOk(tabId, 'lineScrollContacts', still > 0 ? { wiggle: true } : {}, 30000);
+        } catch (e) {
+          if (e instanceof Aborted || e instanceof Fatal || e instanceof Blocked) throw e;
+          stepped = false;
+        }
+        await sleep(rand(900, 1700) + still * 400);
+        const more = await tabCmdOk(tabId, 'lineListContacts', stepped ? {} : { scroll: true }, 20000);
+        if (more.rowCount <= seen) {
+          still++;
+          // A page that stops at a full screenful or more may only be waiting: Chrome does not draw a window that other windows
+          // cover, and the page loads the next rows when drawn. Bring the work window to the front once, and give it more looks.
+          if (still >= 3 && !nudged && seen >= 20) {
+            nudged = true;
+            still = 0;
+            try {
+              const tab = await chrome.tabs.get(tabId);
+              front = { workWin: tab.windowId, prevWin: (await chrome.windows.getLastFocused()).id };
+              if (front.prevWin !== front.workWin) await chrome.windows.update(front.workWin, { focused: true });
+              await log('info', '[LINE] รายชื่อหยุดโหลดเพิ่ม จึงดึงหน้าต่างที่อ่านรายชื่อขึ้นมาข้างหน้าชั่วคราว');
+            } catch {
+              /* the window cannot be fronted: the extra looks still apply */
+            }
+          }
+          continue;
+        }
+        still = 0;
+        grew = true;
         seen = more.rowCount;
         r = more;
+        if (seen > 5000) break;
       }
-      for (const c of r.contacts) if (!c.blocked && !map.has(c.userId)) map.set(c.userId, c);
+      // Ran out of looks while rows were still arriving: the list may not be whole.
+      if (i >= 400) complete = false;
+      for (const c of r.contacts) {
+        if (c.blocked) blockedIds.add(c.userId);
+        else if (map.has(c.userId)) dupes++;
+        else map.set(c.userId, c);
+      }
+      rawRows = Math.max(rawRows, r.rowCount || 0);
+      unstamped = Math.max(unstamped, r.unstamped || 0);
       if (r.unstamped > 0) complete = false;
       total = Math.max(total, r.total || 0);
       pages++;
@@ -601,6 +652,12 @@ export function createLineFlow(deps) {
       await sleep(rand(...TIMING.contactPagePause));
       r = await tabCmdOk(tabId, 'lineListContacts', {}, 20000);
     }
+    } finally {
+      // The window that was fronted for the read gives the screen back to the one the person was using.
+      if (front && front.prevWin != null && front.prevWin !== front.workWin) {
+        await chrome.windows.update(front.prevWin, { focused: true }).catch(() => {});
+      }
+    }
     const chats = [...map.values()].slice(0, 5000).map((x) => ({
       userId: x.userId,
       name: x.name || '',
@@ -611,11 +668,14 @@ export function createLineFlow(deps) {
     // The list is only called complete when nothing says there is more: the page's own total is not above what was read, and a
     // single page that is exactly full is taken for "the pager was not found" rather than for a shop with that many customers.
     let note = `อ่านรายชื่อลูกค้าจากหน้ารายชื่อติดต่อ ${pages} หน้า ได้ ${map.size} คน`;
+    // Where every row went, so a difference from the number LINE shows can be explained from the log alone.
+    await log('info', `[LINE] หน้ารายชื่อมี ${rawRows} แถว: เก็บ ${map.size} คน, ผู้ใช้ที่บล็อก ${blockedIds.size} (ไม่ส่งข้อความหา), ซ้ำ ${dupes}, อ่านรหัสไม่ได้ ${unstamped}`);
+    if (blockedIds.size) note += ` (ข้ามคนที่บล็อก ${blockedIds.size} คน)`;
     if (total > map.size) {
       complete = false;
       note += ` (หน้าเว็บแสดงทั้งหมด ${total} คน อ่านได้ไม่ครบ)`;
     }
-    if (pages === 1 && map.size >= 20 && map.size % 10 === 0 && total <= map.size) {
+    if (pages === 1 && !grew && map.size >= 20 && map.size % 10 === 0 && total <= map.size) {
       complete = false;
       note += ' (หาปุ่มหน้าถัดไปไม่เจอ จึงยังไม่ลบแชทที่หายไป)';
       if (noNext) await log('warn', `[LINE] ตัวเลือกหน้าถัดไปที่เห็นในหน้า: ${noNext}`);

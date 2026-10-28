@@ -140,6 +140,30 @@ public class LineOaMasterTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_roster_of_the_real_size_with_empty_names_and_repeated_customers_is_taken_whole()
+    {
+        var (owner, _, ws) = await factory.SignUpAsync("pro");
+        var (device, _) = await factory.PairDeviceAsync(owner, ws);
+        Assert.Equal(HttpStatusCode.OK, (await device.PostAsJsonAsync("/api/device/heartbeat",
+            new { version = "2.5.0", line = new { ready = true, botId = "Ubigroster12", oaName = "OA" } }, Json)).StatusCode);
+
+        // What the contacts page really gave (852 rows): some without a name, a few customers listed twice, labels and dates.
+        string Uid(int i) => "U" + i.ToString("x").PadLeft(32, '0');
+        var chats = Enumerable.Range(1, 852).Select(i => new
+        {
+            userId = Uid(i <= 843 ? i : i - 843), // the last 9 repeat the first 9
+            name = i % 45 == 0 ? "" : $"ลูกค้า {i} 😀",
+            labels = i % 7 == 0 ? new[] { "VIP", "ใหม่" } : Array.Empty<string>(),
+            lastMessageAt = "2026-08-01T00:00:00+07:00",
+        }).ToArray();
+        var res = await device.PutAsJsonAsync("/api/device/line/chats",
+            new { botId = "Ubigroster12", oaName = "OA", complete = true, chats }, Json);
+        Assert.Equal(HttpStatusCode.OK, res.StatusCode);
+        var oas = (await owner.GetFromJsonAsync<List<LineOaDto>>($"/api/workspaces/{ws}/line/oas", Json))!;
+        Assert.Equal(843, oas.Single().Chats);
+    }
+
+    [Fact]
     public async Task A_plan_without_line_chats_cannot_use_the_list()
     {
         var (owner, _, ws) = await factory.SignUpAsync("free");

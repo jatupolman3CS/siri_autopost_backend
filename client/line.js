@@ -856,7 +856,13 @@
   // Customers of the contacts table: [{ userId, name, labels, lastMessageAt, blocked }]; rows whose id could not be read are
   // counted in `unstamped` (the caller then does not call the list complete).
   function readContacts(m) {
-    if (m && m.scroll) window.scrollTo(0, document.documentElement.scrollHeight);
+    if (m && m.scroll) {
+      // The real page loads more customers while its own scrolling box (a div, not the window) is scrolled to the bottom.
+      for (let e = document.querySelector('table'); e; e = e.parentElement) {
+        if (e.scrollHeight > e.clientHeight + 4 && /auto|scroll/.test(getComputedStyle(e).overflowY)) e.scrollTop = e.scrollHeight;
+      }
+      window.scrollTo(0, document.documentElement.scrollHeight);
+    }
     const rows = [...document.querySelectorAll('table tbody tr')];
     const contacts = [];
     let unstamped = 0;
@@ -912,6 +918,40 @@
     // A labelled "next" first, then the last control of the pager (the next arrow is usually the last), then the rest from the end.
     const labelled = out.filter((e) => /\bnext\b|ถัดไป|chevron-?right|arrow-?(?:right|forward)|caret-?right|angle-?right|›|»/i.test(hint(e)));
     return [...new Set([...labelled, ...out.reverse()])].slice(0, 6);
+  }
+
+  // The scrolling box of the contacts table (a div; the window itself does not scroll), or null.
+  function contactsBox() {
+    for (let e = document.querySelector('table'); e; e = e.parentElement) {
+      if (e.scrollHeight > e.clientHeight + 4 && /auto|scroll/.test(getComputedStyle(e).overflowY)) return e;
+    }
+    return null;
+  }
+
+  // Scrolls the box down in small steps like a person with a wheel. Checked on the real page: jumping to the bottom at once loads
+  // nothing more, steps of about a screen with a short pause each load the next ~20 customers. { moved } = the box got further.
+  async function scrollContactsDown(m) {
+    const box = contactsBox();
+    if (!box) {
+      window.scrollBy(0, Math.round(window.innerHeight * 0.8));
+      return { ok: true, moved: false, box: false };
+    }
+    const step = Math.max(120, Math.round(box.clientHeight * 0.6));
+    // After a look that brought nothing: back up a little so the end of the list comes into view again.
+    if (m && m.wiggle) {
+      box.scrollTop = Math.max(0, box.scrollTop - step * 2);
+      box.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await sleep(rnd(250, 500));
+    }
+    const start = box.scrollTop;
+    for (let i = 0; i < 14; i++) {
+      const before = box.scrollTop;
+      box.scrollTop = before + step;
+      box.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await sleep(rnd(120, 260));
+      if (box.scrollTop === before) break; // at the bottom
+    }
+    return { ok: true, moved: box.scrollTop > start, box: true };
   }
 
   async function nextContactsPage() {
@@ -1725,6 +1765,7 @@
     lineListChats: async (m) => listChats(m || {}),
     lineListContacts: async (m) => readContacts(m || {}),
     lineNextContactsPage: async () => nextContactsPage(),
+    lineScrollContacts: async (m) => scrollContactsDown(m || {}),
     lineMaxPageSize: async () => maxPageSize(),
     lineParseContactDate: async (m) => ({ ok: true, iso: parseContactDate(m.text) }),
     lineClickRow: async (m) => clickRow(m || {}),

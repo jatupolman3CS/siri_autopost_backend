@@ -70,6 +70,68 @@ for (const [name, markup] of Object.entries(PAGERS)) {
   console.log('✔ an unlabelled pager is found by its effect');
 }
 
+// The real page (checked in a logged-in browser) has NO pager: its own scrolling box loads about 20 more rows when scrolled
+// to the bottom. Scrolling the window does nothing there.
+{
+  const { w, send } = load('');
+  const table = w.document.querySelector('table');
+  const box = w.document.createElement('div');
+  box.style.overflowY = 'auto';
+  table.parentNode.insertBefore(box, table);
+  box.appendChild(table);
+  Object.defineProperty(box, 'scrollHeight', { get: () => 2000 });
+  Object.defineProperty(box, 'clientHeight', { get: () => 500 });
+  let loaded = 20;
+  let top = 0;
+  Object.defineProperty(box, 'scrollTop', {
+    get: () => top,
+    set: (v) => {
+      top = v;
+      if (v > 0 && loaded < 60) {
+        loaded += 20;
+        w.document.querySelector('tbody').innerHTML = rows(loaded);
+      }
+    },
+  });
+  const first = await send('lineListContacts');
+  assert.equal(first.rowCount, 20);
+  const more = await send('lineListContacts', { scroll: true });
+  assert.equal(more.rowCount, 40, "the page's own box is scrolled, not just the window");
+  assert.equal(more.contacts.length, 40);
+  console.log('✔ a scrolling box that loads more rows is scrolled');
+}
+
+// The real box loads more rows only for a scroll in small steps (a jump to the bottom loads nothing): lineScrollContacts steps.
+{
+  const { w, send } = load('');
+  const table = w.document.querySelector('table');
+  const box = w.document.createElement('div');
+  box.style.overflowY = 'auto';
+  table.parentNode.insertBefore(box, table);
+  box.appendChild(table);
+  Object.defineProperty(box, 'scrollHeight', { get: () => 3000 });
+  Object.defineProperty(box, 'clientHeight', { get: () => 500 });
+  let loaded = 20;
+  let top = 0;
+  Object.defineProperty(box, 'scrollTop', {
+    get: () => top,
+    set: (v) => {
+      const next = Math.min(v, 2500);
+      if (next - top > 500) return; // a jump: nothing loads
+      top = next;
+      if (top > 0 && loaded < 200) {
+        loaded += 20;
+        w.document.querySelector('tbody').innerHTML = rows(loaded);
+      }
+    },
+  });
+  const r = await send('lineScrollContacts');
+  assert.equal(r.moved, true);
+  const after = await send('lineListContacts');
+  assert.ok(after.rowCount > 20, `small steps load more rows (${after.rowCount})`);
+  console.log('✔ the scrolling box is scrolled in small steps');
+}
+
 // The last page: the next control is switched off.
 {
   const { send } = load('<nav class="pagination"><button>1</button><button disabled>ถัดไป</button></nav>');

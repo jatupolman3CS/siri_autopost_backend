@@ -174,6 +174,7 @@ const lineHandlers = {
     };
   },
   lineNextContactsPage: () => ({ ok: true, clicked: false }),
+  lineScrollContacts: () => ({ ok: true, moved: false, box: true }),
   lineListChats: () => (linePage.chatListReads++, {
     ok: true, done: true, rounds: 1, note: '', complete: linePage.listComplete,
     count: linePage.chats.filter((c) => !c.hidden).length,

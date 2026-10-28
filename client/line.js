@@ -790,13 +790,67 @@
     return `${y}-${pad(mo)}-${pad(d)}T00:00:00+07:00`;
   }
 
+  const PAGER_BOX = '.pagination, nav, [class*="pagin" i], ul[class*="page" i], [role="navigation"]';
+  const isOff = (e) => !!(e.disabled || e.getAttribute('aria-disabled') === 'true' || /disabled/.test(e.className || '') || (e.parentElement && /disabled/.test(e.parentElement.className || '')));
+  // The icon of an arrow-only button says its direction in its class or label (chevron-right, arrow-forward, next).
+  const hint = (e) => `${e.getAttribute('aria-label') || ''} ${e.getAttribute('title') || ''} ${e.getAttribute('rel') || ''} ${e.className && e.className.baseVal === undefined ? e.className : ''} ${[...e.querySelectorAll('[class]')].map((c) => (typeof c.className === 'string' ? c.className : '')).join(' ')} ${e.textContent || ''}`;
+
+  function pagerControls() {
+    return [...document.querySelectorAll('a, button, li')].filter((e) => visible(e) && (e.closest(PAGER_BOX) || /page-link|page-item/.test(e.className || '')));
+  }
+
+  // The control that opens the next page of the contacts table: a "next" arrow/label first (text, label, icon class), else the
+  // number after the current one. null when there is none, or it is switched off (the last page).
   function findNextPage() {
-    const cands = [...document.querySelectorAll('a, button')].filter((e) => visible(e) && (e.closest('.pagination, nav, [class*="pagin" i]') || /page-link/.test(e.className || '')));
-    return cands.find((e) => {
-      const label = `${e.getAttribute('aria-label') || ''} ${e.textContent || ''}`.trim();
-      if (!/^(?:›|»|>|next|ถัดไป)$/i.test((e.textContent || '').trim()) && !/next|ถัดไป/i.test(label)) return false;
-      return !(e.disabled || e.getAttribute('aria-disabled') === 'true' || /disabled/.test(e.className || '') || (e.parentElement && /disabled/.test(e.parentElement.className || '')));
-    }) || null;
+    const cands = pagerControls();
+    const arrow = cands.find((e) => {
+      const text = (e.textContent || '').trim();
+      const h = hint(e);
+      const next = /^(?:›|>|next|ถัดไป)$/i.test(text) || /\bnext\b|ถัดไป|chevron-?right|arrow-?(?:right|forward)|caret-?right|angle-?right/i.test(h);
+      const prev = /prev|ก่อนหน้า|left|back/i.test(h);
+      return next && !prev && e.tagName !== 'LI';
+    });
+    if (arrow) return isOff(arrow) ? null : arrow;
+    // "»" is also "last page": only when no other next control exists.
+    const last = cands.find((e) => /^»$/.test((e.textContent || '').trim()) && e.tagName !== 'LI');
+    if (last) return isOff(last) ? null : last;
+    const items = cands.filter((e) => e.tagName === 'LI' || /page-item/.test(e.className || ''));
+    const cur = items.findIndex((e) => e.getAttribute('aria-current') || /active|current|selected/.test(e.className || ''));
+    if (cur >= 0) {
+      for (const it of items.slice(cur + 1)) {
+        const t = (it.textContent || '').trim();
+        if (/^\d+$/.test(t) && !isOff(it)) return it.querySelector('a, button') || it;
+      }
+    }
+    return null;
+  }
+
+  // A compact outline of what looks like a pager (tag, text, label, classes), for the log when no way to the next page is found.
+  function pagerOutline() {
+    return pagerControls().slice(0, 12).map((e) => `${e.tagName.toLowerCase()}[${(e.textContent || '').trim().slice(0, 8)}|${e.getAttribute('aria-label') || ''}|${String(typeof e.className === 'string' ? e.className : '').slice(0, 40)}]`).join(' ');
+  }
+
+  // The page's own total ("900 รายชื่อ" / "900 contacts"), the biggest such number, or 0 when the page shows none.
+  function pageTotal() {
+    const text = String((document.body && (document.body.innerText || document.body.textContent)) || '');
+    let best = 0;
+    for (const m of text.matchAll(/(\d[\d,]*)\s*(?:รายชื่อ|ผู้ติดต่อ|คน|contacts?|people|friends?|users?)/gi)) best = Math.max(best, Number(m[1].replace(/,/g, '')) || 0);
+    return best;
+  }
+
+  // A "rows per page" choice (20 / 50 / 100): picks the biggest, so a long list needs fewer page turns. Best effort: { changed }.
+  async function maxPageSize() {
+    for (const sel of document.querySelectorAll('select')) {
+      const opts = [...sel.options].map((o) => ({ o, n: Number((o.textContent || o.value).replace(/[^\d]/g, '')) })).filter((x) => x.n > 0);
+      if (opts.length < 2 || opts.length !== sel.options.length) continue;
+      const big = opts.reduce((a, b) => (b.n > a.n ? b : a));
+      if (sel.value === big.o.value) return { ok: true, changed: false };
+      sel.value = big.o.value;
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true, changed: true, size: big.n };
+    }
+    return { ok: true, changed: false };
   }
 
   // Customers of the contacts table: [{ userId, name, labels, lastMessageAt, blocked }]; rows whose id could not be read are
@@ -825,7 +879,8 @@
         blocked: /บล็อก|block/i.test(typeText),
       });
     }
-    return { ok: true, rowCount: rows.length, contacts, unstamped, hasNext: !!findNextPage() };
+    const hasNext = !!findNextPage();
+    return { ok: true, rowCount: rows.length, contacts, unstamped, hasNext, total: pageTotal(), pager: hasNext ? '' : pagerOutline() };
   }
 
   async function nextContactsPage() {
@@ -1627,6 +1682,7 @@
     lineListChats: async (m) => listChats(m || {}),
     lineListContacts: async (m) => readContacts(m || {}),
     lineNextContactsPage: async () => nextContactsPage(),
+    lineMaxPageSize: async () => maxPageSize(),
     lineParseContactDate: async (m) => ({ ok: true, iso: parseContactDate(m.text) }),
     lineClickRow: async (m) => clickRow(m || {}),
     lineFocusSearch: async () => focusSearch(),

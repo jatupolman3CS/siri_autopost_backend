@@ -160,12 +160,12 @@ public sealed class UseLineOaCommandHandler(
     }
 }
 
-/// <summary>Takes an OA out of the master list (its customers go with it); refused while a link set posts through it.</summary>
+/// <summary>Takes an OA out of the master list: its customers and posts go with it, and the link sets that used it wait for another OA.</summary>
 public sealed record RemoveLineOaCommand(Guid WorkspaceId, Guid AccountId) : ICommand<bool>;
 
 public sealed class RemoveLineOaCommandHandler(
     IWorkspaceRepository workspaces, IUserRepository users, IAccountRepository accounts, ILineChatRepository lineChats,
-    ILinkSetRepository sets, IPostRepository posts, ICurrentUser current, IUnitOfWork uow)
+    ILinkSetRepository sets, ICurrentUser current, IUnitOfWork uow)
     : ICommandHandler<RemoveLineOaCommand, bool>
 {
     public async Task<bool> HandleAsync(RemoveLineOaCommand c, CancellationToken ct = default)
@@ -174,11 +174,10 @@ public sealed class RemoveLineOaCommandHandler(
         await users.RequireLineChatAsync(ws, ct);
         var a = await accounts.GetAsync(ws.Id, c.AccountId, ct);
         if (a is null || a.Platform != Platform.Line) throw new NotFoundException("LINE OA", c.AccountId);
-        var usedBy = (await sets.ListAsync(ws.Id, ct)).Where(s => s.PostAsAccountId == a.Id).Select(s => s.Name).ToList();
-        if (usedBy.Count > 0)
-            throw new DomainException($"ลบ LINE OA นี้ไม่ได้: ชุดโพสต์ {string.Join(", ", usedBy)} ใช้อยู่ (ลบหรือย้ายชุดก่อน)");
-        if ((await posts.ListOpenByAccountAsync(a.Id, ct)).Count > 0)
-            throw new DomainException("ลบ LINE OA นี้ไม่ได้: ยังมีโพสต์ค้างคิวของ OA นี้");
+        // The shop asked for this OA to go (the web says what goes with it): the link sets that posted through it are left with no OA
+        // (they wait until one is chosen again) and its posts, queued or done, go with the account (the database cascades them).
+        foreach (var set in (await sets.ListAsync(ws.Id, ct)).Where(x => x.PostAsAccountId == a.Id))
+            set.Update(set.Name, null, null);
         await lineChats.DeleteByAccountAsync(a.Id, ct);
         accounts.Remove(a);
         await uow.SaveChangesAsync(ct);

@@ -481,7 +481,7 @@ public sealed class DeviceHeartbeatCommandHandler(
                         device.SetLineReady(cleanBotId, now);
                         var expectedName = $"LINE · {cleanOaName}";
                         if (expectedName.Length > 120) expectedName = expectedName[..120];
-                        if (lineAccount!.Name != expectedName) lineAccount.RenameLine(cleanOaName); // a rename never undoes a rest or a login loss
+                        if (!string.IsNullOrWhiteSpace(lineReq.OaName) && lineAccount!.Name != expectedName) lineAccount.RenameLine(cleanOaName); // a rename never undoes a rest or a login loss
                     }
                 }
             }

@@ -549,9 +549,29 @@ export function createLineFlow(deps) {
       await sleep(rand(1000, 2000));
     }
     if (!r.rowCount) return null;
+    // The OA's own name, read from its own page (only taken when the page is that OA).
+    let oaName = '';
+    try {
+      const pg = await tabCmdOk(tabId, 'check', {}, 20000);
+      if (pg && pg.oaName && String(pg.botId || '').toLowerCase() === String(botId).toLowerCase()) oaName = String(pg.oaName).trim();
+    } catch {
+      /* the name stays what it was */
+    }
+    // A "rows per page" choice makes a long list need fewer page turns (best effort: a page without one is read as it is).
+    try {
+      const size = await tabCmdOk(tabId, 'lineMaxPageSize', {}, 20000);
+      if (size.changed) {
+        await sleep(rand(2000, 3500));
+        r = await tabCmdOk(tabId, 'lineListContacts', {}, 20000);
+      }
+    } catch {
+      /* the page has no such choice */
+    }
     const map = new Map();
     let complete = true;
     let pages = 0;
+    let total = 0;
+    let noNext = '';
     for (;;) {
       abortCheck();
       // A lazily loaded table grows when scrolled: read until the number of rows stops growing.
@@ -565,8 +585,12 @@ export function createLineFlow(deps) {
       }
       for (const c of r.contacts) if (!c.blocked && !map.has(c.userId)) map.set(c.userId, c);
       if (r.unstamped > 0) complete = false;
+      total = Math.max(total, r.total || 0);
       pages++;
-      if (!r.hasNext) break;
+      if (!r.hasNext) {
+        noNext = r.pager || '';
+        break;
+      }
       if (pages >= TIMING.contactPages) {
         complete = false;
         break;
@@ -584,7 +608,19 @@ export function createLineFlow(deps) {
       lastMessageAt: x.lastMessageAt || undefined,
       unread: false,
     }));
-    return { chats, complete: complete && map.size <= 5000, note: `อ่านรายชื่อลูกค้าจากหน้ารายชื่อติดต่อ ${pages} หน้า` };
+    // The list is only called complete when nothing says there is more: the page's own total is not above what was read, and a
+    // single page that is exactly full is taken for "the pager was not found" rather than for a shop with that many customers.
+    let note = `อ่านรายชื่อลูกค้าจากหน้ารายชื่อติดต่อ ${pages} หน้า ได้ ${map.size} คน`;
+    if (total > map.size) {
+      complete = false;
+      note += ` (หน้าเว็บแสดงทั้งหมด ${total} คน อ่านได้ไม่ครบ)`;
+    }
+    if (pages === 1 && map.size >= 20 && map.size % 10 === 0 && total <= map.size) {
+      complete = false;
+      note += ' (หาปุ่มหน้าถัดไปไม่เจอ จึงยังไม่ลบแชทที่หายไป)';
+      if (noNext) await log('warn', `[LINE] ตัวเลือกหน้าถัดไปที่เห็นในหน้า: ${noNext}`);
+    }
+    return { chats, complete: complete && map.size <= 5000, note, oaName };
   }
 
   // Reads the customers' chat list (names, labels, time of the last message, unread flag; never a message) and sends it to
@@ -613,8 +649,10 @@ export function createLineFlow(deps) {
       return fail('ยังไม่ได้ล็อกอิน LINE OA Manager ใน Chrome นี้', { login: true });
     }
     if (wantedBotId) {
+      // The page LINE opens first is the OA used last: its name belongs to that OA, not to the one that was asked for.
+      const samePage = String(probe.botId || '').toLowerCase() === wantedBotId.toLowerCase();
       probe.botId = wantedBotId;
-      probe.oaName = otherOa ? '' : probe.oaName;
+      if (!samePage) probe.oaName = '';
     }
     if (!probe.botId) {
       if (probe.choices.length > 1) {
@@ -673,6 +711,16 @@ export function createLineFlow(deps) {
     }
     const chats = r.chats;
     if (r.note) await log('info', `[LINE] ${r.note}`);
+    // The name the OA's own page shows is the right one: the web follows it at once.
+    if (r.oaName && r.oaName !== probe.oaName) {
+      probe.oaName = r.oaName;
+      await setCloud({ lineOaName: r.oaName });
+      try {
+        await heartbeat();
+      } catch {
+        /* the next round tells the web */
+      }
+    }
     let serverTotal;
     try {
       serverTotal = await cloudApi(await getCloud(), 'PUT', '/api/device/line/chats', {

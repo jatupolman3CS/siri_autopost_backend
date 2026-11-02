@@ -45,7 +45,7 @@ public interface IRandomSource
     double NextDouble();
 }
 
-/// <summary>Fills a new workspace with sample data when Demo:SeedNewWorkspaces is on; by default it adds nothing.</summary>
+/// <summary>Called once for a new workspace. The only implementation adds nothing: a workspace starts empty.</summary>
 public interface IWorkspaceSeeder
 {
     Task SeedAsync(Workspace workspace, CancellationToken ct = default);

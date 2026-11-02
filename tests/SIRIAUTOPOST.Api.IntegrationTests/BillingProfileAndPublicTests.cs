@@ -152,10 +152,9 @@ public class BillingProfileAndPublicTests(ApiFactory factory)
     }
 
     [Fact]
-    public async Task New_workspaces_are_empty_unless_demo_seeding_is_on()
+    public async Task New_workspaces_are_empty()
     {
-        using var empty = factory.WithWebHostBuilder(b => b.UseSetting("Demo:SeedNewWorkspaces", "false"));
-        var client = empty.CreateClient();
+        var client = factory.CreateClient();
         var res = await client.PostAsJsonAsync("/api/auth/signup", new { email = $"e{Guid.NewGuid():N}@shop.co", password = "password1" }, Json);
         res.EnsureSuccessStatusCode();
         var auth = (await res.Content.ReadFromJsonAsync<AuthResultDto>(Json))!;

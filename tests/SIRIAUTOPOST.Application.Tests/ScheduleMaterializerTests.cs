@@ -3,6 +3,7 @@ using SIRIAUTOPOST.Application.Common;
 using SIRIAUTOPOST.Domain.Entities;
 using SIRIAUTOPOST.Domain.Enums;
 using SIRIAUTOPOST.Domain.Exceptions;
+using SIRIAUTOPOST.Domain.Interfaces;
 using static SIRIAUTOPOST.Application.Tests.SchedulingWorld;
 
 namespace SIRIAUTOPOST.Application.Tests;
@@ -1198,5 +1199,85 @@ public class ScheduleMaterializerTests
             var diff = slot18Posts[1].ScheduledAt - slot18Posts[0].ScheduledAt;
             Assert.True(diff.TotalSeconds >= 45 && diff.TotalSeconds <= 150);
         }
+    }
+
+    private static (SchedulingWorld World, CollectionPost Post, SetLink First, SetLink Second) LineWorld(LineRepeat repeat, int days = 0)
+    {
+        var w = new SchedulingWorld(links: 0, posts: 0);
+        w.SwitchToLine("shop_bot", "Shop OA");
+        var post = w.AddPost("สวัสดีคุณ {{name}}");
+        post.UpdateSettings(new CollectionPostSettings { LineRepeat = repeat, LineRepeatDays = days }, Now);
+        var c1 = w.AddLineChat("shop_bot", "U11111111111111111111111111111111", name: "สมชาย");
+        var c2 = w.AddLineChat("shop_bot", "U22222222222222222222222222222222", name: "สมศรี");
+        return (w, post, c1, c2);
+    }
+
+    [Fact]
+    public async Task A_line_post_set_to_send_once_reaches_each_chat_only_once_and_never_a_chat_that_already_had_it()
+    {
+        var (w, post, c1, c2) = LineWorld(LineRepeat.Once);
+        // สมชาย got it last week (another schedule, a test): never again. The address differs in case only.
+        w.ChatUses.Add(new ChatUse(Guid.NewGuid(), post.Id, c1.Url.ToUpperInvariant(), Now.AddDays(-7), PostStatus.Success));
+        var s = w.NewLineSchedule(times: ["10:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(4));
+
+        Assert.DoesNotContain(w.Added, p => p.LinkId == c1.Id);
+        Assert.Single(w.Added, p => p.LinkId == c2.Id);
+    }
+
+    [Fact]
+    public async Task A_line_post_set_to_every_n_days_waits_that_many_calendar_days_per_chat()
+    {
+        var (w, _, c1, _) = LineWorld(LineRepeat.EveryDays, days: 2);
+        w.SetGroupRules(dailyPerGroup: 0);
+        var s = w.NewLineSchedule(times: ["10:00", "15:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(5));
+
+        var daysOfC1 = w.Added.Where(p => p.LinkId == c1.Id).Select(p => DateOnly.FromDateTime(Local(p))).ToList();
+        Assert.Equal([Today.AddDays(1), Today.AddDays(3), Today.AddDays(5)], daysOfC1);
+    }
+
+    [Fact]
+    public async Task Every_1_day_means_once_a_calendar_day_whatever_the_hour()
+    {
+        var (w, _, c1, _) = LineWorld(LineRepeat.EveryDays, days: 1);
+        w.SetGroupRules(dailyPerGroup: 0); // a LINE set's own "1 a day per customer" would hide the rule
+        var s = w.NewLineSchedule(times: ["10:00", "15:00", "19:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3));
+
+        Assert.Equal(3, w.Added.Count(p => p.LinkId == c1.Id));
+        Assert.Equal(3, w.Added.Where(p => p.LinkId == c1.Id).Select(p => DateOnly.FromDateTime(Local(p))).Distinct().Count());
+    }
+
+    [Fact]
+    public async Task In_shuffle_a_chat_that_had_the_once_post_gets_the_other_posts_instead()
+    {
+        var (w, once, c1, _) = LineWorld(LineRepeat.Once);
+        var again = w.AddPost("โปรประจำวันคุณ {{name}}");
+        var s = Schedule.Create(w.Ws.Id, "ตารางไลน์", w.Collection.Id, w.Set.Id, ScheduleMode.Daily, ["10:00"], 6, "09:00", Today, "14:00",
+            PostOrder.Shuffle, "09:00", "21:00", 3, 0, 0, null, 420, Now, false, PostRepeat.Any, lineOptions: new LineOptions());
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(4), new SeededRandom(3));
+
+        var toC1 = w.Added.Where(p => p.LinkId == c1.Id).ToList();
+        Assert.Equal(4, toC1.Count);
+        Assert.Equal(1, toC1.Count(p => p.CollectionPostId == once.Id));
+        Assert.Equal(3, toC1.Count(p => p.CollectionPostId == again.Id));
+    }
+
+    [Fact]
+    public async Task The_send_again_rule_means_nothing_to_facebook_groups()
+    {
+        var w = new SchedulingWorld(links: 1, posts: 1);
+        w.Posts[0].UpdateSettings(new CollectionPostSettings { LineRepeat = LineRepeat.Once }, Now);
+        var s = w.NewSchedule(times: ["18:00"]);
+
+        await w.RunAsync(s, Today.AddDays(1), Today.AddDays(3));
+
+        Assert.Equal(3, w.Added.Count);
+        await w.PostRepo.DidNotReceive().ListChatUsesAsync(Arg.Any<Guid>(), Arg.Any<IEnumerable<Guid>>(), Arg.Any<CancellationToken>());
     }
 }

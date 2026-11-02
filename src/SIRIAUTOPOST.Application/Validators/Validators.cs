@@ -439,6 +439,9 @@ internal static class MasterPostRules
         rule.Must(s => s?.Weekdays is null || s.Weekdays.Count <= 7).WithMessage(Messages.BadValue);
         rule.Must(s => s is null || s.MaxPerDay is >= 0 and <= CollectionPostSettings.MaxPerDayLimit)
             .WithMessage($"จำนวนครั้งต่อวันของโพสต์ต้องอยู่ระหว่าง 0–{CollectionPostSettings.MaxPerDayLimit}");
+        rule.Must(s => s is null || Enum.IsDefined(s.LineRepeat)).WithMessage(Messages.BadValue);
+        rule.Must(s => s is null || s.LineRepeat != Domain.Enums.LineRepeat.EveryDays || s.LineRepeatDays is >= 1 and <= CollectionPostSettings.MaxLineRepeatDays)
+            .WithMessage($"จำนวนวันก่อนส่งซ้ำทาง LINE ต้องอยู่ระหว่าง 1–{CollectionPostSettings.MaxLineRepeatDays}");
     }
 }
 

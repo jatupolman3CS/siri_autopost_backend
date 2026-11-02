@@ -611,7 +611,8 @@ public sealed class ClaimJobCommandHandler(
     ICurrentDevice current, IDeviceRepository devices, IWorkspaceRepository workspaces, IAccountRepository accounts,
     IPostRepository posts, IMediaRepository media, IUserRepository users, IPlanRepository plans, ISetLinkRepository links, ILinkSetRepository linkSets,
     IScheduleRepository schedules, ICollectionRepository collections, IPostBumpRepository bumps, IDeviceEventRepository events,
-    ScheduleTopUp topUp, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock, ILineChatRepository? lineChats = null)
+    ScheduleTopUp topUp, INotificationDispatcher notifier, IUnitOfWork uow, TimeProvider clock, ILineChatRepository? lineChats = null,
+    ICollectionPostRepository? collectionPosts = null)
     : ICommandHandler<ClaimJobCommand, JobDto?>
 {
     /// <summary>The failure rate only stops the engine once this many posts finished in the last 24 hours.</summary>
@@ -969,6 +970,26 @@ public sealed class ClaimJobCommandHandler(
                 : null;
         }
 
+        var masterCache = new Dictionary<Guid, CollectionPost?>();
+        // Why a LINE post must not go to its chat (the master post's "send once" / "every N days" rule); null = it may.
+        // Only posts that already left a browser count here: two queued copies must not skip each other.
+        async Task<string?> LineRepeatRefusalAsync(Post p, Guid cpId, int offsetMinutes)
+        {
+            if (!masterCache.TryGetValue(cpId, out var master)) masterCache[cpId] = master = await collectionPosts!.GetAsync(ws.Id, cpId, ct);
+            if (master is null || master.Settings.LineRepeat == LineRepeat.Always) return null;
+            var chat = LineChatUrl.Key(p.TargetUrl);
+            var offset = TimeSpan.FromMinutes(offsetMinutes);
+            var days = (await posts.ListChatUsesAsync(ws.Id, [cpId], ct))
+                .Where(u => u.Sent && u.PostId != p.Id && LineChatUrl.Key(u.TargetUrl) == chat)
+                .Select(u => DateOnly.FromDateTime(u.At.ToOffset(offset).DateTime))
+                .ToList();
+            var day = DateOnly.FromDateTime(now.ToOffset(offset).DateTime);
+            if (master.Settings.AllowsLineSend(day, days)) return null;
+            return master.Settings.LineRepeat == LineRepeat.Once
+                ? "ลูกค้านี้เคยได้รับข้อความนี้แล้ว (ตั้งให้ส่งครั้งเดียว)"
+                : $"ลูกค้านี้ได้รับข้อความนี้ไปแล้วเมื่อไม่ถึง {master.Settings.LineRepeatDays} วันก่อน";
+        }
+
         foreach (var p in due)
         {
             if (p.ScheduleId is not null && p.LinkId is null && !p.IsTest && p.TargetKey is { } key && key.StartsWith("account:", StringComparison.Ordinal))
@@ -996,6 +1017,16 @@ public sealed class ClaimJobCommandHandler(
                         Settle(p);
                         continue;
                     }
+                }
+
+                // The post's own "send again" rule, checked once more against what really went out (another schedule over the
+                // same customer, a test, a rule switched on after the post was queued). Test posts are the person's choice.
+                if (!p.IsTest && collectionPosts is not null && p.CollectionPostId is { } cpId
+                    && await LineRepeatRefusalAsync(p, cpId, sch?.UtcOffsetMinutes ?? 0) is { } refused)
+                {
+                    p.Skip(now, refused);
+                    Settle(p);
+                    continue;
                 }
             }
 

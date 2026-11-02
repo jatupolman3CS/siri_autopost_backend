@@ -49,6 +49,8 @@ internal sealed class SchedulingWorld
     public Dictionary<Guid, IReadOnlyList<Guid>> History { get; } = new();
     /// <summary>What <c>ListAllCollectionPostIdsByLinkAsync</c> says the links ever had (the order means nothing).</summary>
     public Dictionary<Guid, IReadOnlyList<Guid>> AllHistory { get; } = new();
+    /// <summary>What <c>ListChatUsesAsync</c> says the chats already got (the LINE "send again" rule).</summary>
+    public List<ChatUse> ChatUses { get; } = [];
     /// <summary>The posts the materializer added.</summary>
     public List<Post> Added { get; } = [];
 
@@ -73,6 +75,8 @@ internal sealed class SchedulingWorld
             .Returns(_ => History);
         PostRepo.ListAllCollectionPostIdsByLinkAsync(Arg.Any<IEnumerable<Guid>>(), Arg.Any<CancellationToken>())
             .Returns(_ => AllHistory);
+        PostRepo.ListChatUsesAsync(Arg.Any<Guid>(), Arg.Any<IEnumerable<Guid>>(), Arg.Any<CancellationToken>())
+            .Returns(_ => (IReadOnlyList<ChatUse>)ChatUses.ToList());
         PostRepo.When(r => r.Add(Arg.Any<Post>())).Do(call => Added.Add(call.Arg<Post>()));
     }
 

@@ -17,6 +17,9 @@ public static partial class LineChatUrl
 
     public static bool Same(string? a, string? b) => Comparer.Equals(a, b);
 
+    /// <summary>One key per chat whatever the case or the trailing part of the address (for dictionaries keyed by chat).</summary>
+    public static string Key(string? raw) => (Normalize(raw) ?? (raw ?? "").Trim()).ToLowerInvariant();
+
     public static (string BotId, string UserId, string Url)? Parse(string? raw)
     {
         var s = (raw ?? "").Trim();

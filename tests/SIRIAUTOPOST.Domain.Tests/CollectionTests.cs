@@ -280,6 +280,31 @@ public class CollectionTests
     }
 
     [Fact]
+    public void A_post_says_whether_it_may_go_to_a_line_chat_again()
+    {
+        var day = new DateOnly(2026, 10, 10);
+        var always = new CollectionPostSettings();
+        Assert.True(always.AllowsLineSend(day, [day]));
+
+        var once = new CollectionPostSettings { LineRepeat = LineRepeat.Once, LineRepeatDays = 9 };
+        once.Validate();
+        Assert.Equal(0, once.LineRepeatDays); // only "every N days" keeps a number
+        Assert.True(once.AllowsLineSend(day, []));
+        Assert.False(once.AllowsLineSend(day, [day.AddDays(-300)]));
+
+        var weekly = new CollectionPostSettings { LineRepeat = LineRepeat.EveryDays, LineRepeatDays = 7 };
+        weekly.Validate();
+        Assert.False(weekly.AllowsLineSend(day, [day.AddDays(-6)]));
+        Assert.True(weekly.AllowsLineSend(day, [day.AddDays(-7)]));
+        Assert.False(weekly.AllowsLineSend(day, [day.AddDays(3)])); // a queued one later counts too
+
+        var p = CollectionPost.Create(Ws, "hello", [], requireApproval: false, Now);
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { LineRepeat = LineRepeat.EveryDays }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { LineRepeat = LineRepeat.EveryDays, LineRepeatDays = 366 }, Now));
+        Assert.Throws<DomainException>(() => p.UpdateSettings(new CollectionPostSettings { LineRepeat = (LineRepeat)9 }, Now));
+    }
+
+    [Fact]
     public void A_post_writes_with_its_own_hashtags_and_footer_when_it_has_them()
     {
         var c = Collection();

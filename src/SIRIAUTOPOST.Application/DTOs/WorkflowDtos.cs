@@ -32,15 +32,17 @@ public sealed record CollectionSettingsDto(
 /// </summary>
 public sealed record CollectionPostSettingsDto(
     string? Hashtags, string? Footer, FooterPosition? FooterPos, string? ValidFrom, string? ValidUntil, IReadOnlyList<int>? Weekdays,
-    string? TimeFrom, string? TimeTo, int MaxPerDay)
+    string? TimeFrom, string? TimeTo, int MaxPerDay, LineRepeat LineRepeat = LineRepeat.Always, int LineRepeatDays = 0)
 {
     public static CollectionPostSettingsDto From(CollectionPostSettings s) =>
-        new(s.Hashtags, s.Footer, s.FooterPos, Date(s.ValidFrom), Date(s.ValidUntil), s.Weekdays, s.TimeFrom, s.TimeTo, s.MaxPerDay);
+        new(s.Hashtags, s.Footer, s.FooterPos, Date(s.ValidFrom), Date(s.ValidUntil), s.Weekdays, s.TimeFrom, s.TimeTo, s.MaxPerDay,
+            s.LineRepeat, s.LineRepeatDays);
 
     public CollectionPostSettings ToSettings() => new()
     {
         Hashtags = Hashtags, Footer = Footer, FooterPos = FooterPos, ValidFrom = ParseDate(ValidFrom), ValidUntil = ParseDate(ValidUntil),
         Weekdays = [.. Weekdays ?? []], TimeFrom = TimeFrom, TimeTo = TimeTo, MaxPerDay = MaxPerDay,
+        LineRepeat = LineRepeat, LineRepeatDays = LineRepeatDays,
     };
 
     private static string? Date(DateOnly? d) => d?.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);

@@ -120,6 +120,62 @@ public class LineChatRulesTests(ApiFactory factory)
     }
 
     [Fact]
+    public async Task A_post_set_to_send_once_is_skipped_for_a_chat_that_already_got_it_and_the_setting_reads_back()
+    {
+        using var shop = await factory.PairedLineShopAsync("pro", links: 2, posts: 1, botId: "@once_oa");
+        var master = shop.Posts[0];
+        var saved = await (await shop.Owner.PutAsJsonAsync($"{shop.Api}/master-posts/{master.Id}", new
+        {
+            text = master.Text,
+            mediaIds = master.MediaIds,
+            collectionIds = new[] { shop.Collection.Id },
+            settings = new { lineRepeat = "once", lineRepeatDays = 0, maxPerDay = 0 },
+        }, Json)).ReadAsync<CollectionPostDto>();
+        Assert.Equal(LineRepeat.Once, saved.Settings.LineRepeat);
+
+        // The schedule queues both customers first; then a test sends the same post to customer 1 before the round is due.
+        var created = await shop.CreateScheduleAsync(new ScheduleSpec(Mode: "once", StartNow: true, LineOptions: AlwaysAllowed));
+        await shop.LineHeartbeatAsync();
+        var test = await shop.TestPostAsync(link: 0);
+        var testJob = await shop.ClaimAsync();
+        Assert.Equal(test.Id, testJob?.PostId);
+        await shop.ReportAsync(test.Id, ok: true);
+
+        var handedOut = new List<string>();
+        for (var i = 0; i < 6; i++)
+        {
+            shop.Wait(TimeSpan.FromMinutes(3));
+            await shop.LineHeartbeatAsync();
+            var job = await shop.ClaimAsync();
+            if (job is null) continue;
+            handedOut.Add(job.GroupName);
+            await shop.ReportAsync(job.PostId, ok: true);
+        }
+        Assert.Equal(["ลูกค้า 2"], handedOut);
+        var skipped = (await shop.PostsAsync(created.Schedule.Id)).Single(p => p.Target == "ลูกค้า 1");
+        Assert.Equal(PostStatus.Skipped, skipped.Status);
+        Assert.Contains("ส่งครั้งเดียว", skipped.FailureDetail ?? "");
+
+        // A new schedule never queues the post for either customer again.
+        var again = await shop.CreateScheduleAsync(new ScheduleSpec(Mode: "once", StartNow: true, LineOptions: AlwaysAllowed));
+        Assert.Empty(await shop.PostsAsync(again.Schedule.Id));
+    }
+
+    [Fact]
+    public async Task Every_n_days_needs_a_number_of_days()
+    {
+        using var shop = await factory.PairedLineShopAsync("pro", links: 1, posts: 1, botId: "@days_oa");
+        var master = shop.Posts[0];
+        var res = await shop.Owner.PutAsJsonAsync($"{shop.Api}/master-posts/{master.Id}", new
+        {
+            text = master.Text,
+            collectionIds = new[] { shop.Collection.Id },
+            settings = new { lineRepeat = "every_days", lineRepeatDays = 0, maxPerDay = 0 },
+        }, Json);
+        Assert.Equal(HttpStatusCode.BadRequest, res.StatusCode);
+    }
+
+    [Fact]
     public async Task A_line_set_may_name_the_line_account_as_its_extension()
     {
         using var shop = await factory.PairedLineShopAsync("pro", links: 0, posts: 1, botId: "@postas_oa");

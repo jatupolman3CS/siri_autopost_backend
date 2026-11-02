@@ -29,6 +29,12 @@ public class CollectionPostSettings
     public string? TimeTo { get; set; }
     /// <summary>Most uses of the post per local day over every group (0 = no limit).</summary>
     public int MaxPerDay { get; set; }
+    /// <summary>Whether the post may reach the same LINE chat again (Facebook ignores it).</summary>
+    public LineRepeat LineRepeat { get; set; }
+    /// <summary><see cref="LineRepeat.EveryDays"/> only: local days between two sends to one chat (1–365); 0 otherwise.</summary>
+    public int LineRepeatDays { get; set; }
+
+    public const int MaxLineRepeatDays = 365;
 
     public void Validate()
     {
@@ -48,7 +54,22 @@ public class CollectionPostSettings
         if ((TimeFrom is null) != (TimeTo is null)) throw new DomainException("ช่วงเวลาของโพสต์ต้องใส่ทั้งเวลาเริ่มและเวลาสิ้นสุด");
         if (TimeFrom is not null && (!TimeOfDay.IsValid(TimeFrom) || !TimeOfDay.IsValid(TimeTo))) throw new DomainException("ช่วงเวลาของโพสต์ไม่ถูกต้อง");
         if (MaxPerDay is < 0 or > MaxPerDayLimit) throw new DomainException($"จำนวนครั้งต่อวันของโพสต์ต้องอยู่ระหว่าง 0–{MaxPerDayLimit}");
+        if (!Enum.IsDefined(LineRepeat)) throw new DomainException("ค่าที่ส่งมาไม่ถูกต้อง");
+        if (LineRepeat != LineRepeat.EveryDays) LineRepeatDays = 0;
+        else if (LineRepeatDays is < 1 or > MaxLineRepeatDays)
+            throw new DomainException($"จำนวนวันก่อนส่งซ้ำทาง LINE ต้องอยู่ระหว่าง 1–{MaxLineRepeatDays}");
     }
+
+    /// <summary>
+    /// May the post go to a LINE chat on this local day, given the local days it already went (or is queued) to that chat?
+    /// Every N days counts calendar days, so "1" means once a day whatever the hour, not 24 hours apart.
+    /// </summary>
+    public bool AllowsLineSend(DateOnly localDay, IEnumerable<DateOnly> usedDays) => LineRepeat switch
+    {
+        LineRepeat.Once => !usedDays.Any(),
+        LineRepeat.EveryDays => usedDays.All(d => Math.Abs(d.DayNumber - localDay.DayNumber) >= LineRepeatDays),
+        _ => true,
+    };
 
     /// <summary>Does the post allow a slot at this local day and time of day (minutes after midnight)? The daily limit is checked elsewhere.</summary>
     public bool AllowsAt(DateOnly localDay, int minutes)
@@ -79,6 +100,7 @@ public class CollectionPostSettings
     {
         Hashtags = Hashtags, Footer = Footer, FooterPos = FooterPos, ValidFrom = ValidFrom, ValidUntil = ValidUntil,
         Weekdays = [.. Weekdays], TimeFrom = TimeFrom, TimeTo = TimeTo, MaxPerDay = MaxPerDay,
+        LineRepeat = LineRepeat, LineRepeatDays = LineRepeatDays,
     };
 }
 

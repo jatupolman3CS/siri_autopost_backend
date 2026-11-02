@@ -157,6 +157,35 @@ public sealed class ScheduleMaterializer(
         bool Allowed(CollectionPost p, DateOnly day, int minutes, int uses = 1) =>
             p.Settings.AllowsAt(day, minutes) && (p.Settings.MaxPerDay == 0 || perDay.GetValueOrDefault((p.Id, day)) + uses <= p.Settings.MaxPerDay);
 
+        // A post's own LINE "send again" rule (once per chat, or every N days): the local days each chat already has it, over
+        // every schedule and test post of the workspace, then what this run adds. Keyed by the chat's address, so a customer
+        // who sits in two sets is still one customer.
+        var chatDays = new Dictionary<(Guid Post, string Url), List<DateOnly>>();
+        static string ChatKey(string url) => LineChatUrl.Key(url);
+        var lineRuled = set.Channel == Platform.Line
+            ? usable.Where(p => p.Settings.LineRepeat != LineRepeat.Always).Select(p => p.Id).ToHashSet()
+            : [];
+        if (lineRuled.Count > 0)
+        {
+            var offset = TimeSpan.FromMinutes(s.UtcOffsetMinutes);
+            foreach (var use in await posts.ListChatUsesAsync(ws.Id, lineRuled, ct))
+            {
+                var key = (use.CollectionPostId, ChatKey(use.TargetUrl));
+                if (!chatDays.TryGetValue(key, out var days)) chatDays[key] = days = [];
+                days.Add(DateOnly.FromDateTime(use.At.ToOffset(offset).DateTime));
+            }
+        }
+        bool LineAllows(CollectionPost p, ScheduleTarget t, DateTimeOffset at) =>
+            !lineRuled.Contains(p.Id) || t.Link is not { } l ||
+            p.Settings.AllowsLineSend(s.LocalDay(at), chatDays.TryGetValue((p.Id, ChatKey(l.Url)), out var d) ? d : []);
+        void LineUsed(CollectionPost p, ScheduleTarget t, DateTimeOffset at)
+        {
+            if (!lineRuled.Contains(p.Id) || t.Link is not { } l) return;
+            var key = (p.Id, ChatKey(l.Url));
+            if (!chatDays.TryGetValue(key, out var days)) chatDays[key] = days = [];
+            days.Add(s.LocalDay(at));
+        }
+
         // The post a target gets now, among the posts that allow this slot. A post the group had lately is left alone when
         // another one can go; when only that one can, it goes (the schedule is not left empty because of a rule).
         CollectionPost? Draw(string targetKey, Func<CollectionPost, bool> allowed)
@@ -211,8 +240,13 @@ public sealed class ScheduleMaterializer(
             }
             foreach (var (t, when) in fresh)
             {
-                var cp = shared ?? Draw(t.TargetKey, p => Allowed(p, day, minutes));
+                // A chat that already had the post (or had it too recently) does not get it again; in Rotate it simply gets
+                // nothing this round, in Shuffle another post is drawn for it.
+                var cp = shared is not null
+                    ? (LineAllows(shared, t, when) ? shared : null)
+                    : Draw(t.TargetKey, p => Allowed(p, day, minutes) && LineAllows(p, t, when));
                 if (cp is null) continue;
+                LineUsed(cp, t, when);
                 if (cp.Settings.MaxPerDay > 0) perDay[(cp.Id, day)] = perDay.GetValueOrDefault((cp.Id, day)) + 1;
                 var code = t.Link?.Code;
                 var text = set.Channel == Platform.Line

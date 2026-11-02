@@ -368,6 +368,19 @@ public sealed class PostRepository(AppDbContext db) : IPostRepository
         return result;
     }
 
+    public async Task<IReadOnlyList<ChatUse>> ListChatUsesAsync(
+        Guid workspaceId, IEnumerable<Guid> collectionPostIds, CancellationToken ct = default)
+    {
+        var ids = collectionPostIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+        var rows = await db.Posts.AsNoTracking()
+            .Where(x => x.WorkspaceId == workspaceId && x.CollectionPostId != null && ids.Contains(x.CollectionPostId.Value) &&
+                        x.TargetUrl != null && x.Status != PostStatus.Failed && x.Status != PostStatus.Skipped)
+            .Select(x => new { x.Id, CollectionPostId = x.CollectionPostId!.Value, x.TargetUrl, x.PublishedAt, x.ClaimedAt, x.ScheduledAt, x.Status })
+            .ToListAsync(ct);
+        return rows.Select(r => new ChatUse(r.Id, r.CollectionPostId, r.TargetUrl!, r.PublishedAt ?? r.ClaimedAt ?? r.ScheduledAt, r.Status)).ToList();
+    }
+
     // ---- master posts ----
 
     public async Task<IReadOnlyList<Post>> ListFutureQueuedByCollectionPostAsync(

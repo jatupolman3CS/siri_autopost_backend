@@ -207,6 +207,20 @@ public enum PostRepeat
     Never,
 }
 
+/// <summary>
+/// Whether one master post may reach the same LINE customer chat again (a post's own setting; LINE sets only, any
+/// schedule, test posts included because the customer did get them).
+/// </summary>
+public enum LineRepeat
+{
+    /// <summary>As often as the schedules give it (default).</summary>
+    Always,
+    /// <summary>Once per chat: a chat that already got it (or has it queued) never gets it again.</summary>
+    Once,
+    /// <summary>Again only after <c>LineRepeatDays</c> local days: 1 = at most once a day, 7 = once a week.</summary>
+    EveryDays,
+}
+
 public enum FooterPosition
 {
     End,

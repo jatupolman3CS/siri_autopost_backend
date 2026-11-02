@@ -209,6 +209,12 @@ public interface IPostRepository
     /// <summary>Every collection post each link has ever been given (queued, waiting, posting, published or awaiting approval), each once; the order means nothing.</summary>
     Task<Dictionary<Guid, IReadOnlyList<Guid>>> ListAllCollectionPostIdsByLinkAsync(IEnumerable<Guid> linkIds, CancellationToken ct = default);
 
+    /// <summary>
+    /// Every post made from these collection posts for a chat address (LINE "send again" rule): queued, waiting, posting,
+    /// published or awaiting approval, tests included (the customer got them); failed and skipped ones never reached anybody.
+    /// </summary>
+    Task<IReadOnlyList<ChatUse>> ListChatUsesAsync(Guid workspaceId, IEnumerable<Guid> collectionPostIds, CancellationToken ct = default);
+
     // ---- master posts: what a collection post made ----
 
     /// <summary>Queued posts that schedules made from these collection posts and that are still in the future (tracked: the caller removes them).</summary>
@@ -247,6 +253,13 @@ public interface IPostRepository
 }
 
 /// <summary>What a collection post made so far: the numbers shown on its management card.</summary>
+/// <summary>One post of a collection post to an address. <c>At</c> = when it went out, else when it was taken, else when it is due.</summary>
+public sealed record ChatUse(Guid PostId, Guid CollectionPostId, string TargetUrl, DateTimeOffset At, PostStatus Status)
+{
+    /// <summary>It already left the browser (or is leaving it now): queued and waiting ones may still be skipped.</summary>
+    public bool Sent => Status is PostStatus.Posting or PostStatus.Success or PostStatus.Pending;
+}
+
 public sealed record CollectionPostUsage(int Queued, int Posted, int Failed, DateTimeOffset? LastPublishedAt, DateTimeOffset? NextAt);
 
 /// <summary>A finished post without its text: what the reports count.</summary>

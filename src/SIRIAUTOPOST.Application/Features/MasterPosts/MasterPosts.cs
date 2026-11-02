@@ -123,7 +123,8 @@ public sealed class UpdateMasterPostCommandHandler(
 
     private static bool SameSettings(CollectionPostSettings a, CollectionPostSettings b) =>
         a.Hashtags == b.Hashtags && a.Footer == b.Footer && a.FooterPos == b.FooterPos && a.ValidFrom == b.ValidFrom && a.ValidUntil == b.ValidUntil &&
-        a.TimeFrom == b.TimeFrom && a.TimeTo == b.TimeTo && a.MaxPerDay == b.MaxPerDay && a.Weekdays.SequenceEqual(b.Weekdays);
+        a.TimeFrom == b.TimeFrom && a.TimeTo == b.TimeTo && a.MaxPerDay == b.MaxPerDay && a.Weekdays.SequenceEqual(b.Weekdays) &&
+        a.LineRepeat == b.LineRepeat && a.LineRepeatDays == b.LineRepeatDays;
 }
 
 /// <summary>
